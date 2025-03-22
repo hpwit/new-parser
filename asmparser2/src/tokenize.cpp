@@ -939,7 +939,7 @@ int isUserDefined(char *s, char *end)
 {
     for (int i = 0; i < userDefinedVarTypeNames.size(); i++)
     {
-        if (strncmp(all_text.getText(userDefinedVarTypeNames[i]), s, end - s + 1) == 0)
+        if (strncmp(all_text.getText(userDefinedVarTypeNames[i]), s, end - s + 1) == 0 and strlen(all_text.getText(userDefinedVarTypeNames[i]))==end - s + 1)
         {
             return i;
         }
@@ -2156,7 +2156,7 @@ int findMember(varType *v, char * member)
     for (int i = 0; i < v->size; i++)
     {
         //    printf("look for %s %s\n", member.c_str(), v->membersNames[i].c_str());
-        if (strncmp(v->membersNames[i],member,strlen(member)) == 0)
+        if (strcmp(v->membersNames[i],member) == 0)
         {
             return i;
         }

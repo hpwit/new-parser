@@ -5,9 +5,7 @@
 #include "parser_enum.h"
 #include "stackfunctions.h"
 #include "parser_define.h"
-#define EOF_TEXT 0
-#define EOF_TEXTARRAY 9999
-#define EOF_VARTYPE 14
+
 struct varType
 {
     varTypeEnum _varType;

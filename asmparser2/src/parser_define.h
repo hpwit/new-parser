@@ -8,4 +8,8 @@
 
 #define __TEST_DEBUG
 
+
+#define EOF_TEXT 0
+#define EOF_TEXTARRAY 9999
+#define EOF_VARTYPE 14
 #endif

@@ -18,5 +18,5 @@ extern const char *_label_underscore_d;
 extern const char *_local_string_d;
 extern const char *_pointer_;
 extern const char *_separ_;
-
+extern  char *_end_text;
 #endif

@@ -16,5 +16,6 @@ const char *_label_underscore_d="label_%d";
 const char *_local_string_d="local_string_%d";
 const char *_pointer_="pointer";
 const char *_separ_="|";
+ char *_end_text=(char*)"";
 
 

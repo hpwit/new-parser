@@ -163,7 +163,6 @@ int addTextNoDelete(char* str);
     vect<char *> _texts;
 
 private:
-    char cc[1] = {'\0'};
     int position;
     char **_it;
     //char _space[1]="";

@@ -4,6 +4,7 @@
 #include "string_functions.h"
 #include "vect.h"
 #include "parser_define.h"
+#include "string_constants.h"
 
 
 NodeToken *search_result;
@@ -75,10 +76,10 @@ const char *nodeTypeNames[] =
 };
 NodeToken::NodeToken()
 {
-	children = nullptr;
+	children = NULL;
 	_c_size = 0;
 
-	parent = nullptr;
+	parent = NULL;
 
 	_total_size = 1;
 	target = EOF_TEXTARRAY;
@@ -95,7 +96,9 @@ NodeToken::NodeToken(nodeType tt)
 {
 	_nodetype = tt;
 	// children = NULL;
-	children = nullptr;
+		target = EOF_TEXTARRAY;
+	textref = EOF_TEXTARRAY;
+	children = NULL;
 	_c_size = 0;
 }
 NodeToken::NodeToken(Token *t, nodeType tt)
@@ -103,8 +106,9 @@ NodeToken::NodeToken(Token *t, nodeType tt)
 	type = t->type;
 	textref = t->textref;
 	_vartype = t->_vartype;
+	target = EOF_TEXTARRAY;
 	_nodetype = tt;
-	children = nullptr;
+	children = NULL;
 	_c_size = 0;
 }
 NodeToken::NodeToken(Token *t)
@@ -112,7 +116,8 @@ NodeToken::NodeToken(Token *t)
 	type = t->type;
 	textref = t->textref;
 	_vartype = t->_vartype;
-	children=nullptr;
+	target = EOF_TEXTARRAY;
+	children=NULL;
 	_c_size = 0;
 }
 NodeToken::NodeToken(NodeToken *nd)
@@ -133,9 +138,10 @@ NodeToken::NodeToken(Token t, nodeType tt)
 {
 	type = t.type;
 	textref = t.textref;
+	target = EOF_TEXTARRAY;
 	_vartype = t._vartype;
 	_nodetype = tt;
-	children = nullptr;
+	children = NULL;
 	_c_size = 0;
 }
     NodeToken::NodeToken(NodeToken nd, nodeType tt,uint16_t _target)
@@ -149,19 +155,19 @@ NodeToken::NodeToken(Token t, nodeType tt)
         _nodetype = tt;
         stack_pos = nd.stack_pos;
         target=_target;
-        children = nullptr;
+        children = NULL;
 		_c_size=0;
     }
 void NodeToken::clear()
 {
-	if(children==nullptr)
+	if(children==NULL)
 		return;
 	for (int i = 0; i < _c_size; i++)
 	{
 		
 		getChildPtr(i)->clear();
 	}
-	if(children!=nullptr)
+	if(children!=NULL)
 		free(children);
 	_c_size=0;
 }
@@ -204,12 +210,12 @@ NodeToken NodeToken::children_pop()
 	if(_c_size ==1)
 	{
 		free(children);
-		children=nullptr;
+		children=NULL;
 		_c_size=0;
 	}
 	else
 	{
-		NodeToken *tmp = (NodeToken *)realloc((void *)children, (_c_size - 1) * sizeof(NodeToken));
+		NodeToken *tmp = (NodeToken *)realloc(children, (_c_size - 1) * sizeof(NodeToken));
 				testChange(&sav_token,children,tmp);
 		children=tmp;
 		_c_size--;
@@ -228,13 +234,13 @@ NodeToken *NodeToken::addChildFront(NodeToken nd)
 {
 	
 	nd.parent = this;
-	if (children == nullptr)
+	if (children == NULL)
 	{
 		children = (NodeToken *)malloc(sizeof(NodeToken));
 	}
 	else
 	{
-		NodeToken *tmp = (NodeToken *)realloc((void *)children, (_c_size + 1) * sizeof(NodeToken));
+		NodeToken *tmp = (NodeToken *)realloc(children, (_c_size + 1) * sizeof(NodeToken));
 		
 		testChange(&sav_token,children,tmp);
 		children=tmp;
@@ -243,7 +249,7 @@ NodeToken *NodeToken::addChildFront(NodeToken nd)
 	memmove(children+1,children,_c_size*sizeof(NodeToken));
 	memcpy(children, &nd, sizeof(NodeToken));
 	NodeToken *new_object = children;
-	new_object->children=nullptr;
+	new_object->children=NULL;
 	new_object->_c_size=0;
 	
 	for (int i = 0; i < nd._c_size; i++)
@@ -256,25 +262,56 @@ NodeToken *NodeToken::addChildFront(NodeToken nd)
 }
 NodeToken *NodeToken::addChild(NodeToken nd)
 {
-	nd.parent = this;
-	if (children == nullptr)
+	if(_c_size==0)
+	children=NULL;
+	//nd.parent = this;
+	if (children == NULL)
 	{
 		children = (NodeToken *)malloc(sizeof(NodeToken));
-	}
-	else
+}
+else
 	{
-		NodeToken*tmp = (NodeToken *)realloc((void *)children, (_c_size + 1) * sizeof(NodeToken));
+		NodeToken*tmp = (NodeToken *)realloc(children, (_c_size + 1) * sizeof(NodeToken));
 				testChange(&sav_token,children,tmp);
 		children=tmp;
 	}
 	memcpy(children + _c_size, &nd, sizeof(NodeToken));
 	NodeToken *new_object = children + _c_size;
-	new_object->children=nullptr;
+	new_object->parent=this;
+	new_object->children=NULL;
 	new_object->_c_size=0;
 	
 	for (int i = 0; i < nd._c_size; i++)
 	{
 		new_object->addChild (*nd.getChildPtr(i));
+	}
+	
+	_c_size++;
+
+	return children + (_c_size - 1);
+}
+NodeToken *NodeToken::addChild(NodeToken *nd)
+{
+	//nd.parent = this;
+	if (children == NULL)
+	{
+		children = (NodeToken *)malloc(sizeof(NodeToken));
+	}
+	else
+	{
+		NodeToken*tmp = (NodeToken *)realloc(children, (_c_size + 1) * sizeof(NodeToken));
+				testChange(&sav_token,children,tmp);
+		children=tmp;
+	}
+	memcpy(children + _c_size, nd, sizeof(NodeToken));
+	NodeToken *new_object = children + _c_size;
+	new_object->children=NULL;
+	new_object->parent=this;
+	new_object->_c_size=0;
+	
+	for (int i = 0; i < nd->_c_size; i++)
+	{
+		new_object->addChild (nd->getChildPtr(i));
 	}
 	
 	_c_size++;
@@ -292,7 +329,7 @@ void NodeToken::erase(NodeToken *asset)
 	uint32_t diff = asset - children;
 	memmove(children + diff, children + diff + 1, (sizeof(NodeToken)) * (_c_size - diff));
 	asset->clear();
-	children = (NodeToken *)realloc((void *)children, (_c_size - 1) * sizeof(NodeToken));
+	children = (NodeToken *)realloc(children, (_c_size - 1) * sizeof(NodeToken));
 	_c_size--;
 }
 void NodeToken::addTargetText(char *t)
@@ -301,7 +338,7 @@ void NodeToken::addTargetText(char *t)
 }
 void NodeToken::addTargetText(const char *t)
 {
-	target = all_text.addText(t);
+	target = all_text.addText((const char*)t);
 }
 
 	void  NodeToken::setText(char * str)
@@ -332,6 +369,8 @@ varTypeEnum NodeToken::getVarType()
 }
 varType *NodeToken::getVarTypeObj()
 {
+	
+	
 	if (_vartype == EOF_VARTYPE)
 
 		return NULL;
@@ -343,6 +382,7 @@ varType *NodeToken::getVarTypeObj()
 
 		if (target != EOF_TEXTARRAY)
 		{
+			
 			if (strncmp(getTargetText(), "@", 1) == 0)
 			{
 				return _userDefinedTypes.getptr(_vartype);
@@ -489,10 +529,12 @@ bool findCandidate(NodeToken *nd, char *str)
 		return false;
 	for (int i = 0; i < nd->children_size(); i++)
 	{
-
+		if(nd->getChildPtr(i)->getText()!=NULL)
+		{
 		if (strstr(nd->getChildPtr(i)->getText(), str) == nd->getChildPtr(i)->getText())
 		{
 			return true;
+		}
 		}
 	}
 	return false;
@@ -512,7 +554,8 @@ void findFunction(NodeToken *nd, char *t)
 	for (int i = 0; i < nd->children_size(); i++)
 	{
 		NodeToken *it = nd->getChildPtr(i);
-		
+		if(it->getText()!=NULL)
+		{
 		if (strstr(it->getText(), "Args") != NULL)
 		{
 			int l = strstr(it->getText(), "Args") - it->getText();
@@ -535,6 +578,7 @@ void findFunction(NodeToken *nd, char *t)
 				return;
 			}
 		}
+		}
 		tmp_index++;
 	}
 
@@ -551,14 +595,16 @@ void findVariable(NodeToken *nd, char *t, bool isCreation)
 	if (t == NULL)
 		return;
 	// //printf("lokking for variable |%s| dans %s  already %d variables defined \n", t->text.c_str(),name.c_str(),variables.size());
+	//PARSER_LOG("look for %s",t);
 	if (nd->children_size() > 0)
 	{
 
 		for (int i = 0; i < nd->children_size(); i++)
 		{
 			NodeToken *it = nd->getChildPtr(i);
-			if (it->getText() != NULL)
+			if (it->getText() != _end_text)
 			{
+				//PARSER_LOG("on a %s",it->getText());
 				if (strcmp(it->getText(), t) == 0)
 				{
 					search_result = it;
@@ -579,8 +625,9 @@ void findVariable(NodeToken *nd, char *t, bool isCreation)
 				{
 					NodeToken *it = c_cntx->getChildPtr(i);
 					// ////printf("is equalt to |%s|\n", (*it)._token->text.c_str());
-					if (it->getText() != NULL)
+					if (it->getText() != _end_text)
 					{
+					//	PARSER_LOG("on a %s",it->getText());
 						//  //////printf("is equalt to |%s|\n", (*it)._token->text.c_str());
 						if (strcmp(it->getText(), t) == 0)
 						{
@@ -627,6 +674,7 @@ uint16_t stringToInt(char *str)
 
 void testChange(vect<NodeToken *> *is, NodeToken *from,NodeToken *to)
 {
+	return;
 	for(int i=0;i<is->size();i++)
 	{
 		NodeToken * tmp=is->get(i);

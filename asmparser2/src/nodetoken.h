@@ -86,6 +86,7 @@ public:
 	NodeToken *children_frontptr();
 	NodeToken children_front();
 	NodeToken *addChild(NodeToken nd);
+		NodeToken *addChild(NodeToken *nd);
 	NodeToken *addChildFront(NodeToken nd);
 	NodeToken *operator[](int i);
 	NodeToken(NodeToken nd, nodeType tt);

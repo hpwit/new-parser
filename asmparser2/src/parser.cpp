@@ -283,6 +283,8 @@ void Parser::parseProgram()
                     return;
                 }
                 NodeToken nd = nodeTokenList.pop();
+              
+               // PARSER_LOG("gert %s",nd.getText());
                 NodeToken _t = nodeTokenList.pop();
                 if (isExternal)
                 {
@@ -297,12 +299,13 @@ void Parser::parseProgram()
                
                //PARSER_LOG("gert %s %s",nd.getText(),_t.getText());
                 copyPrty(&_t, &nd);
-               // PARSER_LOG("gert %s %s",nd.getText(),_t.getText());
+             // PARSER_LOG("gert %s %s",nd.getText(),_t.getText());
 
-                current_node = program.addChild(nd);
-               
+                current_node = program.addChild(&nd);
+                PARSER_LOG("gert %s %s",current_node->getText(),_t.getText());
                 tmp_sav = current_node;
-                current_cntx->addChild(nd);
+                current_cntx->addChild(&nd);
+                PARSER_LOG("gert %s %s",nd.getText(),_t.getText());
                 if (Match(TokenComma))
                 {
                     while (Match(TokenComma))
@@ -586,7 +589,7 @@ void Parser::parseVariableForCreation()
                 else
                 {
                     char *tmp = string_format(_arobase_d_s, j, sizestr);
-                    // free(sizestr);
+                    free(sizestr);
                     sizestr = tmp;
                 }
 
@@ -921,7 +924,7 @@ void Parser::parseFunctionCall()
             char *v_tmp = string_format(_s_dot_s_, struct_name, sav_t.back().getText());
             if (findCandidate(&functions, v_tmp))
                 isStructFunction = true;
-                free(v_tmp);
+               free(v_tmp);
         }
     }
     // printf("calling  function suite\r\n");
@@ -2553,7 +2556,7 @@ void Parser::getVariable(bool isStore)
         else
         {
             i = findMember(current_node->_vartype, current()->getText());
-            //  int pos = 0;
+            PARSER_LOG("ico %d\n",current_node->_vartype);
             v = _userDefinedTypes.getptr(current_node->_vartype); //  &_userDefinedTypes[current_node->_vartype];
 
             if (i < 0)
@@ -2569,7 +2572,7 @@ void Parser::getVariable(bool isStore)
             current_node->stack_pos = current_node->stack_pos + 1000 * v->starts[i];
         if (current_node->isPointer)
         {
-            // current_node->_total_size =1000* current_node->_total_size +v->sizes[i];
+             current_node->_total_size =1000* current_node->_total_size +v->sizes[i];
         }
         else
         {

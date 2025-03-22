@@ -1,8 +1,10 @@
   #include "stackfunctions.h"
   #include "parser_define.h"
+  #include "string_constants.h"
  #include <stdio.h>
 
 #include "string.h"
+#define __SPEED
 
     int Text::findText(char * str)
     {
@@ -26,7 +28,7 @@
         m[si] = 0;
         _texts.push_back(m);
         position++;
-       free(str);
+      // free(str);
         return _texts.size() - 1;
     }
     int Text::addText(const char *str)
@@ -37,8 +39,9 @@
        return addText(m);
     }
     int Text::addText(char* str,char * e)
-    {
-        char *   m = (char *)malloc(e-str+2);
+    { 
+        assert(e>=str);
+        char *   m = new char[e-str+2];// (char *)malloc(e-str+2);
         memcpy(m, str, e-str+1);
         m[e-str+1] = 0;
 
@@ -50,6 +53,7 @@
         int pos = findText(str);
         if (pos > -1)
         {
+            if(str!=_texts[pos])
              free(str);
             return pos;
            
@@ -64,6 +68,7 @@
         int pos = findText(str);
         if (pos > -1)
         {
+             if(str!=_texts[pos])
              free(str);
             return pos;
            
@@ -137,7 +142,7 @@
               if (_texts.size() > 0)
             return _texts.back();
         else
-            return cc;
+            return _end_text;
     }
     char * Text::current()
     {
@@ -164,15 +169,7 @@
         if (_texts.size() > 0)
             return _texts.front();
         else
-            return cc;
-    }
-    char * Text::textAt(int pos)
-    {
-      if(pos>0 and pos<_texts.size())
-      {
-        return _texts.get(pos);
-      }
-      return cc;
+            return _end_text;
     }
     void Text::pop_front()
     {
@@ -184,7 +181,7 @@
             if (!isReused(0))
             {
              //printf("we tray to delete:|%s|\n",_texts.front());
-                free(_texts.front());
+              //(_texts.front());
                
               //printf("we delted the string\n\r");
             }
@@ -300,7 +297,7 @@
         }
         else
         {
-            return cc;
+            return _end_text;
         }
     }
     bool Text::isReused(int pos)
@@ -328,7 +325,7 @@
         {
             if (!isReused(_texts.size() - 1))
             {
-                free(_texts.back());
+               free(_texts.back());
             }
             _texts.pop_back();
            // _texts.shrink_to_fit();
