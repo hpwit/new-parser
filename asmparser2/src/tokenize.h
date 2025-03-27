@@ -159,4 +159,5 @@ extern vect<uint16_t> userDefinedVarTypeNames;
 extern vect<varType> _userDefinedTypes;
 extern varType _varTypes[];
 extern const char * varTypeEnumNames[]; 
+extern vect<_define> define_list;
 #endif

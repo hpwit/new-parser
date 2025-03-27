@@ -7,6 +7,7 @@
 #include "string_constants.h"
 
 
+
 NodeToken *search_result;
 int search_result_index;
 Stack<int> _for_depth_reg;
@@ -15,6 +16,7 @@ NodeToken *lasttype;
 
  vect<NodeToken *> sav_token;
  vect<NodeToken *> change_type;
+ NodeToken * tmp_sav;
 
 int stack_size;
 int point_regnum;
@@ -74,6 +76,9 @@ const char *nodeTypeNames[] =
 #endif
 
 };
+NodeToken::~NodeToken(){
+	//clear();
+}
 NodeToken::NodeToken()
 {
 	children = NULL;
@@ -95,11 +100,26 @@ NodeToken::NodeToken()
 NodeToken::NodeToken(nodeType tt)
 {
 	_nodetype = tt;
-	// children = NULL;
+	 //children = NULL;
+	 type = (int)TokenUnknown;
 		target = EOF_TEXTARRAY;
 	textref = EOF_TEXTARRAY;
 	children = NULL;
+	_vartype=EOF_VARTYPE;
 	_c_size = 0;
+}
+NodeToken::NodeToken(NodeToken nd,tokenType tt)
+{
+	type =tt;
+	textref = nd.textref;
+	_vartype = nd._vartype;
+	isPointer = nd.isPointer;
+	_total_size = nd._total_size;
+	_nodetype = nd._nodetype;
+	stack_pos = nd.stack_pos;
+	target=nd.target;
+	children = nd.children;
+	_c_size=nd._c_size;
 }
 NodeToken::NodeToken(Token *t, nodeType tt)
 {
@@ -160,15 +180,17 @@ NodeToken::NodeToken(Token t, nodeType tt)
     }
 void NodeToken::clear()
 {
+	//PARSER_LOG(" on efface :%s",all_text.getText(textref));
 	if(children==NULL)
 		return;
+		
 	for (int i = 0; i < _c_size; i++)
 	{
 		
 		getChildPtr(i)->clear();
 	}
-	if(children!=NULL)
 		free(children);
+	children=NULL;
 	_c_size=0;
 }
 
@@ -215,8 +237,8 @@ NodeToken NodeToken::children_pop()
 	}
 	else
 	{
-		NodeToken *tmp = (NodeToken *)realloc(children, (_c_size - 1) * sizeof(NodeToken));
-				testChange(&sav_token,children,tmp);
+		NodeToken *tmp = (NodeToken *)p_realloc(children, (_c_size - 1) * sizeof(NodeToken));
+				testChange(&sav_token,children,tmp,_c_size-1);
 		children=tmp;
 		_c_size--;
 	}
@@ -240,9 +262,9 @@ NodeToken *NodeToken::addChildFront(NodeToken nd)
 	}
 	else
 	{
-		NodeToken *tmp = (NodeToken *)realloc(children, (_c_size + 1) * sizeof(NodeToken));
+		NodeToken *tmp = (NodeToken *)p_realloc((void *)children, (_c_size + 1) * sizeof(NodeToken));
 		
-		testChange(&sav_token,children,tmp);
+		testChange(&sav_token,children,tmp,_c_size+1);
 		children=tmp;
 	}
 	if(_c_size>0)
@@ -271,8 +293,8 @@ NodeToken *NodeToken::addChild(NodeToken nd)
 }
 else
 	{
-		NodeToken*tmp = (NodeToken *)realloc(children, (_c_size + 1) * sizeof(NodeToken));
-				testChange(&sav_token,children,tmp);
+		NodeToken*tmp = (NodeToken *)p_realloc(children, (_c_size + 1) * sizeof(NodeToken));
+				testChange(&sav_token,children,tmp,_c_size+1);
 		children=tmp;
 	}
 	memcpy(children + _c_size, &nd, sizeof(NodeToken));
@@ -293,17 +315,19 @@ else
 NodeToken *NodeToken::addChild(NodeToken *nd)
 {
 	//nd.parent = this;
+	NodeToken *tmp ;
 	if (children == NULL)
 	{
-		children = (NodeToken *)malloc(sizeof(NodeToken));
+		tmp = (NodeToken *)malloc(sizeof(NodeToken));
 	}
 	else
 	{
-		NodeToken*tmp = (NodeToken *)realloc(children, (_c_size + 1) * sizeof(NodeToken));
-				testChange(&sav_token,children,tmp);
-		children=tmp;
+		tmp = (NodeToken *)p_realloc(children, (_c_size + 1) * sizeof(NodeToken));
+
 	}
-	memcpy(children + _c_size, nd, sizeof(NodeToken));
+	memcpy(tmp + _c_size, nd, sizeof(NodeToken));
+	testChange(&sav_token,children,tmp,_c_size+1);
+	children=tmp;
 	NodeToken *new_object = children + _c_size;
 	new_object->children=NULL;
 	new_object->parent=this;
@@ -318,6 +342,12 @@ NodeToken *NodeToken::addChild(NodeToken *nd)
 
 	return children + (_c_size - 1);
 }
+NodeToken *NodeToken::addChildClear(NodeToken nd)
+{
+NodeToken *tmp=	addChild(nd);
+	nd.clear();
+	return tmp;
+}
 NodeToken *NodeToken::operator[](int i)
 {
 	return getChildPtr(i);
@@ -329,7 +359,7 @@ void NodeToken::erase(NodeToken *asset)
 	uint32_t diff = asset - children;
 	memmove(children + diff, children + diff + 1, (sizeof(NodeToken)) * (_c_size - diff));
 	asset->clear();
-	children = (NodeToken *)realloc(children, (_c_size - 1) * sizeof(NodeToken));
+	children = (NodeToken *)p_realloc(children, (_c_size - 1) * sizeof(NodeToken));
 	_c_size--;
 }
 void NodeToken::addTargetText(char *t)
@@ -365,6 +395,7 @@ char *NodeToken::getTargetText()
 
 varTypeEnum NodeToken::getVarType()
 {
+
 	return (varTypeEnum)_vartype;
 }
 varType *NodeToken::getVarTypeObj()
@@ -484,41 +515,47 @@ varType *NodeToken::getVarTypeObj()
         addTargetText(_target);
         children = NULL;
     }
-void prettyPrint(NodeToken *nd, int iden)
+
+
+	#ifdef __TEST_DEBUG
+	void NodeToken::prettyPrint()
+	
 {
+	//PARSER_LOG("_nodetype %d",nd->_nodetype);
+
+/*
 	if (iden > 0)
 	{
 		for (int i = 0; i < iden - 1; i++)
 		{
-			//if (i == iden - 2)
 				printf("|  ");
-			//else
-			//	printf("   ");
 		}
 
 		printf("|--");
-	}
-	printf("%s\tisPointer:%d\tasPointer:%d\t", nodeTypeNames[nd->_nodetype], nd->isPointer, nd->asPointer); //, tokenNames[nd._token.type].c_str());
+	} 
+		*/
+	printf("%s\tisPointer:%d\tasPointer:%d\t", nodeTypeNames[_nodetype], isPointer, asPointer); //, tokenNames[nd._token.type].c_str());
 
-	printf("text:%s\ttokenType:%s\t", nd->getText(), tokenNames[nd->type]);
+	printf("text:%s\ttokenType:%s\t", getText(), tokenNames[type]);
 
-	if (nd->getVarType() != __unknown__)
+	if (getVarType() != __unknown__)
 	{
-
-		if (nd->type == (int)TokenUserDefinedVariable)
-			printf("var name:%s\t total size:%d\tstackpos:%d\t", _userDefinedTypes[nd->_vartype].varName, nd->_total_size, nd->stack_pos);
+		/*
+		if (type == (int)TokenUserDefinedVariable)
+			printf("var name:%s\t total size:%d\tstackpos:%d\t", _userDefinedTypes[_vartype].varName, _total_size, stack_pos);
 		else
+			printf("var type:%s\ttotal size:%d\tstackpos:%d\t", varTypeEnumNames[_vartype], _total_size, stack_pos);
+	*/
+			}
 
-			printf("var type:%s\ttotal size:%d\tstackpos:%d\t", varTypeEnumNames[nd->_vartype], nd->_total_size, nd->stack_pos);
-	}
-
-	printf("target :%s", nd->getTargetText());
+	printf("target :%s", getTargetText());
 	printf("\n");
-	for (int i = 0; i < nd->children_size(); i++)
+	for (int i = 0; i < children_size(); i++)
 	{
-		prettyPrint(nd->getChildPtr(i), iden + 1);
+		getChildPtr(i)->prettyPrint();
 	}
 }
+#endif
 
 bool findCandidate(NodeToken *nd, char *str)
 {
@@ -672,15 +709,45 @@ uint16_t stringToInt(char *str)
 	return res;
 }
 
-void testChange(vect<NodeToken *> *is, NodeToken *from,NodeToken *to)
+void testChange(vect<NodeToken *> *is, NodeToken *from,NodeToken *to,int size)
 {
-	return;
+	
+	for(int j=0;j<size;j++)
+	{
+
+		for(int i=0;i<change_type.size();i++)
+		{
+			NodeToken * tmp=change_type.get(i);
+			if(tmp== from +j)
+			{
+				*(change_type.getptr(i))=to+j;
+				//PARSER_LOG("change address change tyep")
+			}
+		}
 	for(int i=0;i<is->size();i++)
 	{
 		NodeToken * tmp=is->get(i);
-		if(tmp== from and tmp!=to)
+		if(tmp== from +j)
 		{
-			PARSER_LOG("change address")
+			*(is->getptr(i))=to+j;
+			//PARSER_LOG("change address")
 		}
 	}
+	
+}
+	
+for(int i=0;i<size;i++)
+{
+	if(tmp_sav==from+i)
+	{
+	tmp_sav=to+i;
+		//PARSER_LOG("new one")
+	}
+	if(lasttype==from+i)
+	{
+		lasttype=to+i;
+		//PARSER_LOG("new one")
+	}
+	
+}
 }

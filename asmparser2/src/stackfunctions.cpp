@@ -4,7 +4,7 @@
  #include <stdio.h>
 
 #include "string.h"
-#define __SPEED
+//#define __SPEED
 
     int Text::findText(char * str)
     {
@@ -41,7 +41,7 @@
     int Text::addText(char* str,char * e)
     { 
         assert(e>=str);
-        char *   m = new char[e-str+2];// (char *)malloc(e-str+2);
+        char *   m = (char *)malloc(e-str+2);
         memcpy(m, str, e-str+1);
         m[e-str+1] = 0;
 
@@ -255,6 +255,7 @@
     }
     void Text::clear()
     {
+        /*
          for (int i = 0; i < _texts.size(); i++)
         {
             char *c1 = _texts.get(i);
@@ -275,14 +276,17 @@
         {
             if (_texts.get(i) != NULL)
             {
+                printf("%s \n",_texts.get(i));
                 free(_texts.get(i));
                // kk++;
             }
         }
-        _texts.clear();
-        sp.clear();
-        position = 0;
-        _it = _texts.begin();
+*/
+        
+       _texts.empty();
+       sp.clear();
+       position = 0;
+       _it = _texts.begin();
     }
     int Text::size()
     {

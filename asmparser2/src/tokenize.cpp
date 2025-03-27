@@ -485,7 +485,7 @@ varType _varTypes[] = {
             }
             else
             {
-                printf("jkjk\n");
+                
                 position = -1;
 
                 return 0; // (*it)[0];

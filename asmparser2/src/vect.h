@@ -5,6 +5,9 @@
 #include <string.h>
 #include "assert.h"
 #include "parser_define.h"
+
+
+void * p_realloc(void *original,int new_size);
 template <class T>
 class vect
 {
@@ -38,8 +41,8 @@ public:
     }
 
 private:
-    T *point;
-     uint16_t _size;
+    T *point=NULL;
+     uint16_t _size=0;
     uint16_t size_item;
    
 };
@@ -78,7 +81,7 @@ T *vect<T>::push_back(T asset)
     if (point == NULL)
         point2 = (T *)malloc(size_item);
     else
-        point2 = (T *)realloc(point, (_size + 1) * size_item);
+        point2 = (T *)p_realloc(point, (_size + 1) * size_item);
     if (point2 == NULL)
     {
         return NULL;
@@ -140,7 +143,7 @@ T vect<T>::pop_back()
     assert(_size > 0);
     T res = back();
     if (_size > 1)
-        point = (T *)realloc(point, (_size - 1) * size_item);
+        point = (T *)p_realloc(point, (_size - 1) * size_item);
     else
     {
         free(point);
@@ -157,7 +160,7 @@ T vect<T>::pop_front()
     T res = front();
     memmove(point, point + 1, (_size - 1) * size_item);
     if (_size > 1)
-        point = (T *)realloc(point, (_size - 1) * size_item);
+        point = (T *)p_realloc(point, (_size - 1) * size_item);
     else
     {
         free(point);
@@ -186,7 +189,7 @@ T *vect<T>::insertBefore(T *object,T asset )
 {
     assert(object - point < size_item * _size);
     uint32_t diff = object - point;
-    T *point2 = (T *)realloc(point, (_size + 1) * size_item);
+    T *point2 = (T *)p_realloc(point, (_size + 1) * size_item);
     memmove(point2 + diff + 1, point2 + diff, (size_item) * (_size - diff));
     memcpy(point2 + diff, &asset, size_item);
     _size++;
@@ -200,7 +203,7 @@ void vect<T>::erase(T *asset)
     assert(asset - point < size_item * _size);
     uint32_t diff = asset - point;
     memmove(point + diff, point + diff + 1, (size_item) * (_size - diff));
-    point = (T *)realloc(point, (_size - 1) * size_item);
+    point = (T *)p_realloc(point, (_size - 1) * size_item);
     _size--;
 }
 
@@ -216,19 +219,22 @@ void vect<T>::erase(int k)
 template <typename T>
 void vect<T>::shrink_to_fit()
 {
+    
     if (_size == 0 and point != NULL)
     {
         free(point);
         point = NULL;
+        
     }
-    point = (T *)realloc(point, _size * size_item);
+    else if(_size > 0)
+    point = (T *)p_realloc(point, _size * size_item);
 }
 template <typename T>
 T *vect<T>::insertAfter(T *object,T asset )
 {
     assert(object - point < size_item * _size);
     uint32_t diff = object - point;
-    T *point2 = (T *)realloc(point, (_size + 1) * size_item);
+    T *point2 = (T *)p_realloc(point, (_size + 1) * size_item);
     memmove(point2 + diff + 2, point2 + diff + 1, (size_item) * (_size - diff - 1));
     memcpy(point2 + diff + 1, &asset, size_item);
     _size++;
@@ -261,9 +267,11 @@ void vect<T>::empty()
         if(*(point+i)!=NULL)
         {
             free(*(point+i));
+            *(point+i)=NULL;
         }
     }
     clear();
 }
+
 
 #endif

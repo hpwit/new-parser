@@ -75,7 +75,8 @@ public:
 	NodeToken(NodeToken *nd);
 	NodeToken(char * _target, nodeType tt);
 	NodeToken(NodeToken nd, nodeType tt,uint16_t _target);
-
+	NodeToken(NodeToken nd,nodeType tt);
+	~NodeToken();
 	void clear();
 
 	NodeToken *getChildPtr(int i);
@@ -87,9 +88,10 @@ public:
 	NodeToken children_front();
 	NodeToken *addChild(NodeToken nd);
 		NodeToken *addChild(NodeToken *nd);
+		NodeToken *addChildClear(NodeToken nd);
 	NodeToken *addChildFront(NodeToken nd);
 	NodeToken *operator[](int i);
-	NodeToken(NodeToken nd, nodeType tt);
+	NodeToken(NodeToken nd, tokenType tt);
 	NodeToken(NodeToken *nd, nodeType tt);
 	varType *getVarTypeObj();
 	NodeToken children_pop();
@@ -104,8 +106,13 @@ void addTargetText(const char *t);
 
 	char *getText();
 	char *getTargetText();
-	NodeToken *children= nullptr;
-	NodeToken *parent= nullptr;
+
+	#ifdef __TEST_DEBUG
+	void prettyPrint();
+	
+	#endif
+	NodeToken *children= NULL;
+	NodeToken *parent= NULL;
 	uint16_t _total_size = 1;
 	uint16_t target = EOF_TEXTARRAY;
 	uint16_t textref = EOF_TEXTARRAY;
@@ -116,7 +123,7 @@ void addTargetText(const char *t);
 	uint8_t _nodetype = 0;
 
 	uint8_t type = 0;
-	uint8_t _vartype = 0;
+	uint8_t _vartype = EOF_VARTYPE;
 };
 extern const char *nodeTypeNames[];
 
@@ -127,14 +134,14 @@ extern Stack<bool> _is_variable_as_register;
 extern NodeToken *lasttype;
 extern vect<NodeToken *> sav_token;
 extern vect<NodeToken *> change_type;
+extern NodeToken * tmp_sav;
 extern int stack_size;
 extern int point_regnum;
 bool findCandidate(NodeToken *nd, char *str);
 void findFunction(NodeToken *nd, char * st);
 void findVariable(NodeToken *nd, char *, bool forCreation);
 void findVariable(NodeToken *nd, Token *t, bool forCreation);
-void prettyPrint(NodeToken *nd, int iden);
 void copyPrty(NodeToken *from, NodeToken *to);
-void testChange(vect<NodeToken *> *is, NodeToken *from,NodeToken *to);
+void testChange(vect<NodeToken *> *is, NodeToken *from,NodeToken *to,int size);
 uint16_t stringToInt(char *str);
 #endif

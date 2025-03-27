@@ -41,7 +41,6 @@ void str_split( vect<char *> *result,char* a_str, char *delim)
             result->push_back(d);
 		}
 
-	printf("qq %d\n",result->size());
 	//return result;
 }
 
