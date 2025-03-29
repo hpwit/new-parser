@@ -45,4 +45,6 @@ char * str_concat( const char *format,char * _str, Args ... args )
 	return str;
 
 }
+
+uint32_t compute_hash(char* s);
 #endif

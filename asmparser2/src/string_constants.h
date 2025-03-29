@@ -5,6 +5,7 @@
 extern const char *_s_s_;
 extern const char *_s_s_s_;
 extern const char *_s_space_s_;
+extern const char *_s_space_s_s_;
 extern const char *_closeparenthesis_;
 extern const char *_label_tern_d;
 extern const char *_s_dot_underscore_arobase_s; //"%s._@%s"

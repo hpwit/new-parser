@@ -518,12 +518,12 @@ varType *NodeToken::getVarTypeObj()
 
 
 	#ifdef __TEST_DEBUG
-	void NodeToken::prettyPrint()
+	void NodeToken::prettyPrint(int iden)
 	
 {
 	//PARSER_LOG("_nodetype %d",nd->_nodetype);
 
-/*
+
 	if (iden > 0)
 	{
 		for (int i = 0; i < iden - 1; i++)
@@ -533,7 +533,7 @@ varType *NodeToken::getVarTypeObj()
 
 		printf("|--");
 	} 
-		*/
+		
 	printf("%s\tisPointer:%d\tasPointer:%d\t", nodeTypeNames[_nodetype], isPointer, asPointer); //, tokenNames[nd._token.type].c_str());
 
 	printf("text:%s\ttokenType:%s\t", getText(), tokenNames[type]);
@@ -552,7 +552,7 @@ varType *NodeToken::getVarTypeObj()
 	printf("\n");
 	for (int i = 0; i < children_size(); i++)
 	{
-		getChildPtr(i)->prettyPrint();
+		getChildPtr(i)->prettyPrint(iden+1);
 	}
 }
 #endif

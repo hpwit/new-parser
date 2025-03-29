@@ -9,7 +9,6 @@
 #include "vect.h"
 #include "tokenize.h"
 
-
 enum nodeType
 
 {
@@ -73,9 +72,9 @@ public:
 	NodeToken(Token *t);
 	NodeToken(Token t, nodeType tt);
 	NodeToken(NodeToken *nd);
-	NodeToken(char * _target, nodeType tt);
-	NodeToken(NodeToken nd, nodeType tt,uint16_t _target);
-	NodeToken(NodeToken nd,nodeType tt);
+	NodeToken(char *_target, nodeType tt);
+	NodeToken(NodeToken nd, nodeType tt, uint16_t _target);
+	NodeToken(NodeToken nd, nodeType tt);
 	~NodeToken();
 	void clear();
 
@@ -87,8 +86,8 @@ public:
 	NodeToken *children_frontptr();
 	NodeToken children_front();
 	NodeToken *addChild(NodeToken nd);
-		NodeToken *addChild(NodeToken *nd);
-		NodeToken *addChildClear(NodeToken nd);
+	NodeToken *addChild(NodeToken *nd);
+	NodeToken *addChildClear(NodeToken nd);
 	NodeToken *addChildFront(NodeToken nd);
 	NodeToken *operator[](int i);
 	NodeToken(NodeToken nd, tokenType tt);
@@ -96,23 +95,23 @@ public:
 	varType *getVarTypeObj();
 	NodeToken children_pop();
 	varTypeEnum getVarType();
-	void setText(char * str);
+	void setText(char *str);
 	void addTargetText(char *t);
-void addTargetText(const char *t);
+	void addTargetText(const char *t);
 	void erase(NodeToken *asset);
- nodeType getNodeTokenType();
+	nodeType getNodeTokenType();
 	void erase(int k);
 	int children_size();
 
 	char *getText();
 	char *getTargetText();
 
-	#ifdef __TEST_DEBUG
-	void prettyPrint();
-	
-	#endif
-	NodeToken *children= NULL;
-	NodeToken *parent= NULL;
+#ifdef __TEST_DEBUG
+	void prettyPrint(int iden);
+
+#endif
+	NodeToken *children = NULL;
+	NodeToken *parent = NULL;
 	uint16_t _total_size = 1;
 	uint16_t target = EOF_TEXTARRAY;
 	uint16_t textref = EOF_TEXTARRAY;
@@ -134,14 +133,14 @@ extern Stack<bool> _is_variable_as_register;
 extern NodeToken *lasttype;
 extern vect<NodeToken *> sav_token;
 extern vect<NodeToken *> change_type;
-extern NodeToken * tmp_sav;
+extern NodeToken *tmp_sav;
 extern int stack_size;
 extern int point_regnum;
 bool findCandidate(NodeToken *nd, char *str);
-void findFunction(NodeToken *nd, char * st);
+void findFunction(NodeToken *nd, char *st);
 void findVariable(NodeToken *nd, char *, bool forCreation);
 void findVariable(NodeToken *nd, Token *t, bool forCreation);
 void copyPrty(NodeToken *from, NodeToken *to);
-void testChange(vect<NodeToken *> *is, NodeToken *from,NodeToken *to,int size);
+void testChange(vect<NodeToken *> *is, NodeToken *from, NodeToken *to, int size);
 uint16_t stringToInt(char *str);
 #endif

@@ -45,3 +45,17 @@ void str_split( vect<char *> *result,char* a_str, char *delim)
 }
 
 //template<typename ... Args>
+
+
+	uint32_t compute_hash(char* s) {
+		uint32_t p = 31;
+		uint32_t m = 1e9 + 9;
+		uint32_t long hash_value = 0;
+		uint32_t p_pow = 1;
+		for (int i=0;i<strlen(s);i++) {
+			char c= *(s+i);
+			hash_value = (hash_value + (c - 'a' + 1) * p_pow) % m;
+			p_pow = (p_pow * p) % m;
+		}
+		return hash_value;
+	}
