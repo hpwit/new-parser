@@ -4,9 +4,11 @@
 #include "compiler_error.h"
 #include "string_constants.h"
 #include "parser_define.h"
-NodeToken *current_node;
+#include "binding.h"
+//NodeToken *current_node;
 NodeToken program = NodeToken(programNode);
-NodeToken main_context, *current_cntx;
+NodeToken  extra_parser;
+NodeToken main_context,ext_function_cntx,*sav_current_cntx;
 NodeToken functions;
 Stack<uint16_t> targetList;
 vect<uint16_t> sigs;
@@ -28,6 +30,7 @@ bool _asPointer = false;
 int for_if_num = 0;
 int block_statement_num = 0;
 char *signature;
+bool isExtra;
 vect<NodeToken> nodeTokenList;
 vect<Token> sav_t;
 vect<NodeToken> _node_token_stack;
@@ -75,6 +78,10 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     _tks = __tks;
     _tks->tokenize(main_script, true, true, 1);
     parseProgram();
+ PARSER_LOG("build parents")
+    buildParents(&program);
+    PARSER_LOG("visit parents")
+    program.visitNode();
 }
 
 void Parser::parseProgram()
@@ -83,24 +90,28 @@ void Parser::parseProgram()
     int memberpos = 0;
     int _start = 0;
     int _pos = 0;
+    isExtra=false;
     // functions.clear();
     // main_context.clear();
     struct_name = NULL;
     //    int _totalsize = 0;
 
     current_cntx = &main_context;
+    function_cntx.parent=&main_context;
+    ext_function_cntx.parent=&main_context;
     current_node = &program;
     Error.error = 0;
     while (Match(TokenEndOfFile) == false)
     {
         isStructFunction = false;
+        current_cntx=&main_context;
         if (Match(TokenUnknown))
             RETURN_ERROR(unknownToken)
 
         if (Match(TokenKeywordStruct))
         {
-
-            current_cntx = current_cntx->addChild(NodeToken());
+            function_cntx.clear();   
+            current_cntx =&function_cntx; //current_cntx->addChild(NodeToken());
             current_cntx->type = TokenKeywordStruct;
             next();
             if (Match(TokenUserDefinedName))
@@ -965,25 +976,27 @@ void Parser::parseFunctionCall()
         }
         if (search_result == NULL)
         {
-            /*
-
-            for (int i = 0; i < external_links.size(); i++)
+            
+            bool found=false;
+            int savestacksize=0;
+            for (int i = 0; i < binded_assets.size(); i++)
             {
                 // printf("comparing %s ,%s \n\r", external_links[i].signature.c_str(), external_links[i].signature.c_str());
                 //   bool
                 found = false;
 
-                if (strstr(external_links[i].signature.c_str(), "Args") != NULL)
+                if (strstr(extern_text.getText( binded_assets[i].sign_ref), "Args") != NULL)
                 {
-                    int l = strstr(external_links[i].signature.c_str(), "Args") - external_links[i].signature.c_str();
+                    int l = strstr(extern_text.getText( binded_assets[i].sign_ref), "Args") - extern_text.getText( binded_assets[i].sign_ref);
                     if (l > 0)
                         l--;
-                    if (strncmp(external_links[i].signature.c_str(), sav_t.back().getText(), l) == 0)
+                    if (strncmp(extern_text.getText( binded_assets[i].sign_ref), sav_t.back().getText(), l) == 0)
                     {
                         found = true;
                     }
                 }
-                else if (external_links[i].signature.compare(string(sav_t.back().getText())) == 0)
+                //else if (external_links[i].signature.compare(string(sav_t.back().getText())) == 0)
+                else if (strcmp(extern_text.getText( binded_assets[i].sign_ref),sav_t.back().getText()) == 0)
                 {
                     found = true;
                 }
@@ -991,14 +1004,20 @@ void Parser::parseFunctionCall()
                 {
                     //   printf("her\n\r");
                     savestacksize = stack_size;
-                    _node_token_stack.push_back(current_node);
-                    current_node = &program;
+                   // sav_token.push_back(current_node);     
+                    sav_current_node=current_node;
+                    sav_current_cntx=current_cntx;
+                    current_cntx=&ext_function_cntx;
+                    isExtra=true;
+                    extra_parser.clear();
+                    current_node = &extra_parser;
                     // string toinsert = external_links[i].name; //"external " + external_links[i].out + " " + external_links[i].name + "("+external_links[i].in + ");";
-                    // printf("on inseet %s\n", external_links[i].name.c_str());
+                   
                     //  main_script.previousChar();
+                    Script extra_script;
                     extra_script.clear();
 
-                    extra_script.addContent((char *)(external_links[i].name.c_str()));
+                    extra_script.addContent(  extern_text.getText( binded_assets[i].name_ref));
                     extra_script.init();
                     _tks = &_extra_tks;
                     // extra_script.nextChar();
@@ -1029,33 +1048,38 @@ void Parser::parseFunctionCall()
                     }
 
                     parseDefFunction();
+                    extra_script.clear();
+                    _extra_tks.clear();
+                    isExtra=false;
                     if (Error.error)
                     {
                         //           printf("cold\n\r");
                         return;
                     }
-                    current_node = _node_token_stack.back();
-                    _node_token_stack.pop_back();
+                   // current_node = sav_token.pop_back();
+                   // _node_token_stack.pop_back();
+                   current_node=sav_current_node;
                     isStructFunction = sav_b;
+                    current_cntx=sav_current_cntx;
                     break;
                     // return;
+
                 }
+                
             }
-            _tks = &__tks;
-            extra_script.clear();
-            _extra_tks.clear();
+            _tks = &__allTokens;
+            
+           extra_parser.clear();
             stack_size = savestacksize;
-            // printf("looking for %s\n\r", sav_t.back().getText());
-            main_context.findFunction(&sav_t.back());
+            
+            findFunction(&functions, sav_t.back().getText());
             if (search_result == NULL)
             {
-                Error.error = 1;
-                Error.error_message = string_format("function %s not found %s", sav_t.back().getText(), linepos().c_str());
-                return;
+                RETURN_ERROR(functionnotfound)
             }
             // current()->type=TokenSemicolon;
-            */
-            RETURN_ERROR(functionnotfound)
+            
+           
         }
     }
 
@@ -1663,12 +1687,6 @@ void Parser::parseStatement()
                 next();
                 if (nodeTokenList.back()._nodetype == defLocalVariableNodeAsRegister)
                 {
-                    /*
-                    NodeToken _nd = nodeTokenList.pop_back();
-                    _nd._nodetype = defLocalVariableNode;
-                    nodeTokenList.pop_back();
-                    nodeTokenList.push_back(_nd);
-                    */
                     nodeTokenList.backptr()->_nodetype=defLocalVariableNode;
                 }
                 nodeTokenList.push_back(nodeTokenList.back());
@@ -1732,7 +1750,6 @@ void Parser::parseStatement()
         {
 
             tmp_sav = current_node->addChildClear(nodeTokenList.back());
-//PARSER_LOG("azfterb equal:%d",tmp_sav->_vartype);
             if (nodeTokenList.back().type == TokenUserDefinedVariable)
             {
 
@@ -1743,7 +1760,6 @@ void Parser::parseStatement()
                 next();
                 current()->addText(string_format(_s_dot_underscore_arobase_s, search_result->getVarTypeObj()->varName, current()->getText()));
                 NodeToken nd = NodeToken(*search_result);
-                // nd.copyChildren(search_result);//30/12
 
                 if (search_result->_nodetype == defGlobalVariableNode)
                     nd._nodetype = globalVariableNode;
@@ -1797,14 +1813,12 @@ void Parser::parseStatement()
             {
                 _uniquesave._nodetype = (int)storeGlobalVariableNode;
             }
-           // PARSER_LOG("chagfe tyuêr type %d",tmp_sav->_vartype);
+
             current_node->addChildClear(_uniquesave);
-           // PARSER_LOG("chagfe tyuêr type %d",tmp_sav->_vartype);
+
             NodeToken nd = NodeToken(changeTypeNode);
             nd._nodetype = changeTypeNode;
             nd.type = TokenKeywordVarType;
-            // nd.addTargetText("yevbs");
-            // PARSER_LOG("chagfe tyuêr type %d",tmp_sav->_vartype);
             nd._vartype = tmp_sav->_vartype;
 
             current_node = current_node->addChild(nd);
@@ -1889,6 +1903,12 @@ void Parser::parseDefFunction()
 #ifdef PARSER_DEBUG
     updateMem();
 #endif
+if (!isStructFunction and !isExtra)
+{
+    function_cntx.clear();
+    current_cntx=&function_cntx;
+}
+
 
     _for_depth_reg.push(2);
     _is_variable_as_register.push(false);
@@ -1985,7 +2005,9 @@ void Parser::parseDefFunction()
 
             Error.error = 0;
             current_cntx = current_cntx->parent;
+            current_node->clear();
             current_node = current_node->parent;
+            current_node->children_pop();
             next();
             _is_variable_as_register.pop();
             _for_depth_reg.pop();
@@ -2023,7 +2045,7 @@ void Parser::parseDefFunction()
             // result._nd = function;
             Error.error = 0;
 
-            point_regnum = 4;
+           
 
 #ifdef __MEM_PARSER
             buildParents(current_node);
@@ -2402,6 +2424,7 @@ char *findForWhile()
 void Parser::getVariable(bool isStore)
 {
 
+    //PARSER_LOG("trtyioen dto find %s",current()->getText());
     findVariable(current_cntx, current(), false); // false
     // NodeToken *nd = search_result;
     // printf("found %s\n",search_result->getTargetText());
@@ -2409,27 +2432,35 @@ void Parser::getVariable(bool isStore)
     {
 
         bool found = false;
-        /*
-        for (int i = 0; i < external_links.size(); i++)
+        
+        for (int i = 0; i < binded_assets.size(); i++)
         {
-            if (strcmp(current()->getText(), external_links[i].name.c_str()) == 0)
+            if (strcmp(current()->getText(),  extern_text.getText( binded_assets[i].name_ref)) == 0)
             {
                 sav_t.push_back(*current());
                 found = true;
-                _node_token_stack.push_back(current_node);
-                current_node = &program;
+              //  _node_token_stack.push_back(current_node);
+                sav_current_node=current_node;
+                extra_parser.clear();
+                current_node = &extra_parser;
+               // current_node = &program;
                 // string toinsert = external_links[i].name;
+                Script extra_script;
                 extra_script.clear();
                 _extra_tks.clear();
                 // printf("on iserset %s\n", external_links[i].signature.c_str());
-                extra_script.addContent((char *)(external_links[i].signature.c_str()));
+                extra_script.addContent(  extern_text.getText( binded_assets[i].sign_ref));
                 extra_script.init();
-                __isBlockComment = false;
+               // __isBlockComment = false;
                 _tks = &_extra_tks;
-                for (int i = 0; i < __DEPTH; i++)
+                
+                //07/04
+                /*
+                for (int i = 0; i < 20; i++)
                 {
                     _tks->push(Token());
                 }
+                */
                 insecond = true;
                 _tks->tokenizelow(&extra_script, true, true, 20);
                 insecond = false;
@@ -2446,7 +2477,9 @@ void Parser::getVariable(bool isStore)
 
                     return;
                 }
+               
                 NodeToken nd = nodeTokenList.pop_back();
+               
                 NodeToken _t = nodeTokenList.pop_back();
                 if (isExternal)
                 {
@@ -2460,30 +2493,39 @@ void Parser::getVariable(bool isStore)
                 }
                 copyPrty(&_t, &nd);
 
-                current_node = program.addChild(nd);
+                //current_node = program.addChild(nd);
 
-                main_context.addVariable(nd);
-                current_node = _node_token_stack.back();
-                _node_token_stack.pop_back();
+                main_context.addChild(nd);
+               // current_node = _node_token_stack.back();
+               
+                current_node=sav_current_node;
+               // _node_token_stack.pop_back();
 
-                _tks = &__tks;
+                _tks = &__allTokens;
+                extra_parser.clear();
                 extra_script.clear();
                 _extra_tks.clear();
-                current_cntx->findVariable(&sav_t.back(), false);
+              // current_cntx->findVariable(&sav_t.back(), false);
+            //PARSER_LOG("looking for %s",sav_t.backptr()->getText());
+                findVariable(current_cntx,sav_t.backptr(), false);
+                if(search_result==NULL)
+                RETURN_ERROR(impossibletofindvariabledeclaration)
                 sav_t.pop_back();
+                
                 break;
             }
         }
-        */
+        
         if (!found)
             RETURN_ERROR(impossibletofindvariabledeclaration)
+        
     }
-
+//PARSER_LOG("hjhh %s",current()->getText());
     // token *vartoken = current();
     // auto var =
     // current_node = current_node->addChild(
     createNodeVariable(current(), isStore);
-
+// PARSER_LOG("hjhh %s",current()->getText());
     next();
     if (Match(TokenOpenBracket))
     {
@@ -3149,6 +3191,8 @@ void Parser::clean()
     program.clear();
    // printf("3\n");
     main_context.clear();
+
+    function_cntx.clear();
    // printf("4\n");
     functions.clear();
    // printf("5\n");
@@ -3167,6 +3211,8 @@ void Parser::clean()
     nodeTokenList[i].clear();
    }
     nodeTokenList.clear();
+    ext_function_cntx.clear();
+    function_cntx.clear();
    // printf("11\n");
     sav_token.clear();
    //printf("12\n");

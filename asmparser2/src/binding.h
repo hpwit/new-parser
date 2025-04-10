@@ -1,5 +1,6 @@
 #pragma once
 #ifndef _BINDING_H_
+#define _BINDING_H_
 #include "string_functions.h"
 #include "vect.h"
 #include "stackfunctions.h"
@@ -23,7 +24,9 @@ typedef struct
 } _binding;
 
 void bindFunction(char * out,char * name,char *  in, void * ptr);
+void bindVariable( char *out,char *name,char *in,void * ptr);
+//int findLink(char * label, externalType op);
+extern vect<_binding> binded_assets;
 
 extern Text extern_text;
-extern vect<_binding> binded_assets;
 #endif

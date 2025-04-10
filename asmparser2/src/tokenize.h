@@ -160,4 +160,7 @@ extern vect<varType> _userDefinedTypes;
 extern varType _varTypes[];
 extern const char * varTypeEnumNames[]; 
 extern vect<_define> define_list;
+extern int pos_in_line;
+//char *line_ref = NULL;
+extern bool insecond;
 #endif

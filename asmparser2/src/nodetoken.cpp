@@ -5,21 +5,22 @@
 #include "vect.h"
 #include "parser_define.h"
 #include "string_constants.h"
-
-
+#include "visitnode.h"
 
 NodeToken *search_result;
 int search_result_index;
 Stack<int> _for_depth_reg;
 Stack<bool> _is_variable_as_register;
 NodeToken *lasttype;
-
- vect<NodeToken *> sav_token;
- vect<NodeToken *> change_type;
- NodeToken * tmp_sav;
+NodeToken *current_node,*current_cntx;
+NodeToken function_cntx;
+NodeToken *sav_current_node;
+vect<NodeToken *> sav_token;
+vect<NodeToken *> change_type;
+NodeToken *tmp_sav;
 
 int stack_size;
-int point_regnum;
+//int point_regnum;
 const char *nodeTypeNames[] =
 	{
 
@@ -76,8 +77,9 @@ const char *nodeTypeNames[] =
 #endif
 
 };
-NodeToken::~NodeToken(){
-	//clear();
+NodeToken::~NodeToken()
+{
+	// clear();
 }
 NodeToken::NodeToken()
 {
@@ -100,26 +102,26 @@ NodeToken::NodeToken()
 NodeToken::NodeToken(nodeType tt)
 {
 	_nodetype = tt;
-	 //children = NULL;
-	 type = (int)TokenUnknown;
-		target = EOF_TEXTARRAY;
+	// children = NULL;
+	type = (int)TokenUnknown;
+	target = EOF_TEXTARRAY;
 	textref = EOF_TEXTARRAY;
 	children = NULL;
-	_vartype=EOF_VARTYPE;
+	_vartype = EOF_VARTYPE;
 	_c_size = 0;
 }
-NodeToken::NodeToken(NodeToken nd,tokenType tt)
+NodeToken::NodeToken(NodeToken nd, tokenType tt)
 {
-	type =tt;
+	type = tt;
 	textref = nd.textref;
 	_vartype = nd._vartype;
 	isPointer = nd.isPointer;
 	_total_size = nd._total_size;
 	_nodetype = nd._nodetype;
 	stack_pos = nd.stack_pos;
-	target=nd.target;
+	target = nd.target;
 	children = nd.children;
-	_c_size=nd._c_size;
+	_c_size = nd._c_size;
 }
 NodeToken::NodeToken(Token *t, nodeType tt)
 {
@@ -137,22 +139,22 @@ NodeToken::NodeToken(Token *t)
 	textref = t->textref;
 	_vartype = t->_vartype;
 	target = EOF_TEXTARRAY;
-	children=NULL;
+	children = NULL;
 	_c_size = 0;
 }
 NodeToken::NodeToken(NodeToken *nd)
 {
 
 	type = nd->type;
-        textref = nd->textref;
-        _vartype = nd->_vartype;
-        isPointer = nd->isPointer;
-        _total_size = nd->_total_size;
-        _nodetype = nd->_nodetype;
-        stack_pos = nd->stack_pos;
-        target=nd->target;
-        children = nd->children;
-		_c_size=nd->_c_size;
+	textref = nd->textref;
+	_vartype = nd->_vartype;
+	isPointer = nd->isPointer;
+	_total_size = nd->_total_size;
+	_nodetype = nd->_nodetype;
+	stack_pos = nd->stack_pos;
+	target = nd->target;
+	children = nd->children;
+	_c_size = nd->_c_size;
 }
 NodeToken::NodeToken(Token t, nodeType tt)
 {
@@ -164,34 +166,34 @@ NodeToken::NodeToken(Token t, nodeType tt)
 	children = NULL;
 	_c_size = 0;
 }
-    NodeToken::NodeToken(NodeToken nd, nodeType tt,uint16_t _target)
-    {
+NodeToken::NodeToken(NodeToken nd, nodeType tt, uint16_t _target)
+{
 
-        type = nd.type;
-        textref = nd.textref;
-        _vartype = nd._vartype;
-        isPointer = nd.isPointer;
-        _total_size = nd._total_size;
-        _nodetype = tt;
-        stack_pos = nd.stack_pos;
-        target=_target;
-        children = NULL;
-		_c_size=0;
-    }
+	type = nd.type;
+	textref = nd.textref;
+	_vartype = nd._vartype;
+	isPointer = nd.isPointer;
+	_total_size = nd._total_size;
+	_nodetype = tt;
+	stack_pos = nd.stack_pos;
+	target = _target;
+	children = NULL;
+	_c_size = 0;
+}
 void NodeToken::clear()
 {
-	//PARSER_LOG(" on efface :%s",all_text.getText(textref));
-	if(children==NULL)
+	// PARSER_LOG(" on efface :%s",all_text.getText(textref));
+	if (children == NULL)
 		return;
-		
+
 	for (int i = 0; i < _c_size; i++)
 	{
-		
+
 		getChildPtr(i)->clear();
 	}
-		free(children);
-	children=NULL;
-	_c_size=0;
+	free(children);
+	children = NULL;
+	_c_size = 0;
 }
 
 NodeToken *NodeToken::getChildPtr(int i)
@@ -216,10 +218,10 @@ NodeToken *NodeToken::children_frontptr()
 	assert(_c_size > 0);
 	return children;
 }
-    nodeType NodeToken::getNodeTokenType()
-    {
-        return (nodeType)_nodetype;
-    }
+nodeType NodeToken::getNodeTokenType()
+{
+	return (nodeType)_nodetype;
+}
 NodeToken NodeToken::children_front()
 {
 	assert(_c_size > 0);
@@ -227,22 +229,22 @@ NodeToken NodeToken::children_front()
 }
 NodeToken NodeToken::children_pop()
 {
-	assert(children!=NULL);
-	NodeToken tmp=NodeToken(children+_c_size-1);
-	if(_c_size ==1)
+	assert(children != NULL);
+	NodeToken tmp = NodeToken(children + _c_size - 1);
+	if (_c_size == 1)
 	{
 		free(children);
-		children=NULL;
-		_c_size=0;
+		children = NULL;
+		_c_size = 0;
 	}
 	else
 	{
 		NodeToken *tmp = (NodeToken *)p_realloc(children, (_c_size - 1) * sizeof(NodeToken));
-				testChange(&sav_token,children,tmp,_c_size-1);
-		children=tmp;
+		testChange(&sav_token, children, tmp, _c_size - 1);
+		children = tmp;
 		_c_size--;
 	}
-	
+
 	return tmp;
 }
 int NodeToken::children_size()
@@ -254,7 +256,7 @@ int NodeToken::children_size()
 }
 NodeToken *NodeToken::addChildFront(NodeToken nd)
 {
-	
+
 	nd.parent = this;
 	if (children == NULL)
 	{
@@ -263,59 +265,59 @@ NodeToken *NodeToken::addChildFront(NodeToken nd)
 	else
 	{
 		NodeToken *tmp = (NodeToken *)p_realloc((void *)children, (_c_size + 1) * sizeof(NodeToken));
-		
-		testChange(&sav_token,children,tmp,_c_size+1);
-		children=tmp;
+
+		testChange(&sav_token, children, tmp, _c_size + 1);
+		children = tmp;
 	}
-	if(_c_size>0)
-	memmove(children+1,children,_c_size*sizeof(NodeToken));
+	if (_c_size > 0)
+		memmove(children + 1, children, _c_size * sizeof(NodeToken));
 	memcpy(children, &nd, sizeof(NodeToken));
 	NodeToken *new_object = children;
-	new_object->children=NULL;
-	new_object->_c_size=0;
-	
+	new_object->children = NULL;
+	new_object->_c_size = 0;
+
 	for (int i = 0; i < nd._c_size; i++)
 	{
-		new_object->addChild (*nd.getChildPtr(i));
+		new_object->addChild(*nd.getChildPtr(i));
 	}
-	
+
 	_c_size++;
 	return children;
 }
 NodeToken *NodeToken::addChild(NodeToken nd)
 {
-	if(_c_size==0)
-	children=NULL;
-	//nd.parent = this;
+	if (_c_size == 0)
+		children = NULL;
+	// nd.parent = this;
 	if (children == NULL)
 	{
 		children = (NodeToken *)malloc(sizeof(NodeToken));
-}
-else
+	}
+	else
 	{
-		NodeToken*tmp = (NodeToken *)p_realloc(children, (_c_size + 1) * sizeof(NodeToken));
-				testChange(&sav_token,children,tmp,_c_size+1);
-		children=tmp;
+		NodeToken *tmp = (NodeToken *)p_realloc(children, (_c_size + 1) * sizeof(NodeToken));
+		testChange(&sav_token, children, tmp, _c_size + 1);
+		children = tmp;
 	}
 	memcpy(children + _c_size, &nd, sizeof(NodeToken));
 	NodeToken *new_object = children + _c_size;
-	new_object->parent=this;
-	new_object->children=NULL;
-	new_object->_c_size=0;
-	
+	new_object->parent = this;
+	new_object->children = NULL;
+	new_object->_c_size = 0;
+
 	for (int i = 0; i < nd._c_size; i++)
 	{
-		new_object->addChild (*nd.getChildPtr(i));
+		new_object->addChild(*nd.getChildPtr(i));
 	}
-	
+
 	_c_size++;
 
 	return children + (_c_size - 1);
 }
 NodeToken *NodeToken::addChild(NodeToken *nd)
 {
-	//nd.parent = this;
-	NodeToken *tmp ;
+	// nd.parent = this;
+	NodeToken *tmp;
 	if (children == NULL)
 	{
 		tmp = (NodeToken *)malloc(sizeof(NodeToken));
@@ -323,28 +325,27 @@ NodeToken *NodeToken::addChild(NodeToken *nd)
 	else
 	{
 		tmp = (NodeToken *)p_realloc(children, (_c_size + 1) * sizeof(NodeToken));
-
 	}
 	memcpy(tmp + _c_size, nd, sizeof(NodeToken));
-	testChange(&sav_token,children,tmp,_c_size+1);
-	children=tmp;
+	testChange(&sav_token, children, tmp, _c_size + 1);
+	children = tmp;
 	NodeToken *new_object = children + _c_size;
-	new_object->children=NULL;
-	new_object->parent=this;
-	new_object->_c_size=0;
-	
+	new_object->children = NULL;
+	new_object->parent = this;
+	new_object->_c_size = 0;
+
 	for (int i = 0; i < nd->_c_size; i++)
 	{
-		new_object->addChild (nd->getChildPtr(i));
+		new_object->addChild(nd->getChildPtr(i));
 	}
-	
+
 	_c_size++;
 
 	return children + (_c_size - 1);
 }
 NodeToken *NodeToken::addChildClear(NodeToken nd)
 {
-NodeToken *tmp=	addChild(nd);
+	NodeToken *tmp = addChild(nd);
 	nd.clear();
 	return tmp;
 }
@@ -368,15 +369,15 @@ void NodeToken::addTargetText(char *t)
 }
 void NodeToken::addTargetText(const char *t)
 {
-	target = all_text.addText((const char*)t);
+	target = all_text.addText((const char *)t);
 }
 
-	void  NodeToken::setText(char * str)
-	{
-		if(str== NULL)
+void NodeToken::setText(char *str)
+{
+	if (str == NULL)
 		return;
-		textref = all_text.addText(str);
-	}
+	textref = all_text.addText(str);
+}
 void NodeToken::erase(int k)
 {
 	if (k >= 0 and k < _c_size)
@@ -400,8 +401,7 @@ varTypeEnum NodeToken::getVarType()
 }
 varType *NodeToken::getVarTypeObj()
 {
-	
-	
+
 	if (_vartype == EOF_VARTYPE)
 
 		return NULL;
@@ -413,7 +413,7 @@ varType *NodeToken::getVarTypeObj()
 
 		if (target != EOF_TEXTARRAY)
 		{
-			
+
 			if (strncmp(getTargetText(), "@", 1) == 0)
 			{
 				return _userDefinedTypes.getptr(_vartype);
@@ -430,110 +430,292 @@ varType *NodeToken::getVarTypeObj()
 			}
 		}
 
-		return  _userDefinedTypes.getptr(_vartype);
+		return _userDefinedTypes.getptr(_vartype);
 	}
 	else
 
 		return &_varTypes[_vartype];
 }
 
- NodeToken::NodeToken(NodeToken nd, nodeType tt)
-    {
-
-        type = nd.type;
-        textref = nd.textref;
-        _vartype = nd._vartype;
-        _nodetype = tt;
-        isPointer = nd.isPointer;
-        _total_size = nd._total_size;
-        target = nd.target;
-        children = NULL;
-		_c_size = 0;
-
-        if (tt == defLocalVariableNode)
-        {
-            isPointer = nd.isPointer;
-            _total_size = nd._total_size;
-            // visitNode=visitNodeDefLocalVariable;
-            int delta = 0;
-            if (nd.isPointer)
-            {
-                if (stack_size % 4 != 0)
-                    delta = 4 - stack_size % 4;
-            }
-            if (nd.getVarTypeObj()->_varType == __uint32_t__ || nd.getVarTypeObj()->_varType == __float__ || nd.getVarTypeObj()->_varType == __CRGB__ || nd.getVarTypeObj()->_varType == __int__ || nd.getVarTypeObj()->_varType == __userDefined__) //|| nd.getVarType()->_varType == __CRGBW__)
-            {
-                if (stack_size % 4 != 0)
-                {
-                    if (nd.getVarTypeObj()->_varSize % 2 == 0)
-                        delta = nd.getVarTypeObj()->_varSize - stack_size % 4;
-                    else
-                        delta = nd.getVarTypeObj()->_varSize - stack_size % 4 + 1;
-                }
-            }
-            else if (nd.getVarTypeObj()->_varType == __uint16_t__ || nd.getVarTypeObj()->_varType == __s_int__)
-            {
-                if (stack_size % 2 != 0)
-                {
-                    delta = 1;
-                }
-            }
-            stack_size += delta;
-            nd.stack_pos = stack_size;
-            if (nd.isPointer)
-            {
-                stack_size += 4;
-            }
-            else
-            {
-                stack_size += nd.getVarTypeObj()->_varSize;
-            }
-
-            stack_pos = nd.stack_pos;
-        }
-    }
-    NodeToken::NodeToken(NodeToken *nd, nodeType tt)
-    {
-
-        type = nd->type;
-        textref = nd->textref;
-        _vartype = nd->_vartype;
-        _nodetype = tt;
-        isPointer = nd->isPointer;
-        asPointer = nd->asPointer;
-        _total_size = nd->_total_size;
-        stack_pos = nd->stack_pos;
-        target = nd->target;
-        children = NULL;
-		_c_size=0;
-    }
-
-
-	    NodeToken::NodeToken(char * _target, nodeType tt)
-    {
-        _nodetype = tt;
-        addTargetText(_target);
-        children = NULL;
-    }
-
-
-	#ifdef __TEST_DEBUG
-	void NodeToken::prettyPrint(int iden)
-	
+NodeToken::NodeToken(NodeToken nd, nodeType tt)
 {
-	//PARSER_LOG("_nodetype %d",nd->_nodetype);
 
+	type = nd.type;
+	textref = nd.textref;
+	_vartype = nd._vartype;
+	_nodetype = tt;
+	isPointer = nd.isPointer;
+	_total_size = nd._total_size;
+	target = nd.target;
+	children = NULL;
+	_c_size = 0;
+
+	if (tt == defLocalVariableNode)
+	{
+		isPointer = nd.isPointer;
+		_total_size = nd._total_size;
+		// visitNode=visitNodeDefLocalVariable;
+		int delta = 0;
+		if (nd.isPointer)
+		{
+			if (stack_size % 4 != 0)
+				delta = 4 - stack_size % 4;
+		}
+		if (nd.getVarTypeObj()->_varType == __uint32_t__ || nd.getVarTypeObj()->_varType == __float__ || nd.getVarTypeObj()->_varType == __CRGB__ || nd.getVarTypeObj()->_varType == __int__ || nd.getVarTypeObj()->_varType == __userDefined__) //|| nd.getVarType()->_varType == __CRGBW__)
+		{
+			if (stack_size % 4 != 0)
+			{
+				if (nd.getVarTypeObj()->_varSize % 2 == 0)
+					delta = nd.getVarTypeObj()->_varSize - stack_size % 4;
+				else
+					delta = nd.getVarTypeObj()->_varSize - stack_size % 4 + 1;
+			}
+		}
+		else if (nd.getVarTypeObj()->_varType == __uint16_t__ || nd.getVarTypeObj()->_varType == __s_int__)
+		{
+			if (stack_size % 2 != 0)
+			{
+				delta = 1;
+			}
+		}
+		stack_size += delta;
+		nd.stack_pos = stack_size;
+		if (nd.isPointer)
+		{
+			stack_size += 4;
+		}
+		else
+		{
+			stack_size += nd.getVarTypeObj()->_varSize;
+		}
+
+		stack_pos = nd.stack_pos;
+	}
+}
+NodeToken::NodeToken(NodeToken *nd, nodeType tt)
+{
+
+	type = nd->type;
+	textref = nd->textref;
+	_vartype = nd->_vartype;
+	_nodetype = tt;
+	isPointer = nd->isPointer;
+	asPointer = nd->asPointer;
+	_total_size = nd->_total_size;
+	stack_pos = nd->stack_pos;
+	target = nd->target;
+	children = NULL;
+	_c_size = 0;
+}
+
+NodeToken::NodeToken(char *_target, nodeType tt)
+{
+	_nodetype = tt;
+	addTargetText(_target);
+	children = NULL;
+}
+void NodeToken::visitNode()
+{
+	switch ((nodeType)_nodetype)
+	{
+	case typeNode:
+		_visittypeNode(this);
+		break;
+	case numberNode:
+		_visitnumberNode(this);
+		break;
+
+	case binOpNode:
+		_visitbinOpNode(this);
+		break;
+
+	case unitaryOpNode:
+		_visitunitaryOpNode(this);
+		break;
+
+	case operatorNode:
+		_visitoperatorNode(this);
+		break;
+
+	case globalVariableNode:
+		_visitglobalVariableNode(this);
+		break;
+
+	case localVariableNode:
+		_visitlocalVariableNode(this);
+		break;
+
+	case blockStatementNode:
+		_visitblockStatementNode(this);
+		break;
+
+	case defFunctionNode:
+		_visitdefFunctionNode(this);
+		break;
+
+	case statementNode:
+		_visitstatementNode(this);
+		break;
+
+	case programNode:
+		_visitprogramNode(this);
+		break;
+
+	case assignementNode:
+		_visitassignementNode(this);
+		break;
+
+	case comparatorNode:
+		_visitcomparatorNode(this);
+		break;
+
+	case callFunctionNode:
+		_visitcallFunctionNode(this);
+		break;
+
+	case forNode:
+		_visitforNode(this);
+		break;
+
+	case argumentNode:
+		_visitargumentNode(this);
+		break;
+
+	case extGlobalVariableNode:
+		_visitextGlobalVariableNode(this);
+		break;
+		/*
+				case extDefFunctionNode:
+					_visitextDefFunctionNode(this);
+					break;
+		*/
+	case extCallFunctionNode:
+		_visitextCallFunctionNode(this);
+		break;
+
+	case returnArgumentNode:
+		_visitreturnArgumentNode(this);
+		break;
+
+	case variableDeclarationNode:
+		_visitvariableDeclarationNode(this);
+		break;
+
+	case defExtFunctionNode:
+		_visitdefExtFunctionNode(this);
+		break;
+
+	case inputArgumentsNode:
+		_visitinputArgumentsNode(this);
+		break;
+
+	case defInputArgumentsNode:
+		_visitdefInputArgumentsNode(this);
+		break;
+
+	case defExtGlobalVariableNode:
+		_visitdefExtGlobalVariableNode(this);
+		break;
+
+	case defGlobalVariableNode:
+		_visitdefGlobalVariableNode(this);
+		break;
+
+	case defLocalVariableNode:
+		_visitdefLocalVariableNode(this);
+		break;
+
+	case storeLocalVariableNode:
+		_visitstoreLocalVariableNode(this);
+		break;
+
+	case storeGlobalVariableNode:
+		_visitstoreGlobalVariableNode(this);
+		break;
+
+	case storeExtGlocalVariableNode:
+		_visitstoreExtGlocalVariableNode(this);
+		break;
+
+	case ifNode:
+		_visitifNode(this);
+		break;
+	case localVariableNodeAsRegister:
+		_visitlocalVariableNodeAsRegister(this);
+		break;
+	case storeLocalVariableNodeAsRegister:
+		_visitstoreLocalVariableNodeAsRegister(this);
+		break;
+	case elseNode:
+		_visitelseNode(this);
+		break;
+
+	case whileNode:
+		_visitwhileNode(this);
+		break;
+
+	case returnNode:
+		_visitreturnNode(this);
+		break;
+
+	case defAsmFunctionNode:
+		_visitdefAsmFunctionNode(this);
+		break;
+
+	case stringNode:
+		_visitstringNode(this);
+		break;
+
+	case changeTypeNode:
+		_visitchangeTypeNode(this);
+		break;
+
+	case importNode:
+		_visitimportNode(this);
+		break;
+
+	case continueNode:
+		_visitcontinueNode(this);
+		break;
+
+	case breakNode:
+		_visitbreakNode(this);
+		break;
+	case testNode:
+		_visittestNode(this);
+		break;
+
+	case ternaryIfNode:
+		_visitternaryIfNode(this);
+		break;
+	case callConstructorNode:
+		_visitcallConstructorNode(this);
+		break;
+	case UnknownNode:
+		_visitUnknownNode(this);
+		break;
+	default:
+		break;
+	}
+}
+
+
+#ifdef __TEST_DEBUG
+void NodeToken::prettyPrint(int iden)
+
+{
+	// PARSER_LOG("_nodetype %d",nd->_nodetype);
 
 	if (iden > 0)
 	{
 		for (int i = 0; i < iden - 1; i++)
 		{
-				printf("|  ");
+			printf("|  ");
 		}
 
 		printf("|--");
-	} 
-		
+	}
+
 	printf("%s\tisPointer:%d\tasPointer:%d\t", nodeTypeNames[_nodetype], isPointer, asPointer); //, tokenNames[nd._token.type].c_str());
 
 	printf("text:%s\ttokenType:%s\t", getText(), tokenNames[type]);
@@ -546,32 +728,32 @@ varType *NodeToken::getVarTypeObj()
 		else
 			printf("var type:%s\ttotal size:%d\tstackpos:%d\t", varTypeEnumNames[_vartype], _total_size, stack_pos);
 	*/
-			}
+	}
 
 	printf("target :%s", getTargetText());
 	printf("\n");
 	for (int i = 0; i < children_size(); i++)
 	{
-		getChildPtr(i)->prettyPrint(iden+1);
+		getChildPtr(i)->prettyPrint(iden + 1);
 	}
 }
 #endif
 
 bool findCandidate(NodeToken *nd, char *str)
 {
-	//char *tocmp;
+	// char *tocmp;
 	if (str == NULL)
 		return false;
 	if (nd->children_size() < 1)
 		return false;
 	for (int i = 0; i < nd->children_size(); i++)
 	{
-		if(nd->getChildPtr(i)->getText()!=NULL)
+		if (nd->getChildPtr(i)->getText() != NULL)
 		{
-		if (strstr(nd->getChildPtr(i)->getText(), str) == nd->getChildPtr(i)->getText())
-		{
-			return true;
-		}
+			if (strstr(nd->getChildPtr(i)->getText(), str) == nd->getChildPtr(i)->getText())
+			{
+				return true;
+			}
 		}
 	}
 	return false;
@@ -580,7 +762,7 @@ void findFunction(NodeToken *nd, char *t)
 {
 	search_result_index = -1;
 	search_result = NULL;
-	
+
 	if (t == NULL)
 		return;
 	if (nd == NULL)
@@ -591,30 +773,30 @@ void findFunction(NodeToken *nd, char *t)
 	for (int i = 0; i < nd->children_size(); i++)
 	{
 		NodeToken *it = nd->getChildPtr(i);
-		if(it->getText()!=NULL)
+		if (it->getText() != NULL)
 		{
-		if (strstr(it->getText(), "Args") != NULL)
-		{
-			int l = strstr(it->getText(), "Args") - it->getText();
-			if (l > 0)
-				l--;
-			if (strncmp(it->getText(), t, l) == 0)
+			if (strstr(it->getText(), "Args") != NULL)
 			{
-				search_result = it;
-				search_result_index = tmp_index;
-				return;
+				int l = strstr(it->getText(), "Args") - it->getText();
+				if (l > 0)
+					l--;
+				if (strncmp(it->getText(), t, l) == 0)
+				{
+					search_result = it;
+					search_result_index = tmp_index;
+					return;
+				}
 			}
-		}
-		else
-		{
+			else
+			{
 
-			if (strcmp(it->getText(), t) == 0)
-			{
-				search_result = it;
-				search_result_index = tmp_index;
-				return;
+				if (strcmp(it->getText(), t) == 0)
+				{
+					search_result = it;
+					search_result_index = tmp_index;
+					return;
+				}
 			}
-		}
 		}
 		tmp_index++;
 	}
@@ -632,7 +814,7 @@ void findVariable(NodeToken *nd, char *t, bool isCreation)
 	if (t == NULL)
 		return;
 	// //printf("lokking for variable |%s| dans %s  already %d variables defined \n", t->text.c_str(),name.c_str(),variables.size());
-	//PARSER_LOG("look for %s",t);
+	// PARSER_LOG("look for %s",t);
 	if (nd->children_size() > 0)
 	{
 
@@ -641,7 +823,7 @@ void findVariable(NodeToken *nd, char *t, bool isCreation)
 			NodeToken *it = nd->getChildPtr(i);
 			if (it->getText() != _end_text)
 			{
-				//PARSER_LOG("on a %s",it->getText());
+				// PARSER_LOG("on a %s",it->getText());
 				if (strcmp(it->getText(), t) == 0)
 				{
 					search_result = it;
@@ -655,16 +837,18 @@ void findVariable(NodeToken *nd, char *t, bool isCreation)
 		NodeToken *c_cntx = nd->parent;
 		while (c_cntx != NULL)
 		{
-			// ////printf("lokking for variable |%s| dans %s %d branches\n", t->text.c_str(),c_cntx->name.c_str(),c_cntx->variables.size());
+			//printf("lokking for variable |%s| dans %d branches\n",t,c_cntx->children_size());
 			if (c_cntx->children_size() > 0)
 			{
 				for (int i = 0; i < c_cntx->children_size(); i++)
 				{
 					NodeToken *it = c_cntx->getChildPtr(i);
-					// ////printf("is equalt to |%s|\n", (*it)._token->text.c_str());
+					if(it!=NULL)
+					{
+					
 					if (it->getText() != _end_text)
 					{
-					//	PARSER_LOG("on a %s",it->getText());
+						//	PARSER_LOG("on a %s",it->getText());
 						//  //////printf("is equalt to |%s|\n", (*it)._token->text.c_str());
 						if (strcmp(it->getText(), t) == 0)
 						{
@@ -672,6 +856,7 @@ void findVariable(NodeToken *nd, char *t, bool isCreation)
 							return;
 						}
 					}
+				}
 				}
 			}
 			c_cntx = c_cntx->parent;
@@ -709,45 +894,86 @@ uint16_t stringToInt(char *str)
 	return res;
 }
 
-void testChange(vect<NodeToken *> *is, NodeToken *from,NodeToken *to,int size)
+void testChange(vect<NodeToken *> *is, NodeToken *from, NodeToken *to, int size)
 {
-	
-	for(int j=0;j<size;j++)
+	if (from == NULL)
+		return;
+	for (int j = 0; j < size; j++)
 	{
 
-		for(int i=0;i<change_type.size();i++)
+		if (current_node == from + j)
 		{
-			NodeToken * tmp=change_type.get(i);
-			if(tmp== from +j)
+			current_node = to + j;
+
+			//PARSER_LOG("change address current node")
+		}
+		for (int i = 0; i < change_type.size(); i++)
+		{
+			NodeToken *tmp = change_type.get(i);
+			if (tmp == from + j)
 			{
-				*(change_type.getptr(i))=to+j;
+				*(change_type.getptr(i)) = to + j;
 				//PARSER_LOG("change address change tyep")
 			}
 		}
-	for(int i=0;i<is->size();i++)
-	{
-		NodeToken * tmp=is->get(i);
-		if(tmp== from +j)
+		for (int i = 0; i < is->size(); i++)
 		{
-			*(is->getptr(i))=to+j;
-			//PARSER_LOG("change address")
+			NodeToken *tmp = is->get(i);
+			if (tmp == from + j)
+			{
+				*(is->getptr(i)) = to + j;
+				//PARSER_LOG("change address savtoiken")
+			}
 		}
+		if (tmp_sav == from + j)
+		{
+			tmp_sav = to + j;
+			// PARSER_LOG("new one")
+		}
+		if (lasttype == from + j)
+		{
+			lasttype = to + j;
+			// PARSER_LOG("new one")
+		}
+		if (sav_current_node == from + j)
+		{
+			sav_current_node = to + j;
+		}
+		/*
+		if (current_cntx == from + j)
+		{
+			current_cntx = to + j;
+			PARSER_LOG("new one")
+		}
+		if (current_cntx->parent == from + j)
+		{
+			current_cntx->parent = to + j;
+			PARSER_LOG("new one")
+		}
+		*/
 	}
-	
 }
-	
-for(int i=0;i<size;i++)
+
+void buildParents(NodeToken *__nd)
 {
-	if(tmp_sav==from+i)
-	{
-	tmp_sav=to+i;
-		//PARSER_LOG("new one")
-	}
-	if(lasttype==from+i)
-	{
-		lasttype=to+i;
-		//PARSER_LOG("new one")
-	}
-	
-}
+
+    // return; //new
+    // printf("klkkmkml %s\r\n",__nd->getTokenText());
+    if (__nd->children_size() > 0)
+    {
+        for (int i=0;i<__nd->children_size();i++)
+        {
+			NodeToken *it=__nd->getChildPtr(i);
+            if (it->_nodetype == (int)UnknownNode)
+            {
+                //__nd->children->erase(it);
+                // printf("on supppirm\r\n");
+            }
+            else
+            {
+                it->parent = __nd;
+                buildParents(it);
+            }
+        }
+    }
 }

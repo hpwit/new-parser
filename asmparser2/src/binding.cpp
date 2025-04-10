@@ -13,26 +13,31 @@ void bindFunction(char * out,char * name,char *  in, void * ptr)
   
   _binding asmex;
    // asmex.name_ref=extern_text.addText( name);
-    asmex.shortname_ref=extern_text.addText(name);
+   
+   char * _name=string_format("external %s %s(",out,name);
+    asmex.shortname_ref=extern_text.addText(string_format("%s",name));
+   
     asmex.type=function;
     //asmex.in=in;
     //asmex.out=out;
-    if(out==NULL)
+    if(in==NULL)
     {
-    asmex.sign_ref =extern_text.addText("()");
+    asmex.sign_ref =extern_text.addText(string_format("%s%s",name,_opencloseparenthesis_));
+    _name=str_concat("%s%s",_name,");");
+  
     }
     else
     {
-      char * _name=string_format("external %s %s(",out,name);
+     
       char * signature=string_format(_s_s_,name,_openparenthesis_);
 
     vect<char *> j;
-    str_split(&j,in,",");
+    str_split(&j,in,(char*)_comma_);
     for (int i=0;i<j.size();i++)
     {
      
       if(strstr(j[i],"Args")==NULL)
-     //if(j[i].find("Args")==string::npos)
+     //if(j[i].find("Args")==string::npos)tu vas penser
       // asmex.signature= asmex.signature+"d";
        signature=str_concat(_s_s_,signature,"d");
       else
@@ -40,7 +45,7 @@ void bindFunction(char * out,char * name,char *  in, void * ptr)
        signature=str_concat("%s%s",signature,"Args");
 
       // if(j[i].find("*")!=string::npos)
-      if(strstr(j[i],"*")==NULL)
+      if(strstr(j[i],"*")!=NULL)
        // asmex.signature= asmex.signature+"*";
        signature=str_concat(_s_s_,signature,"*");
      //asmex.name=string_format("%s%s a%d",asmex.name.c_str(),j[i].c_str(),i);
@@ -60,11 +65,31 @@ void bindFunction(char * out,char * name,char *  in, void * ptr)
 
     signature=str_concat(_s_s_,signature,_closeparenthesis_);
    
-      _name=str_concat(_s_s_,_name,_closeparenthesis_);
-  //  printf("%s %s \n\r",asmex.signature.c_str(),asmex.name.c_str());
+      _name=str_concat(_s_s_s_,_name,_closeparenthesis_,";");
+    
+      asmex.sign_ref=extern_text.addText(signature);
+      
     }
+    asmex.name_ref=extern_text.addText(_name);
+    printf("%s %s \n\r",extern_text.getText( asmex.sign_ref), extern_text.getText( asmex.name_ref));
     if(ptr!=NULL)
          asmex.ptr=ptr;
     binded_assets.push_back(asmex);
          
 }
+
+void bindVariable( char *out,char *name,char *in,void * ptr)
+{
+  _binding asmex;
+  asmex.name_ref=extern_text.addText(string_format("%s",name));
+  asmex.shortname_ref=extern_text.addText(string_format("%s",name));
+  if(in!=NULL)
+    asmex.sign_ref=extern_text.addText(string_format("external %s %s%s;",out,name,in));
+  else
+  asmex.sign_ref=extern_text.addText(string_format("external %s %s;",out,name));
+    asmex.type=value;
+    if(ptr!=NULL)
+         asmex.ptr=ptr;
+         binded_assets.push_back(asmex);
+}
+

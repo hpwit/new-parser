@@ -187,7 +187,7 @@ T *vect<T>::end()
 template <typename T>
 T *vect<T>::insertBefore(T *object,T asset )
 {
-    assert(object - point < size_item * _size);
+    assert(object - point <= size_item * _size);
     uint32_t diff = object - point;
     T *point2 = (T *)p_realloc(point, (_size + 1) * size_item);
     memmove(point2 + diff + 1, point2 + diff, (size_item) * (_size - diff));

@@ -4,6 +4,7 @@
 #include "parser_define.h"
 #include "nodetoken.h"
 #include "compiler_error.h"
+#include "binding.h"
 
 #define _START_2 32
 #define _STACK_SIZE (_START_2 + 6 * 4)
@@ -51,9 +52,10 @@ NodeToken createNodeLocalVariableForCreation(NodeToken var, NodeToken nd);
 void createNodeVariable(Token *_var, bool isStore);
 varTypeEnum finduint32_t(NodeToken *nd);
 varTypeEnum findfloat(NodeToken *nd);
-extern NodeToken program, *current_node;
-extern NodeToken main_context, *current_cntx;
+extern NodeToken program, extra_parser;
+extern NodeToken main_context,ext_function_cntx,*sav_current_cntx;
 extern NodeToken functions;
+extern bool isExtra;
 
 
 extern Stack<uint16_t> targetList;

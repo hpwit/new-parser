@@ -3,6 +3,7 @@
 const char *_s_s_="%s%s";
 const char *_s_s_s_="%s%s%s";
 const char *_s_space_s_="%s %s";
+const char *_s_space_s_s_="%s %s%s";
 const char *_closeparenthesis_=")";
 const char *_openparenthesis_="(";
 const char *_label_tern_d="label_tern_%d";
@@ -16,6 +17,8 @@ const char *_label_underscore_d="label_%d";
 const char *_local_string_d="local_string_%d";
 const char *_pointer_="pointer";
 const char *_separ_="|";
- char *_end_text=(char*)"";
+const char *_comma_=",";
+const char *_opencloseparenthesis_="()";
+ char *_end_text=(char *)"";
 
 

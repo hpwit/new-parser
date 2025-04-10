@@ -8,6 +8,7 @@
 #include "parser_enum.h"
 #include "vect.h"
 #include "tokenize.h"
+#include "visitnode.h"
 
 enum nodeType
 
@@ -63,6 +64,8 @@ enum nodeType
 
 };
 
+
+
 class NodeToken
 {
 public:
@@ -102,6 +105,7 @@ public:
 	nodeType getNodeTokenType();
 	void erase(int k);
 	int children_size();
+	void visitNode();
 
 	char *getText();
 	char *getTargetText();
@@ -124,6 +128,9 @@ public:
 	uint8_t type = 0;
 	uint8_t _vartype = EOF_VARTYPE;
 };
+
+
+
 extern const char *nodeTypeNames[];
 
 extern NodeToken *search_result;
@@ -134,8 +141,12 @@ extern NodeToken *lasttype;
 extern vect<NodeToken *> sav_token;
 extern vect<NodeToken *> change_type;
 extern NodeToken *tmp_sav;
+extern NodeToken *sav_current_node;
 extern int stack_size;
-extern int point_regnum;
+//extern int point_regnum;
+extern NodeToken *current_node;
+extern NodeToken *current_cntx;
+extern NodeToken function_cntx;
 bool findCandidate(NodeToken *nd, char *str);
 void findFunction(NodeToken *nd, char *st);
 void findVariable(NodeToken *nd, char *, bool forCreation);
@@ -143,4 +154,5 @@ void findVariable(NodeToken *nd, Token *t, bool forCreation);
 void copyPrty(NodeToken *from, NodeToken *to);
 void testChange(vect<NodeToken *> *is, NodeToken *from, NodeToken *to, int size);
 uint16_t stringToInt(char *str);
+void buildParents(NodeToken *__nd);
 #endif
