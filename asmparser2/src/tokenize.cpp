@@ -6,7 +6,7 @@
 #define EOF_VARTYPE 14
 #define __DEPTH 5
 
-
+bool isStructFunction;
 tokenType __keywordTypes[] = {
     TokenKeywordVarType,
     TokenKeywordVarType,

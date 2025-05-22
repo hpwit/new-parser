@@ -162,5 +162,6 @@ extern const char * varTypeEnumNames[];
 extern vect<_define> define_list;
 extern int pos_in_line;
 //char *line_ref = NULL;
+extern bool isStructFunction;
 extern bool insecond;
 #endif

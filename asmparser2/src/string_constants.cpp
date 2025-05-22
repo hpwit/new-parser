@@ -19,6 +19,10 @@ const char *_pointer_="pointer";
 const char *_separ_="|";
 const char *_comma_=",";
 const char *_opencloseparenthesis_="()";
+const char *_handle_="handle_";
+const char *_execaddr_="_execaddr_";
+const char *_sync="_sync";
+const char *_space_=" ";
  char *_end_text=(char *)"";
 
 

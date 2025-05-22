@@ -150,6 +150,10 @@
     }
     void Text::blankCurrent()
     {
+        if (!isReused(_texts.size() - 1))
+        {
+           free(_texts.back());
+        }
         int pos = findText((char *)" ");
         if(pos>-1)
         {
@@ -213,6 +217,7 @@
         int pos = findText(s);
         if (pos > -1)
         {
+            free(s);
             _it = _texts.insertBefore(_it, _texts.get(pos));
         }
         else
@@ -223,6 +228,14 @@
         _it++;
         position++;
     }
+    void Text::addBefore(const char * s)
+    {
+        char *m=(char *)malloc(strlen(s)+1);
+        memcpy(m,s,strlen(s));
+        m[strlen(s)]=0;
+        addBefore(m);
+    }
+
     void Text::replaceText(int pos, char * str)
     {
         if (pos >= 0 and pos < size())

@@ -48,7 +48,22 @@ void _visittestNode(NodeToken *nd);
 void _visitternaryIfNode(NodeToken *nd);
 void _visitcallConstructorNode(NodeToken *nd);
 void _visitUnknownNode(NodeToken *nd);
+
+void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall);
+void translateType(varTypeEnum to, varTypeEnum from, int regnum);
+char * _numToBytes(uint32_t __num);
 extern Stack<int> register_numr ;
 extern Stack<int> register_numl;
 extern Text content,header,footer,*bufferText;
+extern Stack<varTypeEnum> globalType;
+extern int for_if_num2;
+extern int local_var_num;
+extern vect<int> _compare;
+extern bool intest;
+//extern bool safeMode;
+
+
+
+
+
  #endif

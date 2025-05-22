@@ -266,6 +266,11 @@ void vect<T>::empty()
     {
         if(*(point+i)!=NULL)
         {
+            for(int j=i+1;j<_size;j++)
+            {
+                if(*(point+i)==*(point+j))
+                *(point+j)=NULL;
+            }
             free(*(point+i));
             *(point+i)=NULL;
         }

@@ -278,7 +278,7 @@ NodeToken *NodeToken::addChildFront(NodeToken nd)
 
 	for (int i = 0; i < nd._c_size; i++)
 	{
-		new_object->addChild(*nd.getChildPtr(i));
+		new_object->addChild(nd.getChildPtr(i));
 	}
 
 	_c_size++;
@@ -307,7 +307,7 @@ NodeToken *NodeToken::addChild(NodeToken nd)
 
 	for (int i = 0; i < nd._c_size; i++)
 	{
-		new_object->addChild(*nd.getChildPtr(i));
+		new_object->addChild(nd.getChildPtr(i));
 	}
 
 	_c_size++;
@@ -699,6 +699,33 @@ void NodeToken::visitNode()
 	}
 }
 
+int NodeToken::findMaxArgumentSize()
+{
+	int cur_size = 0;
+	if (_nodetype == extCallFunctionNode or _nodetype == callFunctionNode)
+	{
+		cur_size = getChildPtr(1)->children_size();
+		for (int i = 0; i < getChildPtr(2)->children_size(); i++)
+		{
+			int cmp = getChildPtr(2)->getChildPtr(i)->findMaxArgumentSize();
+			if (cmp > cur_size)
+				cur_size = cmp;
+		}
+	}
+	else
+	{
+		if (children_size() > 0)
+		{
+			for (int i = 0; i < children_size(); i++)
+			{
+				int cmp = getChildPtr(i)->findMaxArgumentSize();
+				if (cmp > cur_size)
+					cur_size = cmp;
+			}
+		}
+	}
+	return cur_size;
+}
 
 #ifdef __TEST_DEBUG
 void NodeToken::prettyPrint(int iden)
@@ -956,7 +983,7 @@ void testChange(vect<NodeToken *> *is, NodeToken *from, NodeToken *to, int size)
 
 void buildParents(NodeToken *__nd)
 {
-
+//return;
     // return; //new
     // printf("klkkmkml %s\r\n",__nd->getTokenText());
     if (__nd->children_size() > 0)

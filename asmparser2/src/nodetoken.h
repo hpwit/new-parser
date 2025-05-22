@@ -64,8 +64,6 @@ enum nodeType
 
 };
 
-
-
 class NodeToken
 {
 public:
@@ -109,7 +107,7 @@ public:
 
 	char *getText();
 	char *getTargetText();
-
+	int findMaxArgumentSize();
 #ifdef __TEST_DEBUG
 	void prettyPrint(int iden);
 
@@ -129,8 +127,6 @@ public:
 	uint8_t _vartype = EOF_VARTYPE;
 };
 
-
-
 extern const char *nodeTypeNames[];
 
 extern NodeToken *search_result;
@@ -143,10 +139,13 @@ extern vect<NodeToken *> change_type;
 extern NodeToken *tmp_sav;
 extern NodeToken *sav_current_node;
 extern int stack_size;
-//extern int point_regnum;
+// extern int point_regnum;
 extern NodeToken *current_node;
 extern NodeToken *current_cntx;
 extern NodeToken function_cntx;
+extern bool saveReg;
+extern bool saveRegAbs;
+extern bool safeMode;
 bool findCandidate(NodeToken *nd, char *str);
 void findFunction(NodeToken *nd, char *st);
 void findVariable(NodeToken *nd, char *, bool forCreation);

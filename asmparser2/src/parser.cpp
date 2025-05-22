@@ -19,13 +19,13 @@ char *struct_name;
 bool isExternal = false;
 int __sav_arg = 0;
 bool isPointer = true;
-bool isStructFunction = false;
+//bool isStructFunction = false;
 bool sav_b = false;
 bool isASM = false;
 bool safeMode = false;
 bool saveReg = false;
 bool saveRegAbs = false;
-bool intest = false;
+
 bool _asPointer = false;
 int for_if_num = 0;
 int block_statement_num = 0;
@@ -78,6 +78,8 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     _tks = __tks;
     _tks->tokenize(main_script, true, true, 1);
     parseProgram();
+    if(Error.error)
+    return;
  PARSER_LOG("build parents")
     buildParents(&program);
     PARSER_LOG("visit parents")
@@ -384,6 +386,7 @@ void Parser::parseProgram()
                 else if (Match(TokenEqual) && Match(TokenString, 1))
                 {
                    // nodeTokenList.backptr()->clear();
+                   
                     nodeTokenList.pop_back();
                     next();
                     current_node->addChild(NodeToken(current(), stringNode));
@@ -400,7 +403,9 @@ void Parser::parseProgram()
                 else if (Match(TokenEqual) && Match(TokenOpenCurlyBracket, 1))
                 {
                     //nodeTokenList.backptr()->clear();
-                    nodeTokenList.pop_back();
+                  PARSER_LOG("size:%s",nodeTokenList.backptr()->getText());
+                   //nodeTokenList.pop_back();
+                   
                     next();
                     next();
                     parseFactor();
@@ -428,6 +433,7 @@ void Parser::parseProgram()
 
                     // _tks->position = __sav_pos;
                     current_node = current_node->parent;
+                    
                 }
 
                 else if (Match(TokenEqual) and Match(TokenUserDefinedVariable, 1) and Match(TokenOpenParenthesis, 2) and current_node->type == TokenUserDefinedVariable)
@@ -1934,9 +1940,11 @@ if (!isStructFunction and !isExtra)
     {
 
         nd = NodeToken(current(), defExtFunctionNode);
-
+       // PARSER_LOG("heres %s",nodeTypeNames[ current_node->_nodetype]);
         current_node = current_node->addChild(nd);
+       // PARSER_LOG("heres %s",nodeTypeNames[ current_node->_nodetype]);
         lasttype = current_node->addChildClear(nodeTokenList.pop_back());
+       // PARSER_LOG("heres %s",nodeTypeNames[ current_node->_nodetype]);
     }
     else if (is_asm)
     {
@@ -2007,7 +2015,7 @@ if (!isStructFunction and !isExtra)
             current_cntx = current_cntx->parent;
             current_node->clear();
             current_node = current_node->parent;
-            current_node->children_pop();
+            //current_node->children_pop();
             next();
             _is_variable_as_register.pop();
             _for_depth_reg.pop();
@@ -2047,7 +2055,7 @@ if (!isStructFunction and !isExtra)
 
            
 
-#ifdef __MEM_PARSER
+#ifndef __MEM_PARSER
             buildParents(current_node);
 
             current_node->visitNode();
@@ -2057,7 +2065,7 @@ if (!isStructFunction and !isExtra)
             sav_token.clear();
             change_type.clear();
             // printf("after clean function %s\n",current_node->getTokenText());
-            updateMem();
+           // updateMem();
 #endif
 
             /*
@@ -2596,6 +2604,7 @@ void Parser::getVariable(bool isStore)
                     sscanf(tile.get(0), _arobase_d, &nb);
                 }
                 tile.empty();
+                tile.clear();
                 if (nb < _s)
                     RETURN_ERROR(toomanyarguments)
             }

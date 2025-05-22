@@ -6,10 +6,7 @@
 #include "compiler_error.h"
 #include "binding.h"
 
-#define _START_2 32
-#define _STACK_SIZE (_START_2 + 6 * 4)
-#define _MAX_FOR_DEPTH_REG 4
-#define _MAX_FOR_DEPTH_REG_2 2
+
 #define RETURN_ERROR(x) { printf("line:%d\n",__LINE__);Error.error=x;Error.token=current();return;}
 #define RETURN_IF_ERROR if(Error.error!=noError) return;
 class Parser
@@ -57,7 +54,7 @@ extern NodeToken main_context,ext_function_cntx,*sav_current_cntx;
 extern NodeToken functions;
 extern bool isExtra;
 
-
+extern bool safeMode;
 extern Stack<uint16_t> targetList;
 extern error_message_struct Error;
 #endif

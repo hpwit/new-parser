@@ -134,7 +134,7 @@ int addTextNoDelete(char* str);
     void addAfterNoDouble(char *s);
 
     void addBefore(char *s);
-
+    void addBefore(const char *s);
     void replaceText(int pos, char *str);
 
     char **getChildAtPos(int pos);

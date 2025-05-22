@@ -3,6 +3,7 @@
 #ifndef __STRING_FUNC__
 #define __STRING_FUNC__
 #include "string.h"
+#include "parser_enum.h"
 #include "vect.h"
 //vect<char *>str_split(char* a_str, char *delim);
 void str_split( vect<char *> *result,char* a_str, char *delim);
@@ -21,6 +22,24 @@ char * string_format( const char *format, Args ... args )
 	return str;
 
 }
+
+
+template<typename ... Args>
+char * string_format( asmInstruction instr, Args ... args )
+
+{
+	int size_s = snprintf( nullptr, 0, asmInstructionsName[instr], args ... ) + 1; // Extra space for '\0'
+	if( size_s <= 0 ) {
+		return (char *)"";
+	}
+
+	char * str=(char *)malloc(size_s);
+	snprintf( str, size_s, asmInstructionsName[instr], args ... );
+	return str;
+
+}
+
+
 template<typename ... Args>
 char * str_concat( const char *format,char * _str, Args ... args )
 
