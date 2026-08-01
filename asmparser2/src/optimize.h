@@ -1,6 +1,6 @@
 #pragma once
-#ifndef __OPTIMIZE__
-#define __OPTIMIZE__
+#ifndef __SCRIPT_OPTIMIZE_H__
+#define __SCRIPT_OPTIMIZE_H__
 #include "stackfunctions.h"
 
 // Peephole-optimizes a buffer of generated assembly lines in place:

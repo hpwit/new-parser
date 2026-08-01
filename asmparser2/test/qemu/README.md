@@ -37,6 +37,17 @@ mathematically correct result:
    runtime exactly as `decodeBinaryHeader`'s case-1 handling does:
    correctly uppercases `'a'`/`'z'` to `'A'`/`'Z'` while leaving other
    characters unchanged.
+7. Four pure-integer helper functions (`gcd`, `fib`, `isPrime`,
+   `clampInt`) extracted by name from the *actual* compiled bytes of
+   `test/host/fixtures/multi_effect_controller.sc` -- the real,
+   several-hundred-line script `test/host/test_large_script.cpp`'s
+   `make run-large` budget-checks, not a reimplementation -- each called
+   directly (`gen_large_script.cpp`/`runner_large_script.c`) and checked
+   against a hand-derived expected value (`gcd(48,18)=6`,
+   `fib(12)=144`, `isPrime(29)=true`/`isPrime(28)=false`,
+   `clampInt(300,0,255)=255`/`clampInt(-5,0,255)=0`). This is *not* a
+   claim that the whole script runs correctly end to end -- see "Not
+   verified" below for exactly what this does and doesn't cover.
 
 This exercise also found and fixed a real bug: `addInstr()` was silently
 dropping `.bytes` reservation lines instead of reserving 4 bytes of
@@ -64,9 +75,26 @@ separately blocked by the `__div` stdlib-injection gap noted there) can
 currently be QEMU-verified -- only host-structurally-verified, same as
 structs/multi-function scripts above.
 
+Case 7 above is a narrower verification than it might look like: it does
+*not* mean `multi_effect_controller.sc` runs correctly end to end under
+QEMU. That script has ~40 functions, two struct types with constructors/
+methods, and float-heavy render paths (particle physics, `sin`/`hypot` in
+the plasma effect) -- squarely in the two "not verified" categories just
+above (structs/many-functions, and float instructions specifically hang
+this QEMU fork). Running its `while(true)` main loop would also need ten
+different `external`/auto-declared host functions (`hsv`, `show`, `rand`,
+`delay`, ...) each bridged or jump-table-patched by hand in a bare-metal
+runner, which wasn't attempted. What case 7 *does* prove: the four
+functions it calls happen to be pure integer arithmetic/recursion with no
+external-call or global-variable dependencies, so they're callable
+directly with zero bridging (same scheme as cases 3-5), and running the
+*actual* compiled bytes of the real fixture (not a reimplementation)
+confirms those specific bytes execute correctly on real Xtensa hardware
+semantics.
+
 ## ESP32-S3
 
-The same seven cases were also re-run against QEMU's `esp32s3` machine
+The same eight cases were also re-run against QEMU's `esp32s3` machine
 (via `xtensa-esp32s3-elf-gcc`, `TARGET_MACHINE=esp32s3 ./run.sh`) and
 produced byte-for-byte identical results to the plain ESP32 run above.
 This is expected, not a coincidence to double-check further: the compiler

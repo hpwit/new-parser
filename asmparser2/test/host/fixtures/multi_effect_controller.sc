@@ -32,16 +32,16 @@
 // ==================== hardware / host bindings ====================
 
 external CRGB leds[HEIGHT, WIDTH];
-external CRGB hsv(int h, int s, int v);
-external void show();
-external void clear();
-external uint32_t rand(uint32_t mod);
-external void delay(uint32_t d);
-external void printfln(char *fmt, Args a);
-external uint32_t millis();
-external float sin(float h);
-external float hypot(float x, float y);
-external void pinInterrupt(uint32_t handle, char *fname, int pin);
+//external CRGB hsv(int h, int s, int v);
+//external void show();
+//external void clear();
+//external uint32_t rand(uint32_t mod);
+//external void delay(uint32_t d);
+//external void printfln(char *fmt, Args a);
+//external uint32_t millis();
+///external float sin(float h);
+//external float hypot(float x, float y);
+//external void pinInterrupt(uint32_t handle, char *fname, int pin);
 
 // ==================== global state ====================
 

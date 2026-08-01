@@ -203,7 +203,24 @@ void vect<T>::erase(T *asset)
     assert(asset - point < _size);
     uint32_t diff = asset - point;
     memmove(point + diff, point + diff + 1, (size_item) * (_size - diff - 1));
-    point = (T *)p_realloc(point, (_size - 1) * size_item);
+    // Erasing the last remaining element shrinks to a 0-byte request.
+    // realloc(ptr, 0) is standards-compliant to return NULL (it's free()'s
+    // job in that case) -- p_realloc()'s assert(tmp!=NULL) treats that as
+    // an allocation failure, aborting. Harmless on host malloc (which
+    // historically tends to return a small non-NULL pointer here instead),
+    // but ASan's allocator and real hardware (confirmed: this exact path
+    // crashes on ESP32 for a trivial script) both return NULL as the
+    // standard permits. Special-case it the same way shrink_to_fit()
+    // already does below, instead of going through p_realloc at all.
+    if (_size == 1)
+    {
+        free(point);
+        point = NULL;
+    }
+    else
+    {
+        point = (T *)p_realloc(point, (_size - 1) * size_item);
+    }
     _size--;
 }
 

@@ -25,6 +25,7 @@ g++ -std=c++17 -g -O0 -I"$SRC_DIR" -o "$BUILD_DIR/gen_fibonacci_arg" "$SCRIPT_DI
 g++ -std=c++17 -g -O0 -I"$SRC_DIR" -o "$BUILD_DIR/gen_named_function" "$SCRIPT_DIR/gen_named_function.cpp" "$SRC_DIR"/*.cpp
 g++ -std=c++17 -g -O0 -I"$SRC_DIR" -o "$BUILD_DIR/gen_keyboard" "$SCRIPT_DIR/gen_keyboard.cpp" "$SRC_DIR"/*.cpp
 g++ -std=c++17 -g -O0 -I"$SRC_DIR" -o "$BUILD_DIR/gen_saveload" "$SCRIPT_DIR/gen_saveload.cpp" "$SRC_DIR"/*.cpp
+g++ -std=c++17 -g -O0 -I"$SRC_DIR" -o "$BUILD_DIR/gen_large_script" "$SCRIPT_DIR/gen_large_script.cpp" "$SRC_DIR"/*.cpp
 
 run_case() {
     name="$1"
@@ -34,7 +35,18 @@ run_case() {
     mkdir -p "$case_dir"
 
     echo "== $name: generating machine code =="
-    "$BUILD_DIR/$generator" | grep -v "parser.cpp parse line" > "$case_dir/script_bytes.h"
+    # An allowlist, not a blacklist: gen_*.cpp only ever emits four line
+    # shapes (the opening "static ... = {" declaration, hex byte rows,
+    # "#define" offset/expected-value macros, and the closing "};") --
+    # everything else on stdout is debug noise from the real compiler
+    # sources these generators link against (parser.cpp's PARSER_LOG,
+    # bindFunction()'s own printf). gen_large_script.cpp in particular
+    # calls bindFunction() ~10 times, each printing a line that the old
+    # "parser.cpp parse line"-only blacklist didn't catch.
+    # Run from $SCRIPT_DIR: gen_large_script.cpp reads its .sc fixture via
+    # a path relative to test/qemu/, not wherever run.sh's caller's cwd
+    # happens to be.
+    (cd "$SCRIPT_DIR" && "$BUILD_DIR/$generator" 2>/dev/null) | grep -E '^(static|#define|0x|};)' > "$case_dir/script_bytes.h"
 
     echo "== $name: compiling with the real Xtensa toolchain =="
     "$XTENSA_GCC" -mlongcalls -specs=sim.elf.specs -O0 \
@@ -63,5 +75,6 @@ run_case "fibonacci_arg" "gen_fibonacci_arg" "runner_fibonacci_arg.c"
 run_case "named_function" "gen_named_function" "runner_named_function.c"
 run_case "keyboard" "gen_keyboard" "runner_keyboard.c"
 run_case "saveload" "gen_saveload" "runner_saveload.c"
+run_case "large_script" "gen_large_script" "runner_large_script.c"
 
 echo "All QEMU execution checks passed."

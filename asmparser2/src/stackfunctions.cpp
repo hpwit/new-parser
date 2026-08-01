@@ -1,7 +1,7 @@
-  #include "stackfunctions.h"
-  #include "parser_define.h"
-  #include "string_constants.h"
- #include <stdio.h>
+#include "stackfunctions.h"
+#include "parser_define.h"
+#include "string_constants.h"
+#include <stdio.h>
 
 #include "string.h"
 //#define __SPEED

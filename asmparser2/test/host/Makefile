@@ -93,7 +93,77 @@ $(LARGE_BUILD_DIR)/%.o: %.cpp | $(LARGE_BUILD_DIR)
 $(LARGE_BUILD_DIR):
 	mkdir -p $(LARGE_BUILD_DIR)
 
-clean:
-	rm -rf $(BUILD_DIR) $(JSON_BUILD_DIR) $(SC_BUILD_DIR) $(LARGE_BUILD_DIR)
+# Optimized-build check (-Os, matching Arduino's default optimization
+# level) -- every other target here uses -O0, which never defines GCC's
+# own builtin __OPTIMIZE__ macro. optimize.h's include guard used to be
+# named __OPTIMIZE__ too, so under any real -O1/-O2/-Os build (i.e. every
+# Arduino IDE build, but no build in this Makefile) it collided with that
+# builtin and was always already "defined", silently skipping the whole
+# header (its #include "stackfunctions.h" and the optimize() declaration
+# itself) -- "Text was not declared", "optimize was not declared". Never
+# caught by `run`/`run-sc`/`run-large`/`run-json` above since none of them
+# ever pass an optimization flag; only found by actually building a real
+# example with the Arduino toolchain's default -Os. This target exists so
+# that class of bug (an include guard colliding with a compiler-builtin
+# macro name) gets caught here too, not just by chance on a real device
+# build.
+OPT_BUILD_DIR := build-optimized
+OPT_SRCS := $(wildcard $(SRC_DIR)/*.cpp) test_parser.cpp
+OPT_OBJS := $(addprefix $(OPT_BUILD_DIR)/,$(notdir $(OPT_SRCS:.cpp=.o)))
+OPT_CXXFLAGS := -std=c++17 -Os -I$(SRC_DIR)
 
-.PHONY: run run-json run-sc run-large clean
+check-optimized: $(OPT_BUILD_DIR)/test_parser
+	./$(OPT_BUILD_DIR)/test_parser >/dev/null
+	@echo "check-optimized: -Os build compiles and runs the full suite cleanly"
+
+$(OPT_BUILD_DIR)/test_parser: $(OPT_OBJS)
+	$(CXX) $(OPT_CXXFLAGS) -o $@ $(OPT_OBJS)
+
+$(OPT_BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(OPT_BUILD_DIR)
+	$(CXX) $(OPT_CXXFLAGS) -c $< -o $@
+
+$(OPT_BUILD_DIR)/%.o: %.cpp | $(OPT_BUILD_DIR)
+	$(CXX) $(OPT_CXXFLAGS) -c $< -o $@
+
+$(OPT_BUILD_DIR):
+	mkdir -p $(OPT_BUILD_DIR)
+
+# AddressSanitizer check -- every other target's plain host malloc (glibc/
+# macOS) tolerates realloc(ptr, 0) by historically returning a small
+# non-NULL pointer, which is *not* something the C standard guarantees:
+# realloc(ptr, 0) is explicitly permitted to return NULL, the same way
+# free(ptr) would. vect<T>::erase() used to call p_realloc() (whose
+# assert(tmp!=NULL) treats any NULL return as an allocation failure) with
+# a 0-byte request whenever it removed the last remaining element, which
+# `run` above's plain malloc silently absorbed -- but ASan's allocator
+# (and, confirmed separately, real ESP32 hardware) both return NULL there,
+# exactly as the standard allows, aborting the program for a script as
+# trivial as a single fibonacci() function. `run`'s 36/36 passing never
+# caught this; this target does, immediately. Fixed in vect.h's erase()
+# to special-case shrinking to zero the same way pop_back()/pop_front()/
+# shrink_to_fit() already did.
+ASAN_BUILD_DIR := build-asan
+ASAN_SRCS := $(wildcard $(SRC_DIR)/*.cpp) test_parser.cpp
+ASAN_OBJS := $(addprefix $(ASAN_BUILD_DIR)/,$(notdir $(ASAN_SRCS:.cpp=.o)))
+ASAN_CXXFLAGS := -std=c++17 -g -O0 -fsanitize=address -fno-omit-frame-pointer -I$(SRC_DIR)
+
+check-asan: $(ASAN_BUILD_DIR)/test_parser
+	ASAN_OPTIONS=detect_leaks=0 ./$(ASAN_BUILD_DIR)/test_parser >/dev/null
+	@echo "check-asan: AddressSanitizer build runs the full suite cleanly"
+
+$(ASAN_BUILD_DIR)/test_parser: $(ASAN_OBJS)
+	$(CXX) $(ASAN_CXXFLAGS) -o $@ $(ASAN_OBJS)
+
+$(ASAN_BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(ASAN_BUILD_DIR)
+	$(CXX) $(ASAN_CXXFLAGS) -c $< -o $@
+
+$(ASAN_BUILD_DIR)/%.o: %.cpp | $(ASAN_BUILD_DIR)
+	$(CXX) $(ASAN_CXXFLAGS) -c $< -o $@
+
+$(ASAN_BUILD_DIR):
+	mkdir -p $(ASAN_BUILD_DIR)
+
+clean:
+	rm -rf $(BUILD_DIR) $(JSON_BUILD_DIR) $(SC_BUILD_DIR) $(LARGE_BUILD_DIR) $(OPT_BUILD_DIR) $(ASAN_BUILD_DIR)
+
+.PHONY: run run-json run-sc run-large check-optimized check-asan clean

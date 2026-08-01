@@ -2,6 +2,8 @@ build/
 build-sc/
 build-json/
 build-large/
+build-optimized/
+build-asan/
 test_parser
 test_parser.o
 
