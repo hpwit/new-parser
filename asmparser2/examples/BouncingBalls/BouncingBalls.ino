@@ -44,11 +44,12 @@
 //     runs of this exact script's full create+execute pipeline
 //     afterward (0/30 before).
 //
-// The pipeline below is wired up like the other examples and produces a
-// real, executable binary reliably.
-#include "parser.h"
-#include "asm_parser.h"
-#include "asm_execute.h"
+// The pipeline below uses parseScript()/ScriptExecutable
+// (script_executable.h) rather than spelling out parse -> createBinary ->
+// createExecutableFromBinary by hand, and produces a real, executable
+// binary reliably.
+#include "script_executable.h"
+#include "binding.h"
 
 int scriptRand(uint32_t s)
 {
@@ -183,48 +184,21 @@ void setup()
    // loader would bind it to a real printf-style function.
    bindFunction((char *)"void", (char *)"printfln", (char *)"char*,Args", NULL);
 
-   Script s;
-   s.addContent(script);
-   s.init();
-
-   Parser p;
-   p.clean();
-   p.parse(&s, &__allTokens);
-
-   if (Error.error)
+   ScriptExecutable exec = parseScript(script);
+   if (!exec.isExeExists())
    {
-      display_error(&Error);
       return;
    }
 
-   printf("********** AST **********\n");
-   program.prettyPrint(0);
-   printf("********** generated code **********\n");
-   content.display();
-   header.display();
-   footer.display();
-
-   // createBinary() consumes (clears) footer/header/content, so it has to
-   // run after the printing above.
-   printf("********** assembling **********\n");
-   Binary bin = createBinary(&footer, &header, &content, false);
-   if (bin.error.error)
-   {
-      printf("assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
-      return;
-   }
-   printf("%d bytes of instructions, %d bytes of relocation header\n", bin.instruction_size, bin.function_size);
-
-   printf("********** loading and executing **********\n");
-   executable exe = createExecutableFromBinary(&bin);
-   if (exe.error.error)
-   {
-      printf("loader error: %s\n", exe.error.error_message ? exe.error.error_message : "?");
-      return;
-   }
-   // main()'s own while(true) never returns -- this call does not either.
-   runExecutable(&exe);
-   freeExecutable(&exe);
+   // execute("main") calls through callFunction() (see script_executable.h)
+   // rather than runExecutable()'s own wrapper path -- equivalent here
+   // since main() takes no arguments (no wrapper even exists for a
+   // 0-argument function, see callFunction()'s own doc comment), except
+   // that runExecutable() also pre-zeroes two data-region scratch words
+   // some scripts' sync() expects; this script doesn't call sync(), so
+   // it doesn't matter here. main()'s own while(true) never returns --
+   // this call does not either.
+   exec.execute("main");
 }
 
 void loop()

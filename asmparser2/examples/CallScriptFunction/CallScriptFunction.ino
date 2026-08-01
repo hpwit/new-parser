@@ -14,9 +14,15 @@
 // Verified under QEMU (Espressif's esp32 machine model): this exact
 // script's fibonacci(10) call, through this exact mechanism, returns 55
 // on a real Xtensa CPU emulation -- see test/qemu/gen_named_function.cpp.
-#include "parser.h"
-#include "asm_parser.h"
-#include "asm_execute.h"
+//
+// Uses parseScript()/ScriptExecutable (script_executable.h) instead of
+// spelling out parse -> createBinary -> createExecutableFromBinary by
+// hand (compare SimpleScript.ino, or any earlier revision of this file
+// in git history, for what that looks like) -- it also frees every
+// intermediate buffer automatically, including Binary's own
+// binary_data/function_data, which the hand-written version of this
+// example (like most others before this pass) never did.
+#include "script_executable.h"
 
 char script[] = R"EOF(
 int fibonacci(int n)
@@ -45,31 +51,9 @@ void setup()
 {
    Serial.begin(115200);
 
-   Script s;
-   s.addContent(script);
-   s.init();
-
-   Parser p;
-   p.clean();
-   p.parse(&s, &__allTokens);
-
-   if (Error.error)
+   ScriptExecutable exec = parseScript(script);
+   if (!exec.isExeExists())
    {
-      display_error(&Error);
-      return;
-   }
-
-   Binary bin = createBinary(&footer, &header, &content, false);
-   if (bin.error.error)
-   {
-      printf("assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
-      return;
-   }
-
-   executable exe = createExecutableFromBinary(&bin);
-   if (exe.error.error)
-   {
-      printf("loader error: %s\n", exe.error.error_message ? exe.error.error_message : "?");
       return;
    }
 
@@ -82,15 +66,13 @@ void setup()
    {
       int32_t args[1] = {n};
       int32_t result = 0;
-      if (!callFunction(&exe, "fibonacci", args, 1, &result))
+      if (!exec.execute("fibonacci", args, 1, &result))
       {
-         printf("callFunction(\"fibonacci\") failed\n");
+         printf("execute(\"fibonacci\") failed\n");
          break;
       }
       printf("fibonacci(%d) = %d\n", n, result);
    }
-
-   freeExecutable(&exe);
 }
 
 void loop()

@@ -22,6 +22,7 @@
 #include "asm_serialize.h"
 #include "arguments.h"
 #include "json_binding.h"
+#include "script_executable.h"
 
 struct TestCase
 {
@@ -1470,6 +1471,145 @@ static void runArgumentsClassTest()
     }
 }
 
+// ScriptExecutable/parseScript() (script_executable.h) -- the v1-style
+// convenience layer that collapses parse -> createBinary ->
+// createExecutableFromBinary into one call, matching upstream's
+// Parser::parseScript()/Executable::isExeExists()/Executable::execute().
+// Found and fixed two real bugs building this (both reproduced and
+// confirmed fixed under AddressSanitizer, not just by inspection):
+// (1) `executable` (asm_types.h) holds vect<globalcall>/vect<jsonVariable>
+// members; vect<T> has a destructor but no matching copy/move
+// constructor or assignment operator (a pre-existing Rule-of-Three gap),
+// so an early version of ScriptExecutable's move constructor that did
+// `exe = other.exe` triggered the compiler-generated shallow copy,
+// leaving two objects sharing one vect<T> backing-array pointer --
+// whichever got destroyed first freed it out from under the other
+// (heap-use-after-free in isWrapperRecord()). Fixed by deleting copy
+// *and* move entirely and restructuring construction so `exe` is always
+// direct-initialized from a prvalue call expression (guaranteed elided
+// since C++17, so copy/move is never actually invoked) -- see the class
+// comment in script_executable.h for the full reasoning. (2) An early
+// version of parseScript() freed its strdup'd copy of the script text
+// right after Parser::parse() returned, unconditionally -- but
+// display_error() (called on a parse error) reads the offending line
+// back out of that same buffer (Token::lineref points into it, never
+// copied out the way a successfully-parsed token's text is), so freeing
+// it before checking Error.error was a heap-use-after-free on the error
+// path specifically. Fixed by moving the free() after display_error().
+static void runScriptExecutableTest()
+{
+    const char *name = "ScriptExecutable/parseScript(): success, error, and two-independent-instances paths";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        bool ok = true;
+
+        // Success path: compiles, loads, execute() finds both main() and
+        // a named function via callFunction() without crashing.
+        {
+            ScriptExecutable exec = parseScript(
+                "int fact(int h){if(h==1){return 1;}return h*fact(h-1);}"
+                "void main(){}");
+            if (!exec.isExeExists())
+            {
+                printf("       success-path script unexpectedly failed to compile/load\n");
+                ok = false;
+            }
+            else
+            {
+                if (!exec.execute("main"))
+                {
+                    printf("       execute(\"main\") didn't find main()\n");
+                    ok = false;
+                }
+                Arguments args;
+                args.add(6);
+                int32_t result = 0;
+                if (!exec.execute("fact", &args, &result))
+                {
+                    printf("       execute(\"fact\", Arguments) didn't find fact()\n");
+                    ok = false;
+                }
+            }
+        }
+
+        // Error path: a script that fails to parse must not crash, and
+        // isExeExists() must report false.
+        {
+            ScriptExecutable bad = parseScript("this is not valid syntax @#$");
+            if (bad.isExeExists())
+            {
+                printf("       isExeExists() true for a script that should have failed to parse\n");
+                ok = false;
+            }
+        }
+
+        // Regression test: parseScript() prepends the same boilerplate
+        // v1's real compile entrypoints always do (#define true/false,
+        // uint32_t _handle_/_execaddr_) -- an earlier version of this
+        // function didn't, so a script using a bare `true`/`false`
+        // literal or referencing _execaddr_ (both routine -- the latter
+        // is what pinInterrupt(_execaddr_, "fn", pin) needs, see
+        // KeyboardCallback-style scripts) failed to compile with a
+        // confusing "impossible to find variable declaration" for
+        // something the script never declared itself. No external
+        // binding needed here -- just referencing _execaddr_/_handle_ as
+        // plain variables is enough to prove they're declared.
+        {
+            ScriptExecutable exec = parseScript(
+                "void main(){"
+                "   uint32_t x = _execaddr_;"
+                "   uint32_t y = _handle_;"
+                "   bool b = true;"
+                "   bool c = false;"
+                "}");
+            if (!exec.isExeExists())
+            {
+                printf("       script using true/false/_execaddr_/_handle_ (no explicit declaration) failed to compile\n");
+                ok = false;
+            }
+        }
+
+        // Two independent instances (each its own parseScript() call, not
+        // a copy/move of one into the other -- see the class comment on
+        // why that's deliberately not supported) coexist and are each
+        // destroyed cleanly.
+        {
+            ScriptExecutable a = parseScript("void main(){}");
+            ScriptExecutable b = parseScript("int fib(int n){return n;} void main(){}");
+            if (!a.isExeExists() || !b.isExeExists())
+            {
+                printf("       two independent ScriptExecutables in the same scope didn't both load\n");
+                ok = false;
+            }
+        }
+
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 // `json "path" as <type> name;` (parser.cpp's jsonBindingNode handling,
 // ported from upstream ESPLiveScript's ESPLiveScript.h/execute_asm.h)
 // lets a script variable be populated from a JSON document at execution
@@ -1719,6 +1859,7 @@ int main()
     runNamedFunctionLoadTest();
     runSaveLoadBinaryTest();
     runArgumentsClassTest();
+    runScriptExecutableTest();
     runJsonBindingStructureTest();
 
     TestCase tests[] = {

@@ -8,9 +8,9 @@
 // re-entering the script via a stored pointer -- see execute.h's
 // Executable class), but simplified: this project doesn't need a
 // script-side self-pointer at all. The .ino already owns the loaded
-// `executable` (populated once in setup()), so any host-side event
-// handler can call back into the script directly with callFunction() --
-// no script-side registration call needed.
+// script (populated once in setup(), see ScriptExecutable below), so
+// any host-side event handler can call back into it directly with
+// execute() -- no script-side registration call needed.
 //
 // bindVariable() connects the script's `external int key_char;` to
 // g_keyChar below *before* parsing, so the assembler reserves a jump
@@ -28,10 +28,33 @@
 // worth checking on real hardware emulation specifically because no
 // other test/qemu case exercised reading an *external variable* (only
 // external function calls and function arguments were covered before).
-#include "parser.h"
+//
+// Uses parseScript()/ScriptExecutable (script_executable.h) rather than
+// spelling out parse -> createBinary -> createExecutableFromBinary by
+// hand. This rewrite also fixed a real, independent bug this exact
+// pattern (a script's executable populated once in setup(), used later
+// in loop()) had: the previous version declared `executable g_exe;`
+// at file scope and *assigned* into it from setup() (`g_exe =
+// createExecutableFromBinary(&bin);`). executable (asm_types.h) holds
+// vect<globalcall>/vect<jsonVariable> members; vect<T> (vect.h) has a
+// destructor but no matching copy/move constructor or assignment
+// operator, so that assignment invoked the compiler-generated *shallow*
+// member-wise copy -- g_exe.functions and the right-hand side's
+// temporary executable ended up sharing the same vect<T> backing-array
+// pointer, and the temporary's destructor freed it at the end of that
+// statement, leaving g_exe.functions permanently dangling for the rest
+// of the program. Every loop() call into callFunction() after that was a
+// heap-use-after-free (confirmed via AddressSanitizer, reproducing this
+// exact pattern host-side). ScriptExecutable sidesteps this by being
+// non-copyable/non-movable and only ever constructed via direct-
+// initialization from a prvalue (guaranteed-elided since C++17, so the
+// unsafe copy/assignment is never actually invoked -- see
+// script_executable.h's class comment for the full explanation); a
+// `static` local inside setup(), captured by a pointer used in loop(),
+// gets the same "populate once, use later" shape this example needs
+// without ever assigning into an already-existing ScriptExecutable.
+#include "script_executable.h"
 #include "binding.h"
-#include "asm_parser.h"
-#include "asm_execute.h"
 
 char script[] = R"EOF(
 external int key_char;
@@ -56,7 +79,7 @@ void main()
 )EOF";
 
 int hostKeyChar = 0;
-executable g_exe;
+ScriptExecutable *g_exec = NULL;
 
 void setup()
 {
@@ -67,38 +90,25 @@ void setup()
    // StructsAndHostBindings.ino for the same pattern.
    bindVariable((char *)"int", (char *)"key_char", NULL, (void *)&hostKeyChar);
 
-   Script s;
-   s.addContent(script);
-   s.init();
+   // `static` gives this ScriptExecutable the same "construct once in
+   // setup(), still alive in loop()" lifetime g_exe used to have, without
+   // ever assigning into an already-existing one -- see the header
+   // comment for why that matters. Direct-initialization from
+   // parseScript()'s return value here is what makes this safe (elided,
+   // per script_executable.h's class comment) -- don't replace this with
+   // a two-step "declare then assign".
+   static ScriptExecutable holder = parseScript(script);
+   g_exec = &holder;
 
-   Parser p;
-   p.clean();
-   p.parse(&s, &__allTokens);
-
-   if (Error.error)
+   if (!g_exec->isExeExists())
    {
-      display_error(&Error);
-      return;
-   }
-
-   Binary bin = createBinary(&footer, &header, &content, false);
-   if (bin.error.error)
-   {
-      printf("assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
-      return;
-   }
-
-   g_exe = createExecutableFromBinary(&bin);
-   if (g_exe.error.error)
-   {
-      printf("loader error: %s\n", g_exe.error.error_message ? g_exe.error.error_message : "?");
-      return;
+      printf("script failed to compile/load\n");
    }
 }
 
 void loop()
 {
-   if (Serial.available())
+   if (g_exec != NULL && g_exec->isExeExists() && Serial.available())
    {
       // Write the new key into the bound variable, then re-enter the
       // script by name -- exactly the "print_char() sets key_char, then
@@ -107,7 +117,7 @@ void loop()
       hostKeyChar = Serial.read();
 
       int32_t result = 0;
-      if (callFunction(&g_exe, "keyboard", NULL, 0, &result))
+      if (g_exec->execute("keyboard", &result))
       {
          Serial.print((char)hostKeyChar);
          Serial.print(" -> ");
