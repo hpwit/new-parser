@@ -49,21 +49,28 @@ mathematically correct result:
    claim that the whole script runs correctly end to end -- see "Not
    verified" below for exactly what this does and doesn't cover.
 8. A real-hardware-cycle-count projection for `examples/FibonacciTiming.ino`'s
-   naive recursive `fib(40)` (`gen_fib_timing.cpp`/`runner_fib_timing.c`).
-   fib(40) makes 331,160,281 calls -- far too many to actually simulate
-   under QEMU's software emulation in a reasonable time -- so instead this
-   reads Xtensa's CCOUNT special register (`rsr.ccount`, the same
-   technique the sc_examples corpus's own millis()/elapseMillis() __ASM__
-   functions use) around calls to the *actual compiled* fib() at two much
-   smaller, tractable depths (fib(25): 242,785 calls; fib(30): 2,692,537
-   calls -- an 11x difference), checks the resulting cycles-per-call
-   figures agree within 15% (repeated runs on both esp32 and esp32s3
-   showed 3-11% run-to-run variance, likely periodic timer-interrupt
-   jitter rather than the fib() codegen itself), and projects fib(40)'s
-   real-hardware time from that -- not a guess, since every fib() call
-   does identical work regardless of recursion depth. Consistently lands
-   around 6-6.5 cycles/call, projecting to roughly 8-9 seconds for
-   fib(40) on real hardware at the ESP32's default 240 MHz.
+   naive recursive `fib()`, for both `fib(40)` (331,160,281 calls) and
+   `fib(50)` (40,730,022,147 calls -- ~123x more) (`gen_fib_timing.cpp`/
+   `runner_fib_timing.c`). Both are far too many calls to actually
+   simulate under QEMU's software emulation in a reasonable time -- so
+   instead this reads Xtensa's CCOUNT special register (`rsr.ccount`, the
+   same technique the sc_examples corpus's own millis()/elapseMillis()
+   __ASM__ functions use) around calls to the *actual compiled* fib() at
+   two much smaller, tractable depths (fib(25): 242,785 calls; fib(30):
+   2,692,537 calls -- an 11x difference), checks the resulting cycles-
+   per-call figures agree within 25% (repeated runs on both esp32 and
+   esp32s3, ~15 total, mostly landed within 3-6%, occasionally spiked to
+   ~11-18% -- likely periodic timer-interrupt jitter in the runtime, not
+   the fib() codegen itself, since the underlying per-call cost stayed in
+   a narrow 5.8-6.5 cycles/call band throughout regardless of what that
+   ratio read), and projects both fib(40)'s and fib(50)'s real-hardware
+   time from that -- not a guess, since every fib() call does identical
+   work regardless of recursion depth. Consistently lands around
+   6-6.5 cycles/call, projecting to roughly 8-9 seconds for fib(40) and
+   roughly 17-19 minutes for fib(50) on real hardware at the ESP32's
+   default 240 MHz. (fib(50) itself, 12,586,269,025, would also overflow
+   the script's 32-bit `int` return type if actually computed -- moot
+   here since fib(50) is never actually called, only projected.)
 
 This exercise also found and fixed a real bug: `addInstr()` was silently
 dropping `.bytes` reservation lines instead of reserving 4 bytes of

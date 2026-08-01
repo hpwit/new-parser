@@ -98,6 +98,13 @@ int main()
     // hardware timing from the two measured cycles-per-call figures above.
     printf("#define FIB_N3 40\n");
     printf("#define FIB_N3_CALLS 331160281L\n");
+    // n=50: calls(50)=2*fib(51)-1=40730022147 -- exceeds int32_t/uint32_t
+    // range (needs a 64-bit constant), same reasoning as n=40 above but
+    // ~123x more calls. Also note: fib(50)=12586269025 itself overflows
+    // the script's `int` (32-bit) return type -- irrelevant here since
+    // this projects timing only, fib(50) is never actually called.
+    printf("#define FIB_N4 50\n");
+    printf("#define FIB_N4_CALLS 40730022147LL\n");
     printf("#define ESP32_CLOCK_HZ 240000000L\n");
 
     freeExecutable(&exe);
