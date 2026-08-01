@@ -150,23 +150,33 @@
     }
     void Text::blankCurrent()
     {
-        if (!isReused(_texts.size() - 1))
-        {
-           free(_texts.back());
-        }
+        int lastIdx = _texts.size() - 1;
+        char *old = _texts.get(lastIdx);
+
+        // Look up a pooled " " before freeing old -- findText() scans the
+        // whole pool, including this slot's current entry, so freeing it
+        // first would leave that scan reading a dangling pointer.
         int pos = findText((char *)" ");
-        if(pos>-1)
+        char *m;
+        if (pos == lastIdx)
         {
-            *_it=_texts[pos];
+            // Already blank -- nothing to do.
+            return;
+        }
+        else if (pos > -1)
+        {
+            m = _texts.get(pos);
         }
         else
         {
-            
-           char * m = (char *)malloc(2);
-           m[0]=32;
+            m = (char *)malloc(2);
+            m[0] = 32;
             m[1] = 0;
-            *_it=m;
         }
+
+        if (!isReused(lastIdx))
+            free(old);
+        *_it = m;
     }
     char * Text::front()
     {
@@ -240,9 +250,32 @@
     {
         if (pos >= 0 and pos < size())
         {
-           // printf("repalce |%s| by  |%s|\r\n",_texts[pos],str.c_str());
-            
+            // Look up a pooled duplicate and check reuse before freeing
+            // anything -- both scan the whole pool, including this slot's
+            // current (about-to-be-replaced) entry, so freeing it first
+            // would leave them reading a dangling pointer.
+            char *old = _texts.get(pos);
+            int existing = findText(str);
+            if (existing > -1 && existing != pos)
+            {
+                free(str);
+                str = _texts.get(existing);
+            }
+            if (!isReused(pos))
+                free(old);
+            *_texts.getptr(pos) = str;
         }
+        else
+        {
+            free(str);
+        }
+    }
+    void Text::replaceText(int pos, const char * str)
+    {
+        char *m = (char *)malloc(strlen(str) + 1);
+        memcpy(m, str, strlen(str));
+        m[strlen(str)] = 0;
+        replaceText(pos, m);
     }
     char ** Text::getChildAtPos(int pos)
     {

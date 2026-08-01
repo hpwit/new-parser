@@ -1,0 +1,232 @@
+// A more realistic ESPLiveScript program: a struct with a constructor and
+// two member functions, nested for loops, +=, the ^ (power) operator, an
+// array of structs, float division, and five host-bound calls --
+// rand/setPixel/clear/show/printfln.
+//
+// Three real compiler gaps used to block this script from ever reaching
+// createBinary() successfully, let alone running it reliably; all three
+// are now fixed:
+//
+//  1. Float division (e.g. `rand(300) / 255`) compiles to a call to a
+//     hand-assembled `__div` helper (Xtensa has no hardware float divide).
+//     The codegen and injection logic for it already existed but was
+//     commented out in visitnode.cpp, waiting on the actual instruction
+//     data from upstream ESPLiveScript's functionlib.h, which had never
+//     been ported -- now added there. Assembling `__div`'s own body also
+//     needed 8 Xtensa FP reciprocal/division-support opcodes (div0.s,
+//     nexp01.s, maddn.s, mkdadj.s, addexpm.s, addexp.s, const.s, divn.s):
+//     their encoders/operand tables were already ported to
+//     asm_encoders.h, just never wired into asm_parser.cpp's mnemonic
+//     dispatch.
+//  2. bindFunction()-only registration (no explicit `external` in script
+//     text) has a *separate*, still-unfixed gap: the parser's auto-
+//     declare path (parser.cpp's getFunction(), ~line 991) synthesizes
+//     the declaration into a throwaway scratch tree (`extra_parser`)
+//     that's cleared right after resolving the call site, so the
+//     assembler's jump-table reservation for it (visitnode.cpp's
+//     _visitdefExtFunctionNode) never gets visited. Worked around the
+//     same way as every other example here: declare each host-bound
+//     function `external` explicitly in the script text too.
+//  3. Once both of those were out of the way, this script's assembly
+//     *was* well-formed (1368 bytes of instructions, no assembler
+//     errors) but Parser::parse() itself reliably crashed first -- a
+//     script this size (struct with a constructor + 2 methods, an array
+//     of structs, several external declarations, nested loops) reliably
+//     triggered a real, pre-existing bug: nodetoken.h's `children` used
+//     to be an inline array of NodeToken values, grown via realloc --
+//     which can move, silently invalidating any raw NodeToken* held into
+//     it. Only a handful of the many such pointers scattered across
+//     parser.cpp were patched up after each move; the rest (current_cntx
+//     among them) were left to dangle. `children` is now an array of
+//     pointers to individually heap-allocated nodes instead, so growing
+//     it never moves an existing node -- see nodetoken.h's comment on
+//     `children` for the full explanation. Confirmed via 30/30 clean
+//     runs of this exact script's full create+execute pipeline
+//     afterward (0/30 before).
+//
+// The pipeline below is wired up like the other examples and produces a
+// real, executable binary reliably.
+#include "parser.h"
+#include "asm_parser.h"
+#include "asm_execute.h"
+
+int scriptRand(uint32_t s)
+{
+   return rand() % (s + 1);
+}
+
+void scriptSetPixel(int x, int y, int c)
+{
+   printf("setPixel(%d,%d,%d)\n", x, y, c);
+}
+
+void scriptClear()
+{
+   printf("clear()\n");
+}
+
+void scriptShow()
+{
+   printf("show()\n");
+}
+
+char script[] = R"EOF(
+external uint32_t rand(uint32_t s);
+external void setPixel(int x, int y, int c);
+external void clear();
+external void show();
+external void printfln(char* a0, Args a1);
+
+#define max_nb_balls 20
+#define rmax 8
+#define rmin 8
+#define width 384
+#define height 168
+#define true 1
+
+struct ball
+{
+   float vx, vy, xc, yc, r;
+   int color;
+   void drawBall()
+   {
+      int startx = xc - r;
+      int r2 = r * r;
+      int starty = yc - r;
+      int _xc = xc;
+      int _yc = yc;
+      for (int i = startx; i <= _xc; i++)
+         for (int j = starty; j <= _yc; j++)
+         {
+            int distance = (i - xc) ^ 2 + (j - yc) ^ 2;
+            if (distance <= r2)
+            {
+               setPixel(i,j,1);
+               setPixel((int)(2 * xc - i),j,1);
+               setPixel((int)(2 * xc - i),(int)(2 * yc - j),1);
+               setPixel(i,(int)(2 * yc - j),1);
+            }
+         }
+   }
+   void updateBall()
+   {
+      xc += vx;
+      yc += vy;
+      if (xc >= (width - r - 1))
+      {
+         xc = width - r - 1;
+         vx = -vx;
+      }
+      if (xc < (r + 1))
+      {
+         xc = r + 1;
+         vx = -vx;
+      }
+      if (yc >= height - r - 1)
+      {
+         yc = height - r - 1;
+         vy = -vy;
+      }
+      if (yc < r + 1)
+      {
+         yc = r + 1;
+         vy = -vy;
+      }
+      drawBall();
+   }
+   ball()
+   {
+      vx = rand(300) / 255 + 0.7;
+      vy = rand(280) / 255 + 0.5;
+      r = (rmax - rmin) * (rand(280) / 180) + rmin;
+      xc = width / 2 * (rand(280) / 255 + 0.3) + 15;
+      yc = height / 2 * (rand(280) / 255 + 0.3) + 15;
+      color = rand(255);
+   }
+}
+
+ball Balls[max_nb_balls];
+
+void main()
+{
+   int num = 8;
+   if (num > max_nb_balls)
+   {
+      num = max_nb_balls;
+   }
+   if (num <= 0)
+   {
+      num = 1;
+   }
+   printfln("numberof balls:%d",num);
+   uint32_t h;
+   while (true)
+   {
+      clear();
+      for (int i = 0; i < num; i++)
+         Balls[i].updateBall();
+      h++;
+      show();
+   }
+}
+)EOF";
+
+void setup()
+{
+   Serial.begin(115200);
+
+   bindFunction((char *)"uint32_t", (char *)"rand", (char *)"uint32_t", (void *)scriptRand);
+   bindFunction((char *)"void", (char *)"setPixel", (char *)"int,int,int", (void *)scriptSetPixel);
+   bindFunction((char *)"void", (char *)"clear", NULL, (void *)scriptClear);
+   bindFunction((char *)"void", (char *)"show", NULL, (void *)scriptShow);
+   // printfln is variadic ("Args") -- left unresolved here, a companion
+   // loader would bind it to a real printf-style function.
+   bindFunction((char *)"void", (char *)"printfln", (char *)"char*,Args", NULL);
+
+   Script s;
+   s.addContent(script);
+   s.init();
+
+   Parser p;
+   p.clean();
+   p.parse(&s, &__allTokens);
+
+   if (Error.error)
+   {
+      display_error(&Error);
+      return;
+   }
+
+   printf("********** AST **********\n");
+   program.prettyPrint(0);
+   printf("********** generated code **********\n");
+   content.display();
+   header.display();
+   footer.display();
+
+   // createBinary() consumes (clears) footer/header/content, so it has to
+   // run after the printing above.
+   printf("********** assembling **********\n");
+   Binary bin = createBinary(&footer, &header, &content, false);
+   if (bin.error.error)
+   {
+      printf("assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+      return;
+   }
+   printf("%d bytes of instructions, %d bytes of relocation header\n", bin.instruction_size, bin.function_size);
+
+   printf("********** loading and executing **********\n");
+   executable exe = createExecutableFromBinary(&bin);
+   if (exe.error.error)
+   {
+      printf("loader error: %s\n", exe.error.error_message ? exe.error.error_message : "?");
+      return;
+   }
+   // main()'s own while(true) never returns -- this call does not either.
+   runExecutable(&exe);
+   freeExecutable(&exe);
+}
+
+void loop()
+{
+}

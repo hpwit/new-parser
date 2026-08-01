@@ -44,7 +44,9 @@ tokenType __keywordTypes[] = {
     TokenKeywordSaveReg,
     TokenKeywordSaveRegAbs,
     TokenKeywordStruct,
-    TokenOverride
+    TokenOverride,
+    TokenKeywordJson,
+    TokenKeywordAs
 
 };
 const char* keywordTypeNames[] = {
@@ -159,7 +161,9 @@ const char * tokenNames[] = {
     "TokenMinusEqual",
     "TokenStarEqual",
     "TokenSlashEqual",
-    "TokenOverride"
+    "TokenOverride",
+    "TokenKeywordJson",
+    "TokenKeywordAs"
 
 #endif
 };
@@ -190,7 +194,7 @@ const char * keyword_array[] =
      "import", "from", "__ASM__",
      "define", "safe_mode", "_header_", "_content_", "and", "or", "continue",
      "break", "fabs", "abs", "save_reg",
-     "save_reg_abs", "struct","override"};
+     "save_reg_abs", "struct","override","json","as"};
 
 bool _for_display = false;
 
@@ -209,7 +213,7 @@ vect<_define> define_list;
 
 varType _varTypes[] = {
     {._varType = __none__,
-     .varName = (char *)"d",
+     .varName = (char *)"void",
      ._varSize = 0,
      .load = {},
      .store = {},
@@ -222,7 +226,7 @@ varType _varTypes[] = {
      .total_size = 0},
 
     {._varType = __uint8_t__,
-     .varName = (char *)"d",
+     .varName = (char *)"num",
      ._varSize = 1,
      .load = {l8ui},
      .store = {s8i},
@@ -235,7 +239,7 @@ varType _varTypes[] = {
      .total_size = 1},
     {
         ._varType = __uint16_t__,
-        .varName = (char *)"d",
+        .varName = (char *)"num",
         ._varSize = 2,
         .load = {l16ui},
         .store = {s16i},
@@ -249,7 +253,7 @@ varType _varTypes[] = {
     },
     {
         ._varType = __uint32_t__,
-        .varName = (char *)"d",
+        .varName = (char *)"num",
         ._varSize = 4,
         .load = {l32i},
         .store = {s32i},
@@ -263,7 +267,7 @@ varType _varTypes[] = {
     },
     {
         ._varType = __int__,
-        .varName = (char *)"d",
+        .varName = (char *)"num",
         ._varSize = 4,
         .load = {l32i},
         .store = {s32i},
@@ -277,7 +281,7 @@ varType _varTypes[] = {
     },
     {
         ._varType = __s_int__,
-        .varName = (char *)"d",
+        .varName = (char *)"num",
         ._varSize = 2,
         .load = {l16si},
         .store = {s16i},
@@ -291,7 +295,7 @@ varType _varTypes[] = {
     },
     {
         ._varType = __float__,
-        .varName = (char *)"d",
+        .varName = (char *)"num",
         ._varSize = 4,
         .load = {lsi},
         .store = {ssi},
@@ -319,7 +323,7 @@ varType _varTypes[] = {
     },
     {
         ._varType = __CRGB__,
-        .varName = (char *)"d",
+        .varName = (char *)"CRGB",
         ._varSize = 3,
         .load = {l8ui, l8ui, l8ui},
         .store = {s8i, s8i, s8i},
@@ -333,7 +337,7 @@ varType _varTypes[] = {
     },
     {
         ._varType = __CRGBW__,
-        .varName = (char *)"d",
+        .varName = (char *)"CRGBW",
         ._varSize = 4,
         .load = {l8ui, l8ui, l8ui, l8ui},
         .store = {s8i, s8i, s8i, s8i},
@@ -347,7 +351,7 @@ varType _varTypes[] = {
     },
     {
         ._varType = __char__,
-        .varName = (char *)"d",
+        .varName = (char *)"char",
         ._varSize = 1,
         .load = {l8ui},
         .store = {s8i},
@@ -375,7 +379,7 @@ varType _varTypes[] = {
 
     },
     {._varType = __bool__,
-     .varName = (char *)"d",
+     .varName = (char *)"num",
      ._varSize = 1,
      .load = {l8ui},
      .store = {s8i},

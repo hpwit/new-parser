@@ -12,6 +12,30 @@ int local_var_num = 0;
 vect<int> _compare;
 bool intest = false;
 bool addfloatdivision = false;
+
+// Hand-assembled Xtensa FP division (there's no single hardware
+// instruction for it) -- ported verbatim from upstream ESPLiveScript's
+// functionlib.h ("_div"/"_div_size"). Emitted into `content` once, only
+// when a script actually uses float division (see TokenSlash below and
+// _visitprogramNode's use of addfloatdivision), so scripts that never
+// divide floats don't pay for it.
+static const char *_div[] = {
+    "@___div(d|d):", "entry a1,16",
+    "div0.s f3, f2", "nexp01.s f4, f2",
+    "const.s f5, 1", "maddn.s f5, f4, f3",
+    "mov.s f6, f3", "mov.s f7, f2",
+    "nexp01.s f2, f1", "maddn.s f6, f5, f6",
+    "const.s f5, 1", "const.s f0, 0",
+    "neg.s f8, f2", "maddn.s f5, f4, f6",
+    "maddn.s f0, f8, f3", "mkdadj.s f7, f1",
+    "maddn.s f6, f5, f6", "maddn.s f8, f4, f0",
+    "const.s f3, 1", "maddn.s f3, f4, f6",
+    "maddn.s f0, f8, f6", "neg.s f2, f2",
+    "maddn.s f6, f3, f6", "maddn.s f2, f4, f0",
+    "addexpm.s f0, f7", "addexp.s f6, f7",
+    "divn.s f0, f2, f6", "retw.n"};
+static const int _div_size = 28;
+
 Text content, header, footer, *bufferText;
 void _visittypeNode(NodeToken *nd) {}
 void _visitnumberNode(NodeToken *nd)
@@ -240,6 +264,16 @@ void _visitunitaryOpNode(NodeToken *nd)
         bufferText->addAfter(string_format("bnez a%d,label_not_%d", register_numl.get(), for_if_num2));
         bufferText->addAfter(string_format(movi, 7, 1)); //"movi a7,1");
         bufferText->addAfter(string_format("label_not_%d:", for_if_num2));
+        // Every other for_if_num2 label site (__test_safe_%d array-bounds
+        // checks, loop_label_%d) increments the shared counter right
+        // after emitting its label so the next use gets a fresh number;
+        // this site never did, so every `!expr` anywhere in a script
+        // reused the exact same "label_not_999" -- fine for a script with
+        // only one `!`, but "label label_not_999 is already declared" for
+        // any script using it twice (e.g. tetris.sc's `!checkCollision(...)`
+        // in left()/right()/main()). Missing increment, not a naming
+        // scheme problem -- fixed by adding it here too.
+        for_if_num2++;
         bufferText->addAfter(string_format("mov a%d,a7", register_numl.get()));
         bufferText->sp.push(bufferText->get());
         register_numl.decrease();
@@ -1067,19 +1101,21 @@ void _visitprogramNode(NodeToken *nd)
         footer.begin();
         footer.addBefore(string_format(arrobase_label, "_footer"));
     }
-    /*
-        if (addfloatdivision)
+    if (addfloatdivision)
+    {
+        header.addAfter(" .global @___div(d|d)");
+        header.addAfter("@_stack___div(d|d):");
+        header.addAfter(".bytes 12");
+        content.end();
+        for (int i = 0; i < _div_size; i++)
         {
-            header.addAfter(" .global @___div(d|d)");
-            header.addAfter("@_stack___div(d|d):");
-            header.addAfter(".bytes 12");
-            content.end();
-            for (int i = 0; i < _div_size; i++)
-            {
-                content.addAfter(string(_div[i]));
-            }
+            // Use the const char* overload -- it mallocs its own copy
+            // before storing it, unlike addAfter(char*), which takes
+            // ownership of (and may later free()) whatever pointer it's
+            // given. _div[i] points into static, non-heap storage.
+            content.addAfter(_div[i]);
         }
-    */
+    }
 }
 
 void _visitassignementNode(NodeToken *nd)
@@ -1869,6 +1905,22 @@ void _visitdefExtGlobalVariableNode(NodeToken *nd)
     header.addAfter(".bytes 4");
 }
 
+// Emits a pseudo-instruction the assembler (asm_parser.cpp's parseline()/
+// createBinaryHeader()) recognizes specially, matching the .bytes/.global
+// pattern already used for external declarations: the json path, a
+// reference to the target variable's own label (declared normally --
+// parser.cpp's json-binding branch only records this metadata, then
+// rewinds so the ordinary variable-declaration path runs too, giving the
+// variable real storage and a @_name label the same as any other global),
+// and its type. The assembler resolves that label to a real address once
+// everything is laid out and emits a type-5 relocation header entry,
+// which the loader (asm_execute.cpp, __JSON_OPTION__-guarded) uses to
+// populate the variable from a JSON document at execution time.
+void _visitjsonBindingNode(NodeToken *nd)
+{
+    header.addAfter(string_format(".json %s @_%s %d", nd->getText(), nd->getTargetText(), nd->_vartype));
+}
+
 void _visitdefGlobalVariableNode(NodeToken *nd)
 {
     if (strcmp(nd->getText(), _handle_) == 0 || strcmp(nd->getText(), _execaddr_) == 0)
@@ -1942,7 +1994,7 @@ void _visitdefGlobalVariableNode(NodeToken *nd)
                     else
                     {
                         __num = 0;
-                        sscanf(ndt->getText(), "%lu", &__num);
+                        sscanf(ndt->getText(), "%u", &__num);
                     }
                     for (int i = 0; i < nd->getVarTypeObj()->total_size; i++)
                     {
@@ -2560,11 +2612,23 @@ void _visitdefAsmFunctionNode(NodeToken *nd)
 
 void _visitstringNode(NodeToken *nd)
 {
+    // Strips the surrounding quotes into a *new* buffer rather than
+    // mutating nd->getText() in place: all_text's Text::addText() (see
+    // stackfunctions.cpp) interns/deduplicates identical string literals,
+    // so two distinct string-literal nodes with the same text (extremely
+    // common inside __ASM__ function bodies -- e.g. "retw.n" or
+    // "entry a1,32" repeated verbatim across several __ASM__ functions in
+    // the same script) share the exact same underlying char*. The old
+    // in-place memmove()/truncate corrupted that shared buffer a little
+    // more on every subsequent visit -- the 2nd occurrence of a repeated
+    // line lost its first char, the 3rd lost two, etc., producing
+    // "Opcode ntry not found" style assembler errors for scripts with
+    // more than one __ASM__ function sharing any instruction text (e.g.
+    // squaresani.sc's setTime()/millis()/elapseMillis(), which all start
+    // with "entry a1,32" and end with "retw.n").
     char *target = nd->getText();
     int size = strlen(target) - 2;
-    memmove(target, target + 1, size);
-    target[size] = 0;
-    bufferText->addAfter(string_format("%s", target));
+    bufferText->addAfter(string_format("%.*s", size, target + 1));
 }
 
 void _visitchangeTypeNode(NodeToken *nd)
@@ -3157,11 +3221,11 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
 
                 if (v->_varType == __float__)
                 {
-                    bufferText->addAfter(string_format("l32i a%d,a1,%d", regbase + i, i * 4 + _START_2));
+                    bufferText->addAfter(string_format(l32i, regbase + i, 1,i * 4 + _START_2));
                 }
                 else
                 {
-                    bufferText->addAfter(string_format(v->load[0], regbase + i, i * 4 + _START_2));
+                    bufferText->addAfter(string_format(v->load[0], regbase + i,1, i * 4 + _START_2));
                 }
             }
         }

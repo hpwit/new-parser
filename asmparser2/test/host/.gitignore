@@ -1,0 +1,6 @@
+build/
+build-sc/
+build-json/
+test_parser
+test_parser.o
+

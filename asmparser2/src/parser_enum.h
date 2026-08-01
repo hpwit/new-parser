@@ -1,7 +1,7 @@
 #pragma once
 #ifndef __PARSER_ENUM__
 #define __PARSER_ENUM__
-#define nb_keywords 37
+#define nb_keywords 39
 #define nb_typeVariables 13
 enum asmInstruction
 {
@@ -165,7 +165,9 @@ enum tokenType
   TokenMinusEqual,
   TokenStarEqual,
   TokenSlashEqual,
-  TokenOverride
+  TokenOverride,
+  TokenKeywordJson,
+  TokenKeywordAs
 
 };
 extern const char *asmInstructionsName[];

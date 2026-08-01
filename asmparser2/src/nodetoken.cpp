@@ -6,6 +6,12 @@
 #include "parser_define.h"
 #include "string_constants.h"
 #include "visitnode.h"
+#include "compiler_error.h"
+
+// Declared (not just extern'd from parser.h, which nodetoken.h is included
+// by and can't itself include back) so copyPrty() below can report a
+// clean parse error instead of segfaulting -- see its comment.
+extern error_message_struct Error;
 
 NodeToken *search_result;
 int search_result_index;
@@ -72,6 +78,7 @@ const char *nodeTypeNames[] =
 		"callConstructorNode",
 		"defInputArgumentsNode",
 		"declarationFunctionNode",
+		"jsonBindingNode",
 		"UnknownNode"
 
 #endif
@@ -188,8 +195,13 @@ void NodeToken::clear()
 
 	for (int i = 0; i < _c_size; i++)
 	{
-
-		getChildPtr(i)->clear();
+		// Each child is its own heap allocation now (see nodetoken.h's
+		// comment on `children`) -- clear its own subtree first, then
+		// free the child object itself. Previously freeing the single
+		// `children` block freed every child's storage at once, since
+		// they were all inline values within it.
+		children[i]->clear();
+		free(children[i]);
 	}
 	free(children);
 	children = NULL;
@@ -199,24 +211,24 @@ void NodeToken::clear()
 NodeToken *NodeToken::getChildPtr(int i)
 {
 	assert(_c_size > 0 and i >= 0 and i < _c_size);
-	return children + i;
+	return children[i];
 }
 
 NodeToken *NodeToken::children_backptr()
 {
 	assert(_c_size > 0);
-	return children + _c_size - 1;
+	return children[_c_size - 1];
 }
 NodeToken NodeToken::children_back()
 {
 	assert(_c_size > 0);
-	return *(children + _c_size - 1);
+	return *children[_c_size - 1];
 }
 
 NodeToken *NodeToken::children_frontptr()
 {
 	assert(_c_size > 0);
-	return children;
+	return children[0];
 }
 nodeType NodeToken::getNodeTokenType()
 {
@@ -225,12 +237,17 @@ nodeType NodeToken::getNodeTokenType()
 NodeToken NodeToken::children_front()
 {
 	assert(_c_size > 0);
-	return *(children);
+	return *children[0];
 }
 NodeToken NodeToken::children_pop()
 {
 	assert(children != NULL);
-	NodeToken tmp = NodeToken(children + _c_size - 1);
+	NodeToken tmp = NodeToken(children[_c_size - 1]);
+	// tmp has already shallow-copied the popped child's fields, including
+	// its own `children` sub-array pointer (ownership of that subtree
+	// transfers to tmp, matching the original behavior) -- so only the
+	// now-unreferenced struct itself needs freeing here, not its subtree.
+	free(children[_c_size - 1]);
 	if (_c_size == 1)
 	{
 		free(children);
@@ -239,9 +256,8 @@ NodeToken NodeToken::children_pop()
 	}
 	else
 	{
-		NodeToken *tmp = (NodeToken *)p_realloc(children, (_c_size - 1) * sizeof(NodeToken));
-		testChange(&sav_token, children, tmp, _c_size - 1);
-		children = tmp;
+		NodeToken **tmp2 = (NodeToken **)p_realloc(children, (_c_size - 1) * sizeof(NodeToken *));
+		children = tmp2;
 		_c_size--;
 	}
 
@@ -260,19 +276,18 @@ NodeToken *NodeToken::addChildFront(NodeToken nd)
 	nd.parent = this;
 	if (children == NULL)
 	{
-		children = (NodeToken *)malloc(sizeof(NodeToken));
+		children = (NodeToken **)malloc(sizeof(NodeToken *));
 	}
 	else
 	{
-		NodeToken *tmp = (NodeToken *)p_realloc((void *)children, (_c_size + 1) * sizeof(NodeToken));
-
-		testChange(&sav_token, children, tmp, _c_size + 1);
+		NodeToken **tmp = (NodeToken **)p_realloc((void *)children, (_c_size + 1) * sizeof(NodeToken *));
 		children = tmp;
 	}
 	if (_c_size > 0)
-		memmove(children + 1, children, _c_size * sizeof(NodeToken));
-	memcpy(children, &nd, sizeof(NodeToken));
-	NodeToken *new_object = children;
+		memmove(children + 1, children, _c_size * sizeof(NodeToken *));
+	NodeToken *new_object = (NodeToken *)malloc(sizeof(NodeToken));
+	memcpy(new_object, &nd, sizeof(NodeToken));
+	children[0] = new_object;
 	new_object->children = NULL;
 	new_object->_c_size = 0;
 
@@ -282,7 +297,7 @@ NodeToken *NodeToken::addChildFront(NodeToken nd)
 	}
 
 	_c_size++;
-	return children;
+	return new_object;
 }
 NodeToken *NodeToken::addChild(NodeToken nd)
 {
@@ -291,16 +306,16 @@ NodeToken *NodeToken::addChild(NodeToken nd)
 	// nd.parent = this;
 	if (children == NULL)
 	{
-		children = (NodeToken *)malloc(sizeof(NodeToken));
+		children = (NodeToken **)malloc(sizeof(NodeToken *));
 	}
 	else
 	{
-		NodeToken *tmp = (NodeToken *)p_realloc(children, (_c_size + 1) * sizeof(NodeToken));
-		testChange(&sav_token, children, tmp, _c_size + 1);
+		NodeToken **tmp = (NodeToken **)p_realloc(children, (_c_size + 1) * sizeof(NodeToken *));
 		children = tmp;
 	}
-	memcpy(children + _c_size, &nd, sizeof(NodeToken));
-	NodeToken *new_object = children + _c_size;
+	NodeToken *new_object = (NodeToken *)malloc(sizeof(NodeToken));
+	memcpy(new_object, &nd, sizeof(NodeToken));
+	children[_c_size] = new_object;
 	new_object->parent = this;
 	new_object->children = NULL;
 	new_object->_c_size = 0;
@@ -312,24 +327,24 @@ NodeToken *NodeToken::addChild(NodeToken nd)
 
 	_c_size++;
 
-	return children + (_c_size - 1);
+	return new_object;
 }
 NodeToken *NodeToken::addChild(NodeToken *nd)
 {
 	// nd.parent = this;
-	NodeToken *tmp;
+	NodeToken **tmp;
 	if (children == NULL)
 	{
-		tmp = (NodeToken *)malloc(sizeof(NodeToken));
+		tmp = (NodeToken **)malloc(sizeof(NodeToken *));
 	}
 	else
 	{
-		tmp = (NodeToken *)p_realloc(children, (_c_size + 1) * sizeof(NodeToken));
+		tmp = (NodeToken **)p_realloc(children, (_c_size + 1) * sizeof(NodeToken *));
 	}
-	memcpy(tmp + _c_size, nd, sizeof(NodeToken));
-	testChange(&sav_token, children, tmp, _c_size + 1);
 	children = tmp;
-	NodeToken *new_object = children + _c_size;
+	NodeToken *new_object = (NodeToken *)malloc(sizeof(NodeToken));
+	memcpy(new_object, nd, sizeof(NodeToken));
+	children[_c_size] = new_object;
 	new_object->children = NULL;
 	new_object->parent = this;
 	new_object->_c_size = 0;
@@ -341,7 +356,7 @@ NodeToken *NodeToken::addChild(NodeToken *nd)
 
 	_c_size++;
 
-	return children + (_c_size - 1);
+	return new_object;
 }
 NodeToken *NodeToken::addChildClear(NodeToken nd)
 {
@@ -356,11 +371,29 @@ NodeToken *NodeToken::operator[](int i)
 
 void NodeToken::erase(NodeToken *asset)
 {
-	assert(asset - children < sizeof(NodeToken) * _c_size);
-	uint32_t diff = asset - children;
-	memmove(children + diff, children + diff + 1, (sizeof(NodeToken)) * (_c_size - diff));
+	// children is now an array of pointers to individually-allocated
+	// nodes, so `asset`'s position has to be found by value rather than
+	// by pointer subtraction (which also let a real bug hide here
+	// before: the old byte-range assert and the memmove below it both
+	// used `_c_size - diff` as the *remaining element count* -- one too
+	// many, reading one element past the end of the array. Same class of
+	// off-by-one already found and fixed in vect<T>::erase() earlier
+	// this project -- this hand-rolled sibling implementation just never
+	// got the same fix).
+	int diff = -1;
+	for (int i = 0; i < _c_size; i++)
+	{
+		if (children[i] == asset)
+		{
+			diff = i;
+			break;
+		}
+	}
+	assert(diff >= 0);
 	asset->clear();
-	children = (NodeToken *)p_realloc(children, (_c_size - 1) * sizeof(NodeToken));
+	free(asset);
+	memmove(children + diff, children + diff + 1, sizeof(NodeToken *) * (_c_size - diff - 1));
+	children = (NodeToken **)p_realloc(children, (_c_size - 1) * sizeof(NodeToken *));
 	_c_size--;
 }
 void NodeToken::addTargetText(char *t)
@@ -513,6 +546,7 @@ NodeToken::NodeToken(char *_target, nodeType tt)
 	_nodetype = tt;
 	addTargetText(_target);
 	children = NULL;
+	_c_size = 0;
 }
 void NodeToken::visitNode()
 {
@@ -690,6 +724,9 @@ void NodeToken::visitNode()
 		break;
 	case callConstructorNode:
 		_visitcallConstructorNode(this);
+		break;
+	case jsonBindingNode:
+		_visitjsonBindingNode(this);
 		break;
 	case UnknownNode:
 		_visitUnknownNode(this);
@@ -905,7 +942,28 @@ void copyPrty(NodeToken *from, NodeToken *to)
 	to->_vartype = from->_vartype;
 	to->type = from->type;
 	// to->target=from->target;
-	to->_total_size = to->_total_size * from->getVarTypeObj()->_varSize;
+	// getVarTypeObj() returns NULL when `from`'s type never resolved to a
+	// real varType (_vartype left at EOF_VARTYPE) -- reachable from
+	// otherwise-plausible-looking (if invalid) input, e.g. a C-style
+	// trailing ';' after a `struct Foo {...};` definition followed by a
+	// global `Foo instance[N];` declaration confuses the type lookup for
+	// `Foo` into never being resolved. v1 reports a clean parse error for
+	// the same input; this used to segfault here instead. Reported as a
+	// parse error here rather than crashing -- Parser::parse() checks
+	// Error.error right after parseProgram() returns and skips codegen
+	// entirely when it's set, so it's safe even though not every one of
+	// copyPrty()'s other call sites re-checks Error.error immediately.
+	if (Error.error == noError)
+	{
+		varType *vt = from->getVarTypeObj();
+		if (vt == NULL)
+		{
+			Error.error = impossibletofindvariabledeclaration;
+			Error.token = NULL;
+			return;
+		}
+		to->_total_size = to->_total_size * vt->_varSize;
+	}
 }
 
 uint16_t stringToInt(char *str)
@@ -921,65 +979,21 @@ uint16_t stringToInt(char *str)
 	return res;
 }
 
-void testChange(vect<NodeToken *> *is, NodeToken *from, NodeToken *to, int size)
-{
-	if (from == NULL)
-		return;
-	for (int j = 0; j < size; j++)
-	{
-
-		if (current_node == from + j)
-		{
-			current_node = to + j;
-
-			//PARSER_LOG("change address current node")
-		}
-		for (int i = 0; i < change_type.size(); i++)
-		{
-			NodeToken *tmp = change_type.get(i);
-			if (tmp == from + j)
-			{
-				*(change_type.getptr(i)) = to + j;
-				//PARSER_LOG("change address change tyep")
-			}
-		}
-		for (int i = 0; i < is->size(); i++)
-		{
-			NodeToken *tmp = is->get(i);
-			if (tmp == from + j)
-			{
-				*(is->getptr(i)) = to + j;
-				//PARSER_LOG("change address savtoiken")
-			}
-		}
-		if (tmp_sav == from + j)
-		{
-			tmp_sav = to + j;
-			// PARSER_LOG("new one")
-		}
-		if (lasttype == from + j)
-		{
-			lasttype = to + j;
-			// PARSER_LOG("new one")
-		}
-		if (sav_current_node == from + j)
-		{
-			sav_current_node = to + j;
-		}
-		/*
-		if (current_cntx == from + j)
-		{
-			current_cntx = to + j;
-			PARSER_LOG("new one")
-		}
-		if (current_cntx->parent == from + j)
-		{
-			current_cntx->parent = to + j;
-			PARSER_LOG("new one")
-		}
-		*/
-	}
-}
+// testChange() used to live here: a manually-maintained fixup pass run
+// after every children-array reallocation, patching known raw NodeToken*
+// globals (current_node, sav_current_node, lasttype, tmp_sav, entries in
+// sav_token/change_type) to follow the array when it moved. It never
+// covered everything that could hold such a pointer (current_cntx and
+// search_result were both missing, and likely other, harder-to-spot
+// cases too -- see the investigation notes on the old current_cntx
+// attempt, preserved in git history), which was the root cause of a
+// long-standing, heap-layout-dependent intermittent crash in
+// Parser::parse()/program.visitNode() on sufficiently complex scripts.
+// Now that `children` is an array of pointers to individually
+// heap-allocated nodes (see nodetoken.h) rather than an inline value
+// array, reallocating it only ever moves the *pointers*, never the nodes
+// themselves -- so no raw NodeToken* can be invalidated by it, and this
+// entire fixup mechanism is unnecessary.
 
 void buildParents(NodeToken *__nd)
 {

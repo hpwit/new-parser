@@ -36,6 +36,8 @@ impossibletofindtoken,
 functionnotfound,
 wrongnumberofarguments,
 expectingsemicolonorcloseparenthesis,
+expectingJsonPathString,
+expectingAs,
 };
 struct error_message_struct
 {

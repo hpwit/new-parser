@@ -35,7 +35,9 @@ const char *error_messages[]=
 "Impossible to find token",
 "Function not found",
 "Wrong number of arguments",
-"Expecting ; or )"
+"Expecting ; or )",
+"Expecting a string literal json path after json",
+"Expecting as"
 
 };
 void display_error(error_message_struct *err){

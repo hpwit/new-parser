@@ -60,6 +60,7 @@ enum nodeType
 	callConstructorNode,
 	defInputArgumentsNode,
 	declarationFunctionNode,
+	jsonBindingNode,
 	UnknownNode
 
 };
@@ -112,7 +113,22 @@ public:
 	void prettyPrint(int iden);
 
 #endif
-	NodeToken *children = NULL;
+	// An array of pointers to individually heap-allocated NodeToken
+	// objects, NOT an inline array of NodeToken values. Growing/shrinking
+	// this array (addChild/erase/etc.) only ever reallocates the pointer
+	// array itself -- once a child is allocated, its own address never
+	// changes for its lifetime, so a NodeToken* obtained via
+	// getChildPtr()/children_backptr()/etc. stays valid indefinitely,
+	// even while unrelated siblings are added/removed elsewhere in the
+	// tree. (Previously this was NodeToken*, an inline value array grown
+	// via realloc -- which can move and silently invalidate any raw
+	// pointer held into it. A partial, manually-maintained fixup list for
+	// exactly that case -- testChange(), now removed -- covered a few
+	// known globals but not everything that held such a pointer, and was
+	// the source of a long-standing, heap-layout-dependent intermittent
+	// crash in Parser::parse()/program.visitNode() on sufficiently
+	// complex scripts.)
+	NodeToken **children = NULL;
 	NodeToken *parent = NULL;
 	uint16_t _total_size = 1;
 	uint16_t target = EOF_TEXTARRAY;
@@ -151,7 +167,6 @@ void findFunction(NodeToken *nd, char *st);
 void findVariable(NodeToken *nd, char *, bool forCreation);
 void findVariable(NodeToken *nd, Token *t, bool forCreation);
 void copyPrty(NodeToken *from, NodeToken *to);
-void testChange(vect<NodeToken *> *is, NodeToken *from, NodeToken *to, int size);
 uint16_t stringToInt(char *str);
 void buildParents(NodeToken *__nd);
 #endif

@@ -47,6 +47,7 @@ void _visitbreakNode(NodeToken *nd);
 void _visittestNode(NodeToken *nd);
 void _visitternaryIfNode(NodeToken *nd);
 void _visitcallConstructorNode(NodeToken *nd);
+void _visitjsonBindingNode(NodeToken *nd);
 void _visitUnknownNode(NodeToken *nd);
 
 void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall);

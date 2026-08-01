@@ -200,9 +200,9 @@ T *vect<T>::insertBefore(T *object,T asset )
 template <typename T>
 void vect<T>::erase(T *asset)
 {
-    assert(asset - point < size_item * _size);
+    assert(asset - point < _size);
     uint32_t diff = asset - point;
-    memmove(point + diff, point + diff + 1, (size_item) * (_size - diff));
+    memmove(point + diff, point + diff + 1, (size_item) * (_size - diff - 1));
     point = (T *)p_realloc(point, (_size - 1) * size_item);
     _size--;
 }

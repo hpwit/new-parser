@@ -5,6 +5,7 @@
 #include "string_constants.h"
 #include "parser_define.h"
 #include "binding.h"
+#include "optimize.h"
 //NodeToken *current_node;
 NodeToken program = NodeToken(programNode);
 NodeToken  extra_parser;
@@ -84,6 +85,8 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     buildParents(&program);
     PARSER_LOG("visit parents")
     program.visitNode();
+    PARSER_LOG("optimize")
+    optimize(&content);
 }
 
 void Parser::parseProgram()
@@ -257,6 +260,62 @@ void Parser::parseProgram()
             // }
         }
 
+        else if (Match(TokenKeywordJson))
+        {
+            // `json "path.to.value" as int myVar;` -- ported from
+            // upstream ESPLiveScript's ESPLiveScript.h. Only records the
+            // path/name/type as a jsonBindingNode here; the actual
+            // variable declaration (real storage + a @_name label) comes
+            // from the ordinary "TYPE IDENTIFIER ;" path at the bottom of
+            // this loop running again on the *same* "int myVar;" tokens
+            // next iteration -- see the prev() calls below, the same
+            // rewind trick upstream's parser uses for this.
+            next(); // consume "json"
+            if (!Match(TokenString))
+                RETURN_ERROR(expectingJsonPathString)
+            // getText() on a string token includes its enclosing quotes
+            // (tokenize.cpp captures the whole "..." span) -- strip them,
+            // since this is used as a literal path/key, not displayed
+            // script text.
+            char *rawJsonPath = current()->getText();
+            int rawLen = (int)strlen(rawJsonPath);
+            char *jsonPath;
+            if (rawLen >= 2 && rawJsonPath[0] == '"' && rawJsonPath[rawLen - 1] == '"')
+                jsonPath = strndup(rawJsonPath + 1, rawLen - 2);
+            else
+                jsonPath = strdup(rawJsonPath);
+            next(); // consume the path string
+            if (!Match(TokenKeywordAs))
+            {
+                free(jsonPath);
+                RETURN_ERROR(expectingAs)
+            }
+            next(); // consume "as"
+
+            parseType();
+            if (Error.error)
+            {
+                free(jsonPath);
+                return;
+            }
+            NodeToken typeNd = nodeTokenList.pop_back();
+
+            if (!Match(TokenIdentifier))
+            {
+                free(jsonPath);
+                RETURN_ERROR(expectingASMorInt)
+            }
+
+            NodeToken jnd = NodeToken(jsonBindingNode);
+            jnd.setText(jsonPath); // ownership transferred to the Text pool
+            jnd.addTargetText(current()->getText());
+            jnd._vartype = typeNd._vartype;
+            program.addChild(jnd);
+
+            prev(); // undo parseType()'s next() past the type name
+            if (typeNd.isPointer)
+                prev(); // ...and past the '*' too, if there was one
+        }
         else if (Match(TokenKeywordSafeMode))
         {
             safeMode = true;
@@ -689,7 +748,20 @@ void Parser::parseFactor()
         {
             if (change_type.back()->_vartype != __float__)
             {
-                if (current()->_vartype == __float__ || current()->_vartype == __uint32_t__)
+                // A bare number literal is tokenized as __float__ (has a
+                // '.') or __int__ (tokenize.cpp) -- __uint32_t__ was
+                // never actually reachable here, so plain integer
+                // literals (e.g. a call argument like `fib(10)`) never
+                // propagated their type into change_type, leaving it at
+                // its __none__ placeholder. That was invisible as long
+                // as __none__'s signature marker happened to be the same
+                // string as every numeric type's (both "d"); now that
+                // they're distinct ("void" vs "num", matching upstream
+                // ESPLiveScript's own convention), the mismatch between a
+                // declaration's signature and such a call site's
+                // surfaced as a real "function not found" error. Fixed
+                // by also propagating __int__.
+                if (current()->_vartype == __float__ || current()->_vartype == __uint32_t__ || current()->_vartype == __int__)
                 {
                     change_type.back()->_vartype = current()->_vartype;
                 }
@@ -748,11 +820,29 @@ void Parser::parseFactor()
             Error.error = 0;
             // current_node = current_node->parent;
 
+            // Same gap as parseFactor()'s TokenNumber case above (see its
+            // comment): this cast's own result type never propagated
+            // into the *enclosing* change_type context (e.g. a call
+            // argument like `setPixel((int)(2 * xc - i), j, 1)`'s first
+            // argument), so an argument that was only a cast expression
+            // -- never a bare literal/identifier for the outer branches
+            // to have already caught -- left the enclosing signature's
+            // type at __none__.
+            uint8_t _castType = current_node->_vartype;
             current_node = current_node->parent;
             current_node = current_node->parent;
+            change_type.pop_back();
+            if (change_type.size() > 0 && change_type.back()->_vartype != __float__)
+            {
+                if (_castType == __float__ || _castType == __uint32_t__ || _castType == __int__ ||
+                    _castType == __uint8_t__ || _castType == __uint16_t__ || _castType == __s_int__ ||
+                    _castType == __bool__)
+                {
+                    change_type.back()->_vartype = _castType;
+                }
+            }
 
             // current_node=current_node->parent;
-            change_type.pop_back();
             return;
         }
         else
@@ -791,7 +881,15 @@ void Parser::parseFactor()
                 change_type.back()->isPointer = tmp_sav->isPointer;
             if (change_type.back()->_vartype != __float__)
             {
-                if (tmp_sav->_vartype == __float__ || tmp_sav->_vartype == __uint32_t__)
+                // Same gap as parseFactor()'s TokenNumber case above (see
+                // its comment): only float/uint32_t propagated, so a
+                // variable declared e.g. `int`/`uint8_t`/`bool` used as a
+                // call argument (like `report(c)` with `int c;`) never
+                // updated change_type's inferred type either.
+                if (tmp_sav->_vartype == __float__ || tmp_sav->_vartype == __uint32_t__ ||
+                    tmp_sav->_vartype == __int__ || tmp_sav->_vartype == __uint8_t__ ||
+                    tmp_sav->_vartype == __uint16_t__ || tmp_sav->_vartype == __s_int__ ||
+                    tmp_sav->_vartype == __bool__)
                 {
                     change_type.back()->_vartype = tmp_sav->_vartype;
                 }
@@ -820,8 +918,8 @@ void Parser::parseFactor()
         else
             d._nodetype = localVariableNode;
         d.type = TokenUserDefinedVariableMemberFunction;
-        current_node->children->children_pop();
-        current_node->children->children_pop();
+        current_node->children[0]->children_pop();
+        current_node->children[0]->children_pop();
         nodeTokenList.push_back(d);
 
         // current_node->children->clear();
@@ -1015,8 +1113,18 @@ void Parser::parseFunctionCall()
                     sav_current_cntx=current_cntx;
                     current_cntx=&ext_function_cntx;
                     isExtra=true;
-                    extra_parser.clear();
-                    current_node = &extra_parser;
+                    // Auto-declared (bindFunction()-only, no `external` line
+                    // in the script) function declarations used to be
+                    // parsed into extra_parser -- a scratch NodeToken that
+                    // is never a descendant of `program` -- so the
+                    // synthesized defExtFunctionNode was registered in the
+                    // `functions` lookup table (findFunction() below
+                    // succeeds) but program.visitNode() never walked it,
+                    // and its jump-table header reservation never got
+                    // emitted. Parsing straight into `program` instead
+                    // makes it a real part of the tree that gets visited
+                    // like any other external declaration.
+                    current_node = &program;
                     // string toinsert = external_links[i].name; //"external " + external_links[i].out + " " + external_links[i].name + "("+external_links[i].in + ");";
                    
                     //  main_script.previousChar();
@@ -1117,7 +1225,14 @@ void Parser::parseFunctionCall()
             change_type.back()->isPointer = search_result->getChildPtr(0)->isPointer; // n,ew modif here
         if (change_type.back()->_vartype != __float__)
         {
-            if (search_result->getChildPtr(0)->_vartype == __float__ || search_result->getChildPtr(0)->_vartype == __uint32_t__)
+            // Same gap as parseFactor()'s TokenNumber case (see its
+            // comment): only float/uint32_t propagated, so a function
+            // call returning e.g. int/uint8_t/bool used within another
+            // expression never updated change_type's inferred type.
+            if (search_result->getChildPtr(0)->_vartype == __float__ || search_result->getChildPtr(0)->_vartype == __uint32_t__ ||
+                search_result->getChildPtr(0)->_vartype == __int__ || search_result->getChildPtr(0)->_vartype == __uint8_t__ ||
+                search_result->getChildPtr(0)->_vartype == __uint16_t__ || search_result->getChildPtr(0)->_vartype == __s_int__ ||
+                search_result->getChildPtr(0)->_vartype == __bool__)
             {
                 change_type.back()->_vartype = search_result->getChildPtr(0)->_vartype;
             }
@@ -2176,6 +2291,17 @@ void Parser::parseExprConditionnal()
         current_node->addChildClear(_node_token_stack.back());
         _node_token_stack.pop_back();
         current_node = current_node->parent;
+        // Was missing this pop_back() to match the push_back() above --
+        // change_type was left with an orphaned entry (from this comparator
+        // node, which nothing further keeps alive) after every comparison
+        // operator, until eventually the node it pointed to got freed
+        // elsewhere while the stale entry was still sitting there. Found via
+        // a use-after-free parser.cpp's own change_type.back() read
+        // (parseFactor()'s TokenNumber case) would intermittently hit,
+        // 100% reproducible under AddressSanitizer once isolated to this
+        // function -- see "float type + ternary"'s test script for the
+        // simplest repro (any comparison works, e.g. `a < 2.0`).
+        change_type.pop_back();
         NodeToken nd2 = NodeToken(changeTypeNode);
         // nd._nodetype = changeTypeNode;
         nd2.type = TokenKeywordVarType;
@@ -2501,7 +2627,13 @@ void Parser::getVariable(bool isStore)
                 }
                 copyPrty(&_t, &nd);
 
-                //current_node = program.addChild(nd);
+                // Same gap as parseFunctionCall()'s auto-declare path above
+                // (bindVariable()-only, no `external` line in the script):
+                // main_context.addChild(nd) alone registers the synthesized
+                // declaration for name lookup, but program.visitNode()
+                // never sees it unless it's also attached to `program`, so
+                // its jump-table header reservation never got emitted.
+                program.addChild(nd);
 
                 main_context.addChild(nd);
                // current_node = _node_token_stack.back();

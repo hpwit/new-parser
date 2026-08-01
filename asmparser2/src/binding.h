@@ -25,7 +25,9 @@ typedef struct
 
 void bindFunction(char * out,char * name,char *  in, void * ptr);
 void bindVariable( char *out,char *name,char *in,void * ptr);
-//int findLink(char * label, externalType op);
+void replaceExternal(char *name, void *ptr);
+int findLink(char *label, externalType op);
+uint32_t *createExternalLinks();
 extern vect<_binding> binded_assets;
 
 extern Text extern_text;
