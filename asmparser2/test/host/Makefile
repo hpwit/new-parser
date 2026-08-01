@@ -69,7 +69,31 @@ $(SC_BUILD_DIR)/%.o: %.cpp | $(SC_BUILD_DIR)
 $(SC_BUILD_DIR):
 	mkdir -p $(SC_BUILD_DIR)
 
-clean:
-	rm -rf $(BUILD_DIR) $(JSON_BUILD_DIR) $(SC_BUILD_DIR)
+# Large-script / resource-budget check (see test_large_script.cpp) --
+# compiles fixtures/multi_effect_controller.sc, a purpose-written
+# several-hundred-line script, and checks the resulting binary against
+# an ESP32-without-PSRAM size budget. Separate binary/build dir, same
+# reasoning as run-json/run-sc above.
+LARGE_BUILD_DIR := build-large
+LARGE_SRCS := $(wildcard $(SRC_DIR)/*.cpp) test_large_script.cpp
+LARGE_OBJS := $(addprefix $(LARGE_BUILD_DIR)/,$(notdir $(LARGE_SRCS:.cpp=.o)))
 
-.PHONY: run run-json run-sc clean
+run-large: $(LARGE_BUILD_DIR)/test_large_script
+	./$(LARGE_BUILD_DIR)/test_large_script
+
+$(LARGE_BUILD_DIR)/test_large_script: $(LARGE_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $(LARGE_OBJS)
+
+$(LARGE_BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(LARGE_BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(LARGE_BUILD_DIR)/%.o: %.cpp | $(LARGE_BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(LARGE_BUILD_DIR):
+	mkdir -p $(LARGE_BUILD_DIR)
+
+clean:
+	rm -rf $(BUILD_DIR) $(JSON_BUILD_DIR) $(SC_BUILD_DIR) $(LARGE_BUILD_DIR)
+
+.PHONY: run run-json run-sc run-large clean

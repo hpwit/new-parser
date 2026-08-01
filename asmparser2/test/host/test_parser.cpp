@@ -680,6 +680,134 @@ static void runAutoDeclareBinaryTest()
     }
 }
 
+// Regression test found via a purpose-written several-hundred-line script
+// (test/host/fixtures/multi_effect_controller.sc, test/host/test_large_script.cpp)
+// exercising `structArray[index].field` read from *outside* the struct's own
+// methods -- a pattern none of the sc_examples corpus or this file's other
+// struct tests happen to use (they only ever call struct-array methods, e.g.
+// `Balls[i].updateBall()`). parser.cpp's TokenMember-on-a-pointer handling had
+// an accidentally-live line (v1's ESPLiveScript.h:584 has the identical
+// formula, but commented out/dead) that computed the per-element byte stride
+// as `1000 * _total_size + v->sizes[i]` instead of leaving it as the struct's
+// real total_size. For a 2-int-field struct (real size 8 bytes) this produces
+// 1000*8+4=8004 -- not just wrong (multiplying an array index by the wrong
+// stride computes a wrong address: silent memory corruption at runtime, not
+// merely a compile error) but also large enough to overflow `movi`'s 12-bit
+// (-2048..2047) immediate range, which is what actually surfaced it as an
+// assembler error ("incorrect value 8004 should be between -2048 and 2047").
+// Fixed by removing the errant line so this branch does nothing, exactly
+// matching v1. Checks the *exact* stride value in the generated instruction
+// stream (not just "does it assemble"), since a variant of this bug that
+// stays under 2047 would otherwise assemble fine while still computing a
+// wrong address.
+static void runStructArrayFieldStrideTest()
+{
+    const char *name = "struct-array element field read from outside its methods (arr[i].field) uses the correct byte stride";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        Parser p;
+        p.clean();
+        content.clear();
+        header.clear();
+        footer.clear();
+
+        Script s;
+        char *buf = strdup(
+            "struct Foo{int a,b; Foo(){a=0;b=0;}}"
+            "Foo arr[3];"
+            "int readB(int i){return arr[i].b;}"
+            "void main(){}");
+        s.addContent(buf);
+        s.init();
+        p.parse(&s, &__allTokens);
+
+        bool ok = true;
+        if (Error.error)
+        {
+            printf("       parse error=%d (%s)\n", Error.error, error_messages[Error.error]);
+            ok = false;
+        }
+        else
+        {
+            // The correct per-element stride for Foo (two int fields) is
+            // 8 bytes -- look for "movi a<reg>,8" immediately followed by
+            // a "mull" in the generated instruction stream (matching
+            // visitnode.cpp's movi-then-mull index-scaling codegen at
+            // ~line 678/2246); the pre-fix bug would instead emit
+            // "movi a<reg>,8004" here (and fail to assemble at all, but
+            // this check catches the underlying wrong-value bug directly,
+            // not just its assembler-range side effect).
+            // Matches the exact 3-instruction sequence visitnode.cpp emits
+            // for this case (~line 678-680): "movi <reg>,<stride>", then
+            // "mull ...", then "l32r <reg>,@_arr" -- so this can't
+            // accidentally match some unrelated movi/mull pair elsewhere
+            // in the script.
+            bool foundCorrectStride = false;
+            int wrongStrideSeen = -1;
+            for (int i = 0; i + 2 < content.size(); i++)
+            {
+                char *line = content.getText(i);
+                char *next = content.getText(i + 1);
+                char *after = content.getText(i + 2);
+                if (line == NULL || next == NULL || after == NULL)
+                    continue;
+                int reg = -1, imm = -1;
+                if (strncmp(next, "mull", 4) == 0 && strstr(after, "@_arr") != NULL &&
+                    sscanf(line, "movi a%d,%d", &reg, &imm) == 2)
+                {
+                    if (imm == 8)
+                        foundCorrectStride = true;
+                    else
+                        wrongStrideSeen = imm;
+                }
+            }
+            if (foundCorrectStride == false && wrongStrideSeen != -1)
+            {
+                printf("       found a wrong stride (movi ...,%d) instead of the correct 8 in the generated instructions\n",
+                       wrongStrideSeen);
+                ok = false;
+            }
+            else if (!foundCorrectStride)
+            {
+                printf("       did not find the expected 'movi a<reg>,8' / 'mull' / 'l32r ...,@_arr' sequence in the generated instructions\n");
+                ok = false;
+            }
+
+            Binary bin = createBinary(&footer, &header, &content, false);
+            if (bin.error.error)
+            {
+                printf("       assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+                ok = false;
+            }
+        }
+
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 // Exercises createExecutableFromBinary()/freeExecutable() (src/asm_execute.cpp)
 // on a script with an external call, checking the load+relocate step
 // completes and reports a start function -- without actually calling into
@@ -1473,6 +1601,7 @@ int main()
 {
     registerBallEffectBindings();
     runAutoDeclareBinaryTest();
+    runStructArrayFieldStrideTest();
     runOptimizeUnitTest();
     runGenerateBinaryTest(
         "generates executable binary: empty function",

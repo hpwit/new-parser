@@ -2779,7 +2779,22 @@ void Parser::getVariable(bool isStore)
             current_node->stack_pos = current_node->stack_pos + 1000 * v->starts[i];
         if (current_node->isPointer)
         {
-             current_node->_total_size =1000* current_node->_total_size +v->sizes[i];
+            // v1 leaves _total_size untouched here (its equivalent line,
+            // ESPLiveScript.h:584, is dead/commented-out code) -- it stays
+            // whatever the preceding array-index step already set it to
+            // (the struct's real per-element byte size). The 1000x-encoded
+            // form this used to compute instead collided with the *other*,
+            // legitimate use of that same "1000 * X + Y" packing scheme
+            // (stack_pos's offset encoding, decoded via "- (n/1000)*1000"
+            // elsewhere in this file and in visitnode.cpp) but had no
+            // corresponding decode step of its own: visitnode.cpp's
+            // indexed-member codegen (~line 678/2246) uses _total_size
+            // directly as a `movi`/`mull` stride, so for e.g. a 7-field
+            // (28-byte) struct this produced 1000*28+4=28004 -- not only
+            // wrong (multiplying the index by a garbage stride computes a
+            // wrong address, silent memory corruption at runtime) but also
+            // outside `movi`'s 12-bit (-2048..2047) immediate range, which
+            // is what actually surfaced this as an assembler error.
         }
         else
         {

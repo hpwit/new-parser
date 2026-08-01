@@ -2,10 +2,15 @@
 # QEMU-based execution verification. See README.md for what this proves
 # and how to obtain XTENSA_GCC/QEMU. Usage:
 #   XTENSA_GCC=/path/to/xtensa-esp32-elf-gcc QEMU=/path/to/qemu-system-xtensa ./run.sh
+# Targets ESP32 by default; set TARGET_MACHINE=esp32s3 (and pass an
+# xtensa-esp32s3-elf-gcc as XTENSA_GCC) to run the same suite against
+# QEMU's esp32s3 machine instead -- both were confirmed to produce
+# identical results for every case here, see README.md.
 set -e
 
-: "${XTENSA_GCC:?set XTENSA_GCC to the xtensa-esp32-elf-gcc binary path}"
+: "${XTENSA_GCC:?set XTENSA_GCC to the xtensa-esp32-elf-gcc (or xtensa-esp32s3-elf-gcc) binary path}"
 : "${QEMU:?set QEMU to the qemu-system-xtensa binary path}"
+TARGET_MACHINE="${TARGET_MACHINE:-esp32}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="$SCRIPT_DIR/../../src"
@@ -35,8 +40,8 @@ run_case() {
     "$XTENSA_GCC" -mlongcalls -specs=sim.elf.specs -O0 \
         -I"$case_dir" -o "$case_dir/runner.elf" "$SCRIPT_DIR/$runner_src"
 
-    echo "== $name: running under QEMU =="
-    "$QEMU" -machine esp32 -nographic -kernel "$case_dir/runner.elf" > "$case_dir/output.log" 2>&1 &
+    echo "== $name: running under QEMU ($TARGET_MACHINE) =="
+    "$QEMU" -machine "$TARGET_MACHINE" -nographic -kernel "$case_dir/runner.elf" > "$case_dir/output.log" 2>&1 &
     qemu_pid=$!
     sleep 3
     kill -9 "$qemu_pid" 2>/dev/null || true

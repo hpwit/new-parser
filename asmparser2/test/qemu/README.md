@@ -64,6 +64,20 @@ separately blocked by the `__div` stdlib-injection gap noted there) can
 currently be QEMU-verified -- only host-structurally-verified, same as
 structs/multi-function scripts above.
 
+## ESP32-S3
+
+The same seven cases were also re-run against QEMU's `esp32s3` machine
+(via `xtensa-esp32s3-elf-gcc`, `TARGET_MACHINE=esp32s3 ./run.sh`) and
+produced byte-for-byte identical results to the plain ESP32 run above.
+This is expected, not a coincidence to double-check further: the compiler
+only ever emits the base Xtensa integer/windowed-register ISA (`call8`,
+`entry`, `retw.n`, `l32r`, `blt`/`bge`(`u`), etc.) common to both the LX6
+core (ESP32) and LX7 core (ESP32-S3) -- none of ESP32-S3's LX7-specific
+additions (e.g. its SIMD/vector extensions) are used or needed anywhere
+in codegen. The float-instruction QEMU hang documented above reproduces
+identically on `esp32s3` too (same underlying QEMU fork), so the same
+"not verified" carve-out applies to both targets equally.
+
 ## Setup
 
 ```sh
@@ -87,6 +101,18 @@ brew install libgcrypt   # runtime dependency of the prebuilt binary, macOS only
 
 ```sh
 XTENSA_GCC=/tmp/xtensa-toolchain/xtensa-esp32-elf/bin/xtensa-esp32-elf-gcc \
+QEMU=/tmp/qemu-esp/qemu/bin/qemu-system-xtensa \
+./run.sh
+```
+
+To run the same suite against ESP32-S3 instead, point `XTENSA_GCC` at an
+`xtensa-esp32s3-elf-gcc` and set `TARGET_MACHINE=esp32s3` (the QEMU fork
+above already supports both `-machine esp32` and `-machine esp32s3`, no
+separate download needed):
+
+```sh
+TARGET_MACHINE=esp32s3 \
+XTENSA_GCC=/tmp/xtensa-toolchain/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-gcc \
 QEMU=/tmp/qemu-esp/qemu/bin/qemu-system-xtensa \
 ./run.sh
 ```

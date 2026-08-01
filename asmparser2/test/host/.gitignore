@@ -1,6 +1,7 @@
 build/
 build-sc/
 build-json/
+build-large/
 test_parser
 test_parser.o
 
