@@ -6,6 +6,7 @@
 #include "parser_define.h"
 #include "binding.h"
 #include "optimize.h"
+#include "runtime_functions.h"
 //NodeToken *current_node;
 NodeToken program = NodeToken(programNode);
 NodeToken  extra_parser;
@@ -75,6 +76,10 @@ bool Parser::Match(tokenType tt, int index)
 
 void Parser::parse(Script *main_script, Tokens *__tks)
 {
+    // Always-available built-ins (printf/printfln -- see
+    // runtime_functions.h) need to be registered before parseProgram()
+    // below has any chance of resolving a call to one of them.
+    registerBuiltinRuntimeFunctions();
 
     _tks = __tks;
     _tks->tokenize(main_script, true, true, 1);

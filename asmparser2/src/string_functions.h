@@ -2,6 +2,7 @@
 
 #ifndef __STRING_FUNC__
 #define __STRING_FUNC__
+#include <stdlib.h>
 #include "string.h"
 #include "parser_enum.h"
 #include "vect.h"

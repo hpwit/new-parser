@@ -585,10 +585,12 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         char *depart = trim(sp.operandes);
         char *space = strchr(depart, ' ');
         long value;
+        char *suite = NULL; // the trailing "XX XX XX ..." hex byte list, if any
         if (space)
         {
             *space = 0;
             value = strtol(depart, &endptr, 10);
+            suite = space + 1;
         }
         else
         {
@@ -606,6 +608,52 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
                 ps1->align = true;
                 asm_Error.error = 0;
                 ps.size = (uint16_t)((value / 4) * 4 + 4);
+                // ".bytes N" (no trailing values) is a plain zeroed
+                // reservation (e.g. the built-in _handle_/_execaddr_/
+                // _sync scratch words) -- nothing to store. ".bytes N
+                // XX XX XX ..." (a string literal's initial value,
+                // visitnode.cpp's globalVariableNode/stringNode
+                // handling) carries N space-separated hex byte values
+                // that need to survive into the loaded executable's
+                // data region -- ported from upstream's identical
+                // ESPLiveScript asm_parser.h ".bytes" handling, which
+                // this v2 port had dropped, silently discarding every
+                // string literal's actual content (the assembled
+                // output reserved the right *size* but never stored
+                // the *bytes*, so any script string -- including any
+                // printf/printfln format string -- read back as zeros
+                // at runtime). addInstr()'s existing
+                // `if (operande.nameref != EOF_TEXTARRAY)` branch
+                // already does the rest (computing the data-region
+                // address, copying these bytes into the binary's
+                // temporary data-staging area, and reserving a type-3
+                // relocation record for the loader to copy them into
+                // the real data region) -- it was simply never reached
+                // because nameref was never set.
+                if (suite != NULL && *suite != 0)
+                {
+                    // addInstr()'s data branch later copies exactly
+                    // ps.size bytes out of whatever addText() stores
+                    // here (see its `memcpy(tmp_binary_data + ...,
+                    // operande.getText(), operande.size)`) -- ps.size
+                    // is value rounded up to a 4-byte boundary (+4),
+                    // not the raw decoded byte count, so pad up to
+                    // ps.size (zero-filled) rather than storing exactly
+                    // `value` bytes: storing fewer than ps.size would
+                    // make that later copy read past the end of this
+                    // allocation.
+                    SplitResult parts(suite, " ");
+                    char *name = (char *)calloc(ps.size, 1);
+                    int n = 0;
+                    for (int i = 0; i < parts.size() && n < ps.size; i++)
+                    {
+                        unsigned int byteVal = 0;
+                        sscanf(parts.get(i), "%x", &byteVal);
+                        name[n++] = (char)byteVal;
+                    }
+                    ps.addText(name, ps.size);
+                    free(name);
+                }
                 return ps;
             }
             asm_Error.error = 1;
@@ -817,8 +865,34 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
     // them explicitly so the buffer is sized large enough.
     int header_reservations = 0;
     for (int i = 0; i < _header->size(); i++)
-        if (strncmp(_header->getText(i), ".bytes", 6) == 0)
+    {
+        char *line = _header->getText(i);
+        if (strncmp(line, ".bytes", 6) == 0)
+        {
             header_reservations++;
+            // ".bytes N XX XX XX ..." (a string literal's initial
+            // value -- see the parser's own .bytes handling for the
+            // full explanation) needs its N-rounded-up-to-4-plus-4
+            // bytes reserved in tmp_exec's *temporary data-staging*
+            // area too (tmp_binary_data, past _instr_size), not just
+            // the 4-byte jump-table slot every ".bytes" line gets
+            // above -- addInstr() copies that many bytes into it once
+            // this line gets assembled. ".bytes N" alone (no trailing
+            // values, e.g. the built-in _handle_/_execaddr_/_sync
+            // scratch words) doesn't need this -- there's no payload
+            // to stage. Ported from upstream ESPLiveScript's identical
+            // asm_parser.h size-estimation pass, which this v2 port
+            // had dropped -- without it, tmp_exec was always allocated
+            // 4 bytes too small for any actual string content,
+            // overflowed the moment addInstr() copied it in.
+            char *rest = trim(line + 6);
+            if (strchr(rest, ' ') != NULL)
+            {
+                long n = strtol(rest, NULL, 10);
+                tmp_data_size += (uint16_t)((n / 4) * 4 + 4);
+            }
+        }
+    }
 
     _instr_size = (uint16_t)((nb_align_label + 1) * ALIGN_INSTR +
                               (_content->size() + _footer->size() - nb_not_aligned_label) * 3 +
@@ -917,12 +991,33 @@ static uint8_t *createBinaryHeader(parsedLines *asm_parsed)
             SplitResult parts(it->getText(), " ");
             binary_header_size += 1 + 2 + (uint16_t)(strlen(parts.get(0)) + 1) + 4 + 1;
         }
+        else if (it->op == opCodeType::data)
+        {
+            // A string literal's initial value (see the .bytes parser
+            // and addInstr()'s data branch) -- type 3 (addr + running
+            // tmp_data offset + size). decodeBinaryHeader's case 3
+            // (asm_execute.cpp) already implements the consuming half
+            // of this -- copying these bytes into the real data region
+            // at load time -- ported from upstream ESPLiveScript
+            // already, just never fed a type-3 record to consume,
+            // since nothing ever emitted one. This is the missing
+            // producer half.
+            nb_objects++;
+            binary_header_size += 1 + 4 + 2 + 2;
+        }
     }
 
     uint8_t *_binary_header = (uint8_t *)malloc(binary_header_size);
     binary_header = _binary_header;
     memcpy(binary_header, &nb_objects, 2);
     binary_header += 2;
+
+    // Running offset into the temporary data-staging area (tmp_binary_data,
+    // asm_parser.cpp's addInstr()) each type-3 record's bytes came from --
+    // matches decodeBinaryHeader's case-3 `exec + offset + tmp_data` source
+    // address exactly, since addInstr() appended each string's bytes there
+    // in the same order asm_parsed itself holds them.
+    uint16_t tmp_data = 0;
 
     for (int i = 0; i < asm_parsed->size(); i++)
     {
@@ -1032,6 +1127,19 @@ static uint8_t *createBinaryHeader(parsedLines *asm_parsed)
             sscanf(parts.get(2), "%hhu", &vartype);
             memcpy(binary_header, &vartype, 1);
             binary_header += 1;
+        }
+        else if (it->op == opCodeType::data)
+        {
+            type = 3;
+            memcpy(binary_header, &type, 1);
+            binary_header += 1;
+            memcpy(binary_header, &it->address, 4);
+            binary_header += 4;
+            memcpy(binary_header, &tmp_data, 2);
+            binary_header += 2;
+            memcpy(binary_header, &it->size, 2);
+            binary_header += 2;
+            tmp_data += it->size;
         }
     }
     return _binary_header;

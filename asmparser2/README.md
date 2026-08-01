@@ -92,12 +92,9 @@ allocated) is freed automatically.
 -- `main`, or any other one -- and can hand back its real return value,
 here via the `Arguments` overload (more on that next).
 
-(A script can also print directly via `printfln("i:%d", i)` -- it
-parses and declares fine, matching v1's own examples -- but see
-[Known limitations](#known-limitations): no working host-side
-implementation of it exists in this library yet, so don't expect it to
-actually print anything. Returning a value and `printf()`-ing it from
-the host, as above, is the reliable way to get output today.)
+(A script can also print directly via `printfln("i:%d", i)` -- no
+`bindFunction()`/`external` declaration needed, it's always available;
+see [Built-in printf / printfln](#built-in-printf--printfln) below.)
 
 ## Calling a function with arguments, and getting a value back
 
@@ -160,6 +157,32 @@ See `examples/Factorial` and `examples/CallScriptFunction` for the full
 working sketches this is drawn from, and `examples/FibonacciTiming` for
 the same pattern used to benchmark a script's own performance with
 `micros()`.
+
+## Built-in printf / printfln
+
+Scripts can call `printf(fmt, ...)` and `printfln(fmt, ...)` directly,
+with no `bindFunction()` call and no `external` declaration needed:
+
+```cpp
+char script[] = R"EOF(
+void main()
+{
+   int a = 5;
+   printfln("i:%d 3*i:%d", a, 3 * a);
+}
+)EOF";
+```
+
+They're registered automatically the first time anything is compiled
+(`registerBuiltinRuntimeFunctions()`, called from inside `Parser::parse()`,
+see `src/runtime_functions.h`/`.cpp`) -- real, genuinely variadic host
+functions (`vprintf` underneath), matching v1's own `artiPrintf`/
+`artiPrintfln`. `printfln` appends a trailing `\r\n`; `printf` doesn't.
+
+If your own code already calls `bindFunction()` for a function named
+`printf`/`printfln` before parsing (e.g. to capture output somewhere
+other than stdout), that binding wins -- the built-in one only fills in
+a name that isn't already bound.
 
 ## Talking to your own C++ code
 
@@ -479,6 +502,7 @@ equivalent and does give you its return value -- prefer it.
 | Example | Demonstrates |
 |---|---|
 | `SimpleScript` | The quick-start pattern above. |
+| `ScriptPrintf` | A script printing directly with `printf()`/`printfln()` -- no `bindFunction()`/`external` needed. |
 | `Factorial` | `Arguments`, calling a function multiple times with different values. |
 | `CallScriptFunction` | Calling a named function with a raw `int32_t[]` and using its return value. |
 | `FibonacciTiming` | Timing a script's own execution with `micros()`. |
@@ -492,12 +516,6 @@ equivalent and does give you its return value -- prefer it.
 
 Real, current gaps -- not aspirational TODOs:
 
-- **`printfln`/`printf` from inside a script don't work.** They're
-  variadic (`Args`-typed) externals; correctly decoding a variadic
-  call's argument layout to build a real host-side implementation
-  hasn't been done. Every example that declares `printfln` binds it to
-  `NULL`. Return a value from the script and `printf()` it from the
-  host instead (see `examples/Factorial`).
 - **No task scheduler.** v1 has a multi-task FreeRTOS scheduler
   (`executeAsTask()`, `scriptRuntime`, `suspend()`/`kill()`, task
   synchronization via `sync()`). v2 deliberately scopes this out --
