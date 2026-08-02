@@ -90,11 +90,120 @@ allocated) is freed automatically.
 `isExeExists()` tells you whether compiling and loading succeeded.
 `execute(name, ...)` calls any function declared in the script by name
 -- `main`, or any other one -- and can hand back its real return value,
-here via the `Arguments` overload (more on that next).
+here via the `Arguments` overload (more on that next). Full parameter
+reference for `execute()`/`executeOnly()`/`executeAsTask()` below.
 
 (A script can also print directly via `printfln("i:%d", i)` -- no
 `bindFunction()`/`external` declaration needed, it's always available;
 see [Built-in printf / printfln](#built-in-printf--printfln) below.)
+
+## `ScriptExecutable` reference
+
+```cpp
+bool isExeExists();
+```
+
+`true` if parsing, assembling, and loading all succeeded and the script
+has at least one callable function. No parameters. Always check this
+before calling `execute()`/`executeOnly()`/`executeAsTask()`.
+
+```cpp
+bool execute(const char *name, int32_t *result = NULL);
+bool execute(const char *name, Arguments *args, int32_t *result = NULL);
+bool execute(const char *name, const int32_t *args, int nargs, int32_t *result = NULL);
+```
+
+Calls a function declared in the script by name. Before doing so,
+**always calls the script's top-level initialization first**
+(`@__footer` -- wherever `createBinary()` put any work a script's
+global scope needs done before anything else runs, most commonly a
+global struct array's element constructors, e.g. `BouncingBalls.ino`'s
+`ball Balls[max_nb_balls];`) -- harmless no-op if the script has none.
+Matches upstream ESPLiveScript's own `execute()` exactly, including
+running that initialization again on *every* call, not just the first.
+
+- `name` -- the function's name exactly as declared in the script (e.g.
+  `"main"`, `"fact"`). No signature/overload resolution; must match a
+  real declared function or `execute()` returns `false`.
+- `result` -- if non-`NULL`, receives the function's real return value
+  (whatever it left in Xtensa's return register). Pass `NULL` if you
+  don't need it, e.g. calling a `main()` that never returns.
+- `args` (2nd overload) -- a typed `Arguments` list (`arguments.h`),
+  built with one `args.add(value)` call per parameter, in declaration
+  order; handles int/float marshaling for you.
+- `args`, `nargs` (3rd overload) -- a raw `int32_t[]` and its length,
+  for callers that already have arguments in that form. A float
+  argument must be passed as its bits reinterpreted as `int32_t`
+  (`Arguments` does this for you; this overload doesn't).
+- Returns `true` if a function named `name` was found and called,
+  `false` otherwise.
+
+```cpp
+bool executeOnly(const char *name, int32_t *result = NULL);
+bool executeOnly(const char *name, Arguments *args, int32_t *result = NULL);
+bool executeOnly(const char *name, const int32_t *args, int nargs, int32_t *result = NULL);
+```
+
+Identical parameters and behavior to the three `execute()` overloads
+above, **except `@__footer` is never called first**. Use this instead
+of `execute()` when re-entering a script repeatedly (e.g.
+`KeyboardCallback.ino`'s pattern, once per keypress) and top-level
+state -- a global struct array's constructors included -- shouldn't be
+reset on every call. Matches upstream's own `executeOnly()`.
+
+```cpp
+// ESP32 only -- not declared at all otherwise, including this repo's
+// own host test build; guard call sites that need to compile for both.
+bool executeAsTask(const char *name, uint32_t stackSize = 8192,
+                    UBaseType_t priority = 1, BaseType_t core = tskNO_AFFINITY);
+```
+
+Runs `execute(name)` (footer included, no arguments, no return value)
+on its own FreeRTOS task instead of blocking the caller -- returns as
+soon as the task is created, before the script function itself has run.
+A deliberately minimal port of upstream's much larger `executeAsTask()`
+family -- see "Known limitations" below for exactly what's not here.
+
+- `name` -- same meaning as `execute()`'s. Must stay valid for as long
+  as the task runs (a string literal is safest, same assumption every
+  other call site already makes) -- unlike `execute()`, this doesn't
+  read it until the task is actually scheduled, not before returning.
+- `stackSize` -- the new task's stack, in bytes, passed straight to
+  `xTaskCreatePinnedToCore()`. Default `8192` (matches upstream's own
+  default of `4096 * 2`). Increase it for a script with deep recursion
+  or large local structs/arrays.
+- `priority` -- the new task's FreeRTOS priority; higher runs
+  preferentially over lower. Default `1`, one above idle.
+- `core` -- which CPU to pin the task to: `0` or `1` on a real
+  dual-core ESP32 (single-core variants like ESP32-S2/C3 only have
+  core 0; `xTaskCreatePinnedToCore()` handles that transparently).
+  Default `tskNO_AFFINITY` -- no pinning, left entirely to the
+  scheduler, matching plain `xTaskCreate()`'s behavior. Arduino's own
+  `setup()`/`loop()` run pinned to core 1 by default (WiFi/BT's stack
+  owns core 0) -- pass `0` explicitly to keep a script's task off the
+  same core as `loop()`.
+- Returns `true` if the task was created successfully
+  (`xTaskCreatePinnedToCore()` returned `pdPASS`), `false` otherwise.
+- `this` (the `ScriptExecutable`) must outlive the task -- make it
+  `static` in `setup()`, same lifetime pattern `KeyboardCallback.ino`
+  uses for holding one alive past `setup()` returning.
+- See `examples/ExecuteAsTask` for a full working sketch.
+
+```cpp
+ScriptExecutable parseScript(const char *script);
+```
+
+Parses, assembles, and loads `script` in one call -- the v2 equivalent
+of upstream's `Parser::parseScript()`.
+
+- `script` -- the script source text, a plain C string. Only needs to
+  stay valid for the duration of this call; nothing downstream keeps a
+  reference to it. `true`/`false` and the `_handle_`/`_execaddr_`
+  globals `pinInterrupt()` needs are silently prepended before parsing.
+- Returns a `ScriptExecutable`. On any failure (parse, assemble, or
+  load error), its `isExeExists()` is `false`; the specific error is
+  also printed (`display_error()` for a parse error, a plain `printf`
+  for an assembler/loader error).
 
 ## Calling a function with arguments, and getting a value back
 
@@ -457,6 +566,76 @@ directly. Use the lower-level pipeline (`Parser`/`createBinary()`/
 `examples/LanguageBasics` for every individual step spelled out,
 including printing the AST and generated assembly) for that case.
 
+## Inspecting a compiled binary
+
+`binary_hex.h` prints a compiled script's raw bytes as a hex dump --
+useful for understanding or debugging what the compiler actually
+produced, independent of running it:
+
+```cpp
+#include "binary_hex.h"
+
+Binary bin = createBinary(&footer, &header, &content, false);
+printBinaryHex(&bin);
+// instructions (128 bytes):
+// 000000: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+// 000010: 00 00 00 00 36 11 01 91 fd ff a2 29 00 65 00 00
+// ...
+// relocation header (170 bytes):
+// 000000: 09 00 00 00 00 00 00 00 00 00 08 00 00 00 01 00
+// ...
+```
+
+```cpp
+void printBinaryHex(Binary *bin);
+```
+
+Dumps a `Binary`'s two meaningful pieces, each labeled.
+
+- `bin` -- a `Binary` from `createBinary()`. Does nothing if `bin` is
+  `NULL` or `bin->error.error` is set.
+- Dumps `bin->binary_data` (`bin->instruction_size` bytes, labeled
+  "instructions") -- the actual compiled machine code, destined for
+  IRAM. The same byte count every size-budget check in this repo
+  already reports (e.g. `test_large_script.cpp`).
+- Dumps `bin->function_data` (`bin->function_size` bytes, labeled
+  "relocation header") -- decoded at load time to patch call sites and
+  reserve each declared function's entry point; a mix of small binary
+  fields and embedded, NUL-terminated name strings (e.g.
+  `@_fact(num)`), readable directly in the dump.
+- Uses `bin->instruction_size`, not the larger `tmp_instruction_size`
+  `serializeBinary()` persists (see `binary_hex.h`'s own comment for
+  exactly why).
+
+```cpp
+void printHex(const uint8_t *data, uint32_t size, uint32_t bytesPerLine = 16);
+```
+
+The generic primitive `printBinaryHex()` is built on -- works on any
+byte buffer, not just a `Binary`'s fields.
+
+- `data` -- pointer to the first byte to dump. `NULL` prints `(empty)`
+  and returns immediately.
+- `size` -- how many bytes to dump. `0` prints `(empty)` and returns
+  immediately.
+- `bytesPerLine` -- how many bytes per output line, each line prefixed
+  with its hex offset from `data`. Default `16`; `0` is treated as `16`.
+- Not specific to compiled scripts at all -- works equally on a
+  `serializeBinary()` blob (see "Saving and loading compiled scripts"
+  above) or any other byte buffer you want dumped.
+
+Neither this port nor upstream v1 (ESPLiveScript) had a raw byte-dump
+utility before -- v1's closest relative, `asm_parser.h`'s
+`printparsdAsm()`, disassembles the pre-assembly intermediate form
+(address + opcode + mnemonic per instruction) rather than printing
+compiled bytes, and only ever ran behind a `__TEST_DEBUG` guard commented
+out at its one call site.
+
+See `examples/PrintBinaryHex` for the full pipeline (parse -> `createBinary()`
+-> `printBinaryHex()`), and `binary_hex.h` for both functions' exact
+semantics (including why instruction dumps use `instruction_size`, not
+the larger `tmp_instruction_size` `serializeBinary()` persists).
+
 ## Calling `main()` vs. calling other functions
 
 Internally, `execute()`/`callFunction()` call a function directly by
@@ -465,9 +644,14 @@ function -- which is what makes a real return value available.
 `runExecutable()`/`runExecutableWithArgs()` (still available, lower-
 level) call `main()` specifically through an argument-marshaling
 wrapper and additionally zero two data-region words some scripts'
-`sync()` depends on; that wrapper never surfaces a return value. Unless
-a script calls `sync()`, calling `main()` via `execute("main")` is
-equivalent and does give you its return value -- prefer it.
+`sync()` depends on; that wrapper never surfaces a return value. Unlike
+`ScriptExecutable::execute()`, they also do *not* call `@__footer`
+first -- a script with a global struct array driven through this
+lower-level pair needs its own explicit `callFunction(&exe, "footer",
+...)` call first, same as `execute()` does internally. Unless a script
+calls `sync()`, calling `main()` via `execute("main")` is equivalent,
+does give you its return value, and handles `@__footer` for you --
+prefer it.
 
 ## Verification & testing infrastructure
 
@@ -500,7 +684,7 @@ equivalent and does give you its return value -- prefer it.
 ## Examples
 
 | Example | Demonstrates |
-|---|---|
+| --- | --- |
 | `SimpleScript` | The quick-start pattern above. |
 | `ScriptPrintf` | A script printing directly with `printf()`/`printfln()` -- no `bindFunction()`/`external` needed. |
 | `Factorial` | `Arguments`, calling a function multiple times with different values. |
@@ -511,15 +695,24 @@ equivalent and does give you its return value -- prefer it.
 | `KeyboardCallback` | An `external` variable read by the script, re-entering a loaded script by name from a host event handler. |
 | `LanguageBasics` | Every pipeline step spelled out individually, printing the AST and generated assembly -- useful for understanding or debugging the compiler itself. |
 | `SaveScriptBinary` / `LoadScriptBinary` | Compiling once, saving to flash, loading and running from a separate sketch. |
+| `PrintBinaryHex` | Hex-dumping a compiled script's instruction bytes and relocation header with `printBinaryHex()`/`printHex()`. |
+| `MultiEffectController` | A real, several-hundred-line multi-effect script (structs, recursion, sorts, a button-driven mode switch) actually compiled *and run*, every host binding real (not `NULL`) -- see `test/host/fixtures/multi_effect_controller.sc` for the size-budget-only version of the same script. |
+| `ExecuteAsTask` | Running a script's own `main()` loop on its own FreeRTOS task with `executeAsTask()`, so the sketch's real `loop()` keeps running concurrently. ESP32-only. |
 
 ## Known limitations
 
 Real, current gaps -- not aspirational TODOs:
 
-- **No task scheduler.** v1 has a multi-task FreeRTOS scheduler
-  (`executeAsTask()`, `scriptRuntime`, `suspend()`/`kill()`, task
-  synchronization via `sync()`). v2 deliberately scopes this out --
-  it's a single script, called directly, no concurrent-task machinery.
+- **No multi-program task scheduler.** v1 has a full multi-task FreeRTOS
+  scheduler: a registry of several concurrently-running scripts
+  (`scriptRuntime`), `suspend()`/`restart()`/`kill()` with cross-task
+  handshaking, and inter-task coordination via `sync()`. v2 has none of
+  that -- deliberately; a single script, called directly, is still the
+  default. `ScriptExecutable::executeAsTask()` (`script_executable.h`,
+  ESP32-only) is a minimal exception: it hands one script function its
+  own FreeRTOS task (see `examples/ExecuteAsTask`) so it doesn't block
+  the caller -- fire-and-forget, no handle, no suspend/kill, no registry
+  of other running scripts to coordinate with.
 - **`import <stdlib-function>` (e.g. `import rand`) doesn't work.** v1
   splices in a real implementation from a small standard library at
   tokenize time; v2 has the same mechanism sketched but not wired up.

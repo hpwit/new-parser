@@ -262,6 +262,34 @@ void Parser::parseProgram()
             current_cntx = current_cntx->parent;
 
             isStructFunction = false;
+            // struct_name is set above (~line 136) the moment a struct
+            // definition starts, so every method call resolved afterward
+            // -- for the rest of the *entire* script, not just while
+            // still inside this struct's own body -- can find the
+            // current struct's methods by qualified name. Nothing reset
+            // it back to NULL once this struct's definition ends, so it
+            // stayed set to the last-parsed struct's name for everything
+            // parsed afterward: every call site of the form
+            // `identifier.method(...)` anywhere later in the script,
+            // regardless of which struct `identifier` actually is or
+            // whether it's local/global/an array element, went through
+            // parseArguments()'s `struct_name != NULL` branch instead of
+            // its `struct_name == NULL` branch -- hardcoding the self-
+            // pointer argument as a local variable at a fixed stack
+            // offset (_STACK_SIZE) instead of reusing the self node
+            // parseUserDefinedVariableMember() (~line 2830) already
+            // built and correctly tagged as local/global based on how
+            // `identifier` was actually declared. Confirmed via a direct
+            // codegen comparison: `counter c; ... c.increment();` at
+            // global scope compiled to `l32i a10,a1,56` (garbage -- reads
+            // whatever another function happened to leave on the stack)
+            // instead of `l32r a5,@_c` for the exact same script's very
+            // next reference to `c.count`, which does go through the
+            // correct path. v1 (upstream ESPLiveScript) never has this
+            // problem in the first place -- its own struct_name
+            // (NodeToken.h) is declared once and never assigned anywhere
+            // else, so the equivalent branch there is permanently dead.
+            struct_name = NULL;
             // }
         }
 
@@ -2841,17 +2869,29 @@ void Parser::getVariable(bool isStore)
 
         nd.type = TokenUserDefinedVariableMemberFunction;
         nd.isPointer = true;
-        nd._total_size = search_result->getVarTypeObj()->total_size; // nd.copyChildren(current_node);
-                                                                     /*
-                                                                    for(int i=0;i<current_node->children_size();i++)
-                                                                    {
-                                                                        nd.addChild(*current_node->getChildAtPos(i));
-                                                                    }
-                                                             
-                                                                                     NodeToken *par=current_node->parent;
-                                                                    current_node->parent->children->pop_back();
-                                                                    current_node=par;
-                                                                    */
+        nd._total_size = search_result->getVarTypeObj()->total_size;
+        // nd is built fresh from search_result (the bare declaration --
+        // e.g. `arr`'s declaration, always element 0), which drops
+        // whatever index expression current_node already accumulated
+        // while parsing `arr[i]` above (added as current_node's own
+        // child by the `[` handling ~60 lines up). Without this, every
+        // `arr[i].method()` call's self-pointer silently resolves to
+        // arr[0] regardless of i -- both _visitglobalVariableNode's and
+        // _visitlocalVariableNode's `isPointer && children_size() > 0`
+        // branches (visitnode.cpp) already have the correct index-scaled
+        // addressing codegen for TokenUserDefinedVariableMemberFunction
+        // specifically, but neither is ever reached without this, since
+        // nd.children_size() is otherwise always 0. This exact loop used
+        // to be here (see git history), just commented out -- restored,
+        // minus its neighboring `current_node->parent->children->
+        // pop_back(); current_node = par;` lines, which would double up
+        // with the (already-active) UnknownNode/_node_token_stack
+        // handling directly below that already detaches current_node
+        // from further processing.
+        for (int i = 0; i < current_node->children_size(); i++)
+        {
+            nd.addChild(*current_node->getChildPtr(i));
+        }
         current_node->_nodetype = UnknownNode;
         // NodeToken *par = current_node;
         _node_token_stack.push_back(current_node);

@@ -16,7 +16,7 @@ result, using:
   doesn't implement the timer/interrupt controller ESP-IDF's startup code
   configures.
 
-This has been run against six representative scripts, all producing the
+This has been run against ten representative scripts, all producing the
 mathematically correct result:
 
 1. Arithmetic + control flow (nested for/if with +=/-=): computed `-4`,
@@ -71,6 +71,80 @@ mathematically correct result:
    default 240 MHz. (fib(50) itself, 12,586,269,025, would also overflow
    the script's 32-bit `int` return type if actually computed -- moot
    here since fib(50) is never actually called, only projected.)
+
+9. A global *struct array*'s element addressing, both writing a distinct
+   value into each of three elements (`arr[0].count=10; arr[1].count=20;
+   arr[2].count=30;`) and reading each back through a runtime-computed
+   index (`int getCount(int i) { return arr[i].count; }`), called
+   directly at three different `i` values (`gen_arr_index.cpp`/
+   `runner_arr_index.c`): `arr[0].count=10 arr[1].count=20
+   arr[2].count=30` -- three distinct, correct values, not the same
+   (wrong) address three times over. Also the first case here to
+   exercise an *internal* (non-external) global variable at all -- every
+   other case with one (case 7's gcd/fib/isPrime/clampInt) was
+   deliberately chosen to have none. That turned out to need its own
+   runtime relocation step this runner doesn't get from
+   `createExecutableFromBinary()` (which this scheme never actually
+   calls, unlike a normal load): an internal global's `l32r @_name`
+   literal is a placeholder, patched at load time the same way an
+   external variable's slot is (case 6) -- except *every* header
+   reservation this script has (`_handle_`/`_execaddr_`/`_sync`, each
+   function's own stack-scratch slot, and the array itself) turns out to
+   need the identical treatment, not just the array -- eight relocation
+   records total for this script, each patched by hand in
+   `runner_arr_index.c` before the compiled code ever runs, mirroring
+   exactly what `asm_execute.cpp`'s `decodeBinaryHeader` does for a real
+   load. Confirmed the hard way: patching only the array's own slot left
+   the runner hanging with no output at all; `qemu-system-xtensa -d
+   guest_errors` was what actually revealed why ("Invalid write at addr
+   0x0" -- one of the *other* seven slots, still unpatched).
+
+   This exercise also found and fixed a real bug of its own:
+   `visitnode.cpp`'s indexed struct-array codegen (`_visitglobalVariableNode`)
+   combined the computed, index-scaled offset into the base address via
+   `addi` (a genuine immediate) instead of `add` (register-to-register) --
+   passing a register *number* into `addi`'s immediate slot instead of
+   using that register's actual runtime value, so the real offset
+   `movi`/`mull` had just computed was silently discarded and every
+   array element resolved to the same fixed, generally-wrong address
+   regardless of index. Affected both `arr[i].field` reads and
+   `arr[i].method()` self-pointers (the latter needed its own,
+   independent fix first -- a stale `struct_name` in `parser.cpp` that
+   made every method call after the first struct definition anywhere in
+   a script hardcode its self-pointer as a fixed local stack offset,
+   ignoring both the actual variable and any index). See
+   `test/host/test_parser.cpp`'s `runStructArrayMethodSelfPointerTest`
+   for the host-side regression test checking the generated instruction
+   text directly.
+10. `ScriptExecutable::execute()` calling a script's top-level
+    initialization (`@__footer` -- most commonly a global struct array's
+    element constructors) before the requested function, matching
+    upstream ESPLiveScript's own `execute()` -- and the new
+    `executeOnly()` correctly *not* doing so (`gen_footer_check.cpp`/
+    `runner_footer_check.c`). A script-side `poison()` writes a sentinel
+    (-1) directly into a global struct's field, bypassing its
+    constructor entirely; `footer` then `getCount()` (matching
+    `execute()`'s order) must read back 99 (the constructor's real
+    value, overwriting the sentinel), while `getCount()` alone (matching
+    `executeOnly()`'s order, footer skipped) must still read back -1.
+    Both passed. Since `callXtensaDirect()` (`asm_execute.cpp`) is a
+    no-op on a non-Xtensa host, `ScriptExecutable::execute()` itself
+    can't be meaningfully exercised from a host-side generator the way
+    every other case's generator works -- this instead calls the exact
+    same underlying primitive (`callFunction()`, by address, via
+    `callx8`) `execute()`/`executeOnly()` are themselves thin wrappers
+    over, in the same order the fixed implementation calls them, so
+    what's verified is the identical runtime behavior on real Xtensa
+    hardware semantics. (Cross-compiling the whole parser/codegen
+    pipeline for real Xtensa, to call `ScriptExecutable` from *inside* a
+    bare-metal runner and test the wrapper class itself end to end, was
+    attempted first and hit unrelated build-configuration errors --
+    `NodeToken` members not resolving under the cross-compiler's exact
+    flags -- a separate problem from what this case exists to verify.)
+    Also the second case here (after case 9) to exercise an internal
+    global variable, and so the second to need the same by-hand
+    relocation-record patching `runner_arr_index.c` does -- see case 9's
+    writeup for the full explanation.
 
 This exercise also found and fixed a real bug: `addInstr()` was silently
 dropping `.bytes` reservation lines instead of reserving 4 bytes of

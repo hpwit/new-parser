@@ -809,6 +809,158 @@ static void runStructArrayFieldStrideTest()
     }
 }
 
+// Regression test for a bug found while investigating a *different* fix
+// (parser.cpp's method-call branch, ~line 2858, used to build a struct
+// method call's self-pointer argument from the bare variable
+// *declaration*, discarding any `[index]` expression already parsed
+// onto current_node -- fixed by restoring a copy-current_node's-children
+// loop that was sitting there commented out). That fix makes
+// `arr[i].method()`'s self-pointer correctly compute `i * sizeof(elem)`
+// via the same `movi <reg>,<stride>` / `mull` / `l32r <reg>,@_arr`
+// sequence runStructArrayFieldStrideTest() above already verifies for
+// plain field reads (visitnode.cpp's _visitglobalVariableNode/
+// _visitlocalVariableNode, ~line 678/2246) -- but revealed a second,
+// independent bug in the very next instruction, the one that actually
+// combines that computed offset into the base address: it emits
+//   addi a<X>,a<base>,<mull's destination register NUMBER>
+// (an *immediate* add of e.g. 15, since asmInstructionsName[addi]'s
+// template is "addi a%d,a%d,%d" -- a literal, not a register) instead of
+//   add a<X>,a<base>,a<mull's destination register>
+// (asmInstructionsName[add]'s template is "add a%d,a%d,a%d" -- all three
+// are registers) which would add that register's actual runtime value.
+// Confirmed live in BouncingBalls.ino's own `Balls[i].updateBall()`:
+// every call resolves to `@_Balls + 15` regardless of `i` instead of
+// `@_Balls + i*sizeof(ball)`. This test checks the *combining*
+// instruction specifically (register_numl.get()'s value at that call
+// site happens to be a real register number, so an "addi ...,<N>" bug
+// and a legitimate "addi ...,<N>" for some unrelated small constant N
+// look identical as bare text -- the only reliable way to tell them
+// apart is cross-checking N against the specific register mull just
+// wrote the real offset into, which is what this does), not just that
+// the preceding stride computation is correct.
+static void runStructArrayMethodSelfPointerTest()
+{
+    const char *name = "struct-array element method call (arr[i].method()) combines the computed index offset, not the register number as a literal";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        Parser p;
+        p.clean();
+        content.clear();
+        header.clear();
+        footer.clear();
+
+        Script s;
+        char *buf = strdup(
+            "struct Foo{int a,b; Foo(){a=0;b=0;} void bump(){a=a+1;}}"
+            "Foo arr[3];"
+            "void callBump(int i){arr[i].bump();}"
+            "void main(){}");
+        s.addContent(buf);
+        s.init();
+        p.parse(&s, &__allTokens);
+
+        bool ok = true;
+        if (Error.error)
+        {
+            printf("       parse error=%d (%s)\n", Error.error, error_messages[Error.error]);
+            ok = false;
+        }
+        else
+        {
+            int mullDestReg = -1;
+            for (int i = 0; i + 2 < content.size(); i++)
+            {
+                char *line = content.getText(i);
+                char *next = content.getText(i + 1);
+                char *after = content.getText(i + 2);
+                if (line == NULL || next == NULL || after == NULL)
+                    continue;
+                int reg = -1, imm = -1;
+                int mullDest = -1, mullA = -1, mullB = -1;
+                if (sscanf(line, "movi a%d,%d", &reg, &imm) == 2 && imm == 8 &&
+                    sscanf(next, "mull a%d,a%d,a%d", &mullDest, &mullA, &mullB) == 3 &&
+                    strstr(after, "@_arr") != NULL)
+                {
+                    mullDestReg = mullDest;
+                    break;
+                }
+            }
+            if (mullDestReg == -1)
+            {
+                printf("       did not find the expected 'movi a<reg>,8' / 'mull' / 'l32r ...,@_arr' sequence in the generated instructions\n");
+                ok = false;
+            }
+            else
+            {
+                bool foundCorrectCombine = false;
+                bool foundBuggyCombine = false;
+                for (int i = 0; i < content.size(); i++)
+                {
+                    char *line = content.getText(i);
+                    if (line == NULL)
+                        continue;
+                    int a = -1, b = -1, c = -1;
+                    if (sscanf(line, "add a%d,a%d,a%d", &a, &b, &c) == 3 && c == mullDestReg)
+                    {
+                        foundCorrectCombine = true;
+                        break;
+                    }
+                    if (sscanf(line, "addi a%d,a%d,%d", &a, &b, &c) == 3 && c == mullDestReg)
+                    {
+                        foundBuggyCombine = true;
+                        break;
+                    }
+                }
+                if (foundBuggyCombine)
+                {
+                    printf("       self-pointer combined via 'addi ...,%d' (the mull destination register's "
+                           "NUMBER used as a literal immediate) instead of 'add ...,a%d' (that register's "
+                           "actual runtime value)\n",
+                           mullDestReg, mullDestReg);
+                    ok = false;
+                }
+                else if (!foundCorrectCombine)
+                {
+                    printf("       did not find the expected 'add a<x>,a<base>,a%d' combining instruction\n", mullDestReg);
+                    ok = false;
+                }
+            }
+
+            Binary bin = createBinary(&footer, &header, &content, false);
+            if (bin.error.error)
+            {
+                printf("       assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+                ok = false;
+            }
+        }
+
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 // Exercises createExecutableFromBinary()/freeExecutable() (src/asm_execute.cpp)
 // on a script with an external call, checking the load+relocate step
 // completes and reports a start function -- without actually calling into
@@ -1742,6 +1894,7 @@ int main()
     registerBallEffectBindings();
     runAutoDeclareBinaryTest();
     runStructArrayFieldStrideTest();
+    runStructArrayMethodSelfPointerTest();
     runOptimizeUnitTest();
     runGenerateBinaryTest(
         "generates executable binary: empty function",

@@ -40,20 +40,86 @@ bool ScriptExecutable::isExeExists()
     return !exe.error.error && exe.start_program != NULL && exe.functions.size() > 0;
 }
 
+// "footer" (matching visitnode.cpp's `.global @__footer` label, stripped
+// of the "@__" callFunction()'s own name matching already expects --
+// see functionNameMatches(), asm_execute.cpp) may not exist for a given
+// script (nothing at its top level needed any). callFunction() simply
+// returns false in that case; ignored here on purpose, matching
+// upstream's own execute()'s equivalent call, whose result gets
+// discarded the same way (execute.h overwrites it with the real call's
+// result before ever checking it).
+static void runFooterIfAny(executable *exe)
+{
+    callFunction(exe, "footer", (const int32_t *)NULL, 0, NULL);
+}
+
 bool ScriptExecutable::execute(const char *name, int32_t *result)
 {
+    runFooterIfAny(&exe);
     return callFunction(&exe, name, (const int32_t *)NULL, 0, result);
 }
 
 bool ScriptExecutable::execute(const char *name, Arguments *args, int32_t *result)
 {
+    runFooterIfAny(&exe);
     return callFunction(&exe, name, args, result);
 }
 
 bool ScriptExecutable::execute(const char *name, const int32_t *args, int nargs, int32_t *result)
 {
+    runFooterIfAny(&exe);
     return callFunction(&exe, name, args, nargs, result);
 }
+
+bool ScriptExecutable::executeOnly(const char *name, int32_t *result)
+{
+    return callFunction(&exe, name, (const int32_t *)NULL, 0, result);
+}
+
+bool ScriptExecutable::executeOnly(const char *name, Arguments *args, int32_t *result)
+{
+    return callFunction(&exe, name, args, result);
+}
+
+bool ScriptExecutable::executeOnly(const char *name, const int32_t *args, int nargs, int32_t *result)
+{
+    return callFunction(&exe, name, args, nargs, result);
+}
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+namespace
+{
+struct ExecuteAsTaskParams
+{
+    ScriptExecutable *self;
+    const char *name;
+};
+
+void executeAsTaskTrampoline(void *param)
+{
+    ExecuteAsTaskParams *p = (ExecuteAsTaskParams *)param;
+    ScriptExecutable *self = p->self;
+    const char *name = p->name;
+    delete p;
+    self->execute(name);
+    vTaskDelete(NULL);
+}
+} // namespace
+
+bool ScriptExecutable::executeAsTask(const char *name, uint32_t stackSize, UBaseType_t priority, BaseType_t core)
+{
+    ExecuteAsTaskParams *params = new ExecuteAsTaskParams{this, name};
+    TaskHandle_t handle = NULL;
+    BaseType_t created = xTaskCreatePinnedToCore(executeAsTaskTrampoline, name, stackSize, params,
+                                                  priority, &handle, core);
+    if (created != pdPASS)
+    {
+        delete params;
+        return false;
+    }
+    return true;
+}
+#endif
 
 ScriptExecutable parseScript(const char *script)
 {

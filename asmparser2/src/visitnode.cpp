@@ -678,7 +678,17 @@ void _visitglobalVariableNode(NodeToken *nd)
             bufferText->addAfter(string_format(movi, point_regnum, nd->_total_size));
             bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(), point_regnum));
             bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
-            bufferText->addAfter(string_format(addi, point_regnum, point_regnum, register_numl.get()));
+            // addi's third operand is a genuine immediate ("addi a%d,a%d,%d",
+            // parser_enum.cpp) -- passing register_numl.get() here (a
+            // register *number*, e.g. 15) rendered as a literal "...,15"
+            // instead of adding that register's actual runtime value (the
+            // index-scaled offset the movi/mull pair above just computed
+            // into it). Every arr[i].field read / arr[i].method() call
+            // this branch handles resolved to the same fixed address
+            // regardless of i as a result. The sibling `v->total_size > 4`
+            // branch just below already does this correctly with `add`
+            // ("add a%d,a%d,a%d", all three registers) -- matching that.
+            bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
         }
         else if (v->total_size > 4)
         {
