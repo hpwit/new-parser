@@ -2264,7 +2264,16 @@ void Parser::parseExprConditionnal()
     sav_token.push_back(current_node);
     parseExpr();
     RETURN_IF_ERROR
-    while (Match(TokenDoubleEqual) || Match(TokenLessOrEqualThan) || Match(TokenLessThan) || Match(TokenMoreOrEqualThan) || Match(TokenMoreThan))
+    // TokenNotEqual ("!=") was missing here even though visitnode.cpp's
+    // codegen has always fully handled it (see its TokenDoubleEqual/
+    // TokenNotEqual/TokenMoreThan switch cases) -- meaning "!=" has never
+    // actually worked in any script: without this, "!=" is left
+    // unconsumed after parseExpr() returns, desyncing the token cursor
+    // for everything that follows and eventually crashing deep inside an
+    // unrelated statement (an assert(_size > 0) in vect::pop_back(),
+    // change_type popped once too often) rather than failing cleanly at
+    // the actual "!=" site.
+    while (Match(TokenDoubleEqual) || Match(TokenNotEqual) || Match(TokenLessOrEqualThan) || Match(TokenLessThan) || Match(TokenMoreOrEqualThan) || Match(TokenMoreThan))
     {
 
         // token *op = current();
