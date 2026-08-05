@@ -17,9 +17,11 @@
 // does the same -- without this, `bool b = true;` or
 // `pinInterrupt(_execaddr_, "fn", pin);` would fail to compile with a
 // confusing "impossible to find variable declaration" for something the
-// script never declared itself. One user-visible side effect: parse
-// error line numbers are offset by 4 (this prelude's own line count)
-// from the user's original script text.
+// script never declared itself. parseScript() below counts this
+// prelude's own lines and offsets _tokenizer_start_line accordingly, so
+// despite living in the same buffer the tokenizer reads, it doesn't
+// shift reported parse-error line numbers away from the user's own
+// script text.
 static const char *kPrelude =
     "#define true 1\n"
     "#define false 0\n"
@@ -141,9 +143,23 @@ ScriptExecutable parseScript(const char *script)
     s.addContent(buf);
     s.init();
 
+    // kPrelude precedes the user's own script text in the buffer the
+    // tokenizer actually reads, so without this, every reported error
+    // line would be offset by kPrelude's own line count -- counted here
+    // (not hardcoded) so it stays correct if kPrelude's content ever
+    // changes. See tokenize.h's _tokenizer_start_line comment: starting
+    // the line counter at 1 minus that count makes it land on exactly 1
+    // right as tokenizing crosses into the user's real script.
+    int preludeLines = 0;
+    for (const char *p = kPrelude; *p != 0; p++)
+        if (*p == '\n')
+            preludeLines++;
+    _tokenizer_start_line = 1 - preludeLines;
+
     Parser p;
     p.clean();
     p.parse(&s, &__allTokens);
+    _tokenizer_start_line = 1;
 
     if (Error.error)
     {

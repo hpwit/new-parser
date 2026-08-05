@@ -161,6 +161,12 @@ extern varType _varTypes[];
 extern const char * varTypeEnumNames[]; 
 extern vect<_define> define_list;
 extern int pos_in_line;
+// See tokenize.cpp's own comment: normally 1 (line numbers start at the
+// buffer's own first line); a caller that prepends boilerplate text
+// before the user's real script can set this to 1 minus that
+// boilerplate's line count so reported error lines stay relative to the
+// user's own text (see script_executable.cpp's parseScript()).
+extern int _tokenizer_start_line;
 //char *line_ref = NULL;
 extern bool isStructFunction;
 extern bool insecond;

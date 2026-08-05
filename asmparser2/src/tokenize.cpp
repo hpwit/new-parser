@@ -199,6 +199,18 @@ const char * keyword_array[] =
 bool _for_display = false;
 
 int _token_line;
+// What _token_line resets to at the start of a top-level tokenize()
+// pass (see tokenizer()'s `if (update)` block below). Defaults to 1 --
+// the normal case, matching every caller that hands Parser::parse() a
+// script buffer with nothing prepended to it. A caller that needs to
+// prepend boilerplate text before the user's own script (script_
+// executable.cpp's parseScript(), for its kPrelude) can set this to
+// 1 minus the prepended text's own line count instead, so _token_line
+// only reaches 1 once tokenizing crosses into the user's actual script
+// text -- keeping reported error line numbers relative to what the
+// user actually wrote, not an internal implementation detail like how
+// much boilerplate happens to precede it.
+int _tokenizer_start_line = 1;
 int _sav_token_line = 0;
 int pos_in_line = 0;
 char *line_ref = NULL;
@@ -975,7 +987,7 @@ int tokenizer(Script *script, bool update, bool increae_line,
         {
             _tks->push(Token());
         }
-        _token_line = 1;
+        _token_line = _tokenizer_start_line;
         pos_in_line = 0;
 
         if (!insecond)
@@ -1728,7 +1740,28 @@ int tokenizer(Script *script, bool update, bool increae_line,
                 while ((c != '*' or c2 != '/') and c2 != EOF_TEXT and c != EOF_TEXT) // stop when (c=* and c2=/) or c=0 or c2=0
                 {
                     if (c == '\n')
+                    {
                         _token_line++;
+                        // Every other newline-crossing path in this
+                        // tokenizer (the plain '\n' token handler above,
+                        // the '//' line-comment case just above this one)
+                        // re-syncs line_ref/pos_in_line here too --
+                        // this block-comment case used to only bump
+                        // _token_line, leaving line_ref pointing at
+                        // wherever the *comment itself* started. Harmless
+                        // for tokens on a later, later-newline-crossed
+                        // line (that later '\n' re-syncs it), but any
+                        // token on the *same* line the comment ends on
+                        // got displayLine()'s quoted source text/caret
+                        // from the comment's start line instead -- e.g. a
+                        // syntax error right after `*/` reported the
+                        // right line number with the wrong quoted line,
+                        // making the number itself look wrong. c2 (just
+                        // fetched below) is exactly the character after
+                        // this '\n', at script->currentCharPtr().
+                        line_ref = script->currentCharPtr();
+                        pos_in_line = 0;
+                    }
 
                     if (_for_display)
                         endchar++;
