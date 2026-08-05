@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+//#define ASM_PARSER_DEBUG
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
 #include "esp_heap_caps.h"
 // xthal_dcache_region_writeback()/xthal_icache_region_invalidate(): the
@@ -24,6 +24,31 @@
 #define ASM_EXEC_ON_TARGET 1
 #else
 #define ASM_EXEC_ON_TARGET 0
+#endif
+
+#ifdef ASM_PARSER_DEBUG
+// ASM_PARSER_DEBUG is opt-in, defined by the caller's own build (same
+// convention as json_binding.h's __JSON_OPTION__) -- a plain #define in
+// a sketch's .ino won't reach this file (Arduino compiles each .cpp as
+// its own translation unit), so it needs to be a project-wide build flag
+// (e.g. platformio.ini's build_flags, or a boards.txt/board_build.flags
+// entry) to actually take effect here.
+#if ASM_EXEC_ON_TARGET
+#include "esp_timer.h"
+// esp_timer_get_time(): ESP-IDF's own microsecond-resolution monotonic
+// clock, not Arduino's micros() -- this file already talks to ESP-IDF
+// directly elsewhere (heap_caps_malloc, xthal_*), and using it here
+// avoids adding an Arduino.h dependency just for timing.
+static inline int64_t debugNowMicros() { return esp_timer_get_time(); }
+#else
+#include <chrono>
+static inline int64_t debugNowMicros()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+#endif
 #endif
 
 // Walks a Binary's relocation header (createBinaryHeader's output) and
@@ -453,7 +478,13 @@ bool callFunction(executable *ex, const char *name, const int32_t *args, int nar
     // target->address is a byte offset from the start of start_program
     // (see the type-4 case in decodeBinaryHeader).
     uint8_t *entry = (uint8_t *)ex->start_program + target->address;
+#ifdef ASM_PARSER_DEBUG
+    int64_t __debugStart = debugNowMicros();
+#endif
     int32_t r = callXtensaDirect(entry, args, nargs);
+#ifdef ASM_PARSER_DEBUG
+    printf("ASM_PARSER_DEBUG: %s() took %lld us\n", name, (long long)(debugNowMicros() - __debugStart));
+#endif
     if (result != NULL)
         *result = r;
     return true;
