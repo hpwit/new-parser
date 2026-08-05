@@ -142,6 +142,13 @@ int addTextNoDelete(char* str);
 
     void putIteratorAtPos(int pos);
 
+    // Real index of _it within _texts -- unlike get() (which returns
+    // position-1, a monotonic insert counter that desyncs from _it's
+    // actual location once putIteratorAtPos() rewinds _it without
+    // touching position), this always matches what replaceText()/
+    // getChildAtPos() expect. Safe to call any time, rewound or not.
+    int currentPos();
+
     void end();
 
     void clear();

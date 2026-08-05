@@ -17,10 +17,35 @@
 #include "asm_types.h"
 #include "arguments.h"
 
+static int32_t callXtensaDirect(void *entry, const int32_t *args, int nargs) __attribute__((noinline, optimize("O0")));
 // Allocates memory for `bin`, relocates every external/internal reference
 // via binded_assets, and copies the code in. On error, ex.error.error is
 // non-zero and no memory has been leaked (nothing else is populated).
 executable createExecutableFromBinary(Binary *bin);
+
+// Diagnostic dump: prints every function this executable exposes as a
+// callable entry point (i.e. everything callFunction()/
+// runExecutableWithArgs() can find by name), one per line, with its
+// address as an offset from ex->start_program -- the same "relative
+// address" callFunction() itself adds to start_program to get the real
+// call target. Call this any time after createExecutableFromBinary()
+// has returned a loaded executable (ex->start_program/ex->functions
+// populated); does nothing useful before that. Skips wrapper records
+// (see isWrapperRecord()'s comment in asm_execute.cpp) -- they share
+// their plain counterpart's name and aren't independently callable, so
+// listing both would just show duplicate-looking names.
+void printExecutableFunctions(executable *ex);
+
+// Diagnostic dump: same idea as binary_hex.h's printBinaryHex(), but for
+// a *loaded* executable instead of the pre-load Binary. Dumps the
+// relocated instruction bytes actually sitting in ex->start_program
+// (ex->binary_size bytes -- on-target this is real MALLOC_CAP_EXEC
+// memory, already relocation-patched and cache-synced, unlike Binary's
+// binary_data which still has zeroed placeholder slots/literals) and the
+// data region at ex->data (ex->data_size bytes), as two clearly labeled
+// sections. Does nothing if ex is NULL or ex->start_program is NULL (e.g.
+// createExecutableFromBinary() failed).
+void printExecutableHex(executable *ex);
 
 // Calls any function declared in the script by name (e.g. "fib" for a
 // script that declares `int fib(int n) {...}`), passing up to 6 int32_t

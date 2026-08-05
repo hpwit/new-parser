@@ -26,6 +26,24 @@
 // on a real sketch that resolves to Serial output the same way those do.
 void printHex(const uint8_t *data, uint32_t size, uint32_t bytesPerLine = 16);
 
+// Same output format as printHex(), but reads `data` a 32-bit word at a
+// time instead of byte-by-byte -- required for dumping memory that isn't
+// byte-addressable from the CPU's data bus, which on real Xtensa/ESP32
+// silicon is exactly what MALLOC_CAP_EXEC/IRAM memory is: a plain
+// `uint8_t` load from it (what printHex()'s data[i] does) faults
+// (LoadStoreError), even though the same region is perfectly readable as
+// instructions or via 32-bit-aligned loads. Use this instead of printHex()
+// for any buffer that's real on-target executable memory -- in this
+// codebase, that's specifically an executable's start_program (see
+// asm_execute.h's printExecutableHex()), never a Binary's binary_data
+// (still plain host/heap memory at that stage, before
+// createExecutableFromBinary() copies it into MALLOC_CAP_EXEC). Assumes
+// `size` is a multiple of 4 (true for compiled instruction buffers --
+// Xtensa's own alignment padding, e.g. the nop/nop.n seen after every
+// function's retw.n, guarantees this); trailing bytes past the last full
+// word are not printed if it isn't.
+void printHexWords(const uint32_t *data, uint32_t size, uint32_t bytesPerLine = 16);
+
 // Convenience wrapper over printHex() for createBinary()'s own output:
 // dumps the instruction bytes (bin->binary_data, bin->instruction_size --
 // the same count test_large_script.cpp/every budget check in this repo

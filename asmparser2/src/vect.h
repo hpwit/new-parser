@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "assert.h"
 #include "parser_define.h"
 
@@ -45,7 +46,12 @@ private:
     T *point=NULL;
      uint16_t _size=0;
     uint16_t size_item;
-   
+    // How many elements `point` actually has room for -- may be larger
+    // than _size (see push_back()'s amortized-doubling growth below).
+    // Distinct from _size, which is "how many are actually live" --
+    // get()/getptr()/etc. all bounds-check against _size, never this.
+    uint16_t _capacity=0;
+    void _growIfFull();
 };
 
 template <typename T>
@@ -54,6 +60,7 @@ vect<T>::vect()
     point = NULL;
     size_item = sizeof(T);
     _size = 0;
+    _capacity = 0;
 }
 template <typename T>
 void vect<T>::init()
@@ -61,6 +68,7 @@ void vect<T>::init()
     point = NULL;
     size_item = sizeof(T);
     _size = 0;
+    _capacity = 0;
 }
 template <typename T>
 vect<T>::~vect()
@@ -77,23 +85,36 @@ int vect<T>::size()
 template <typename T>
 T *vect<T>::push_back(T asset)
 {
-    T *point2 = NULL;
-
-    if (point == NULL)
-        point2 = (T *)malloc(size_item);
-    else
-        point2 = (T *)p_realloc(point, (_size + 1) * size_item);
-    if (point2 == NULL)
+    // Amortized-doubling growth: only reallocate once _size actually
+    // catches up to _capacity, and then by roughly 2x, not by exactly
+    // one element every single call. A script with a few thousand
+    // instruction lines used to mean a few thousand one-element-at-a-
+    // time realloc() calls for `content` alone (before this, _size and
+    // capacity were always the same thing) -- brutal on a real,
+    // non-compacting embedded heap allocator: confirmed as the actual
+    // cause of `p_realloc`'s assert(tmp!=NULL) firing on real ESP32-S3
+    // (no PSRAM) hardware compiling MultiEffectController.ino, where
+    // realloc() legitimately returned NULL from heap fragmentation, not
+    // from the already-fixed realloc(ptr,0) case (see erase()'s own
+    // comment) -- there was plenty of nominal free heap, just no single
+    // contiguous block big enough after thousands of tiny one-at-a-time
+    // grow/shrink cycles. Doubling turns that into O(log n) reallocations
+    // instead of O(n).
+    if (_size >= _capacity)
     {
-        return NULL;
-    }
-    else
-    {
-        memcpy(point2 + _size, &asset, size_item);
+        int new_capacity = (_capacity == 0) ? 1 : (int)_capacity * 2;
+        T *point2 = (point == NULL) ? (T *)malloc((size_t)new_capacity * size_item)
+                                     : (T *)p_realloc(point, new_capacity * size_item);
+        if (point2 == NULL)
+        {
+            return NULL;
+        }
         point = point2;
-        _size++;
-        return point2 + _size - 1;
+        _capacity = (uint16_t)new_capacity;
     }
+    memcpy(point + _size, &asset, size_item);
+    _size++;
+    return point + _size - 1;
 }
 
 template <typename T>
@@ -141,15 +162,12 @@ T vect<T>::front()
 template <typename T>
 T vect<T>::pop_back()
 {
+    // Matches std::vector: popping never shrinks capacity/reallocates --
+    // only shrink_to_fit() (or clear(), which frees outright) gives
+    // memory back. See push_back()'s comment for why avoiding a realloc
+    // here on every single call matters.
     assert(_size > 0);
     T res = back();
-    if (_size > 1)
-        point = (T *)p_realloc(point, (_size - 1) * size_item);
-    else
-    {
-        free(point);
-        point = NULL;
-    }
     _size--;
     return res;
 }
@@ -160,13 +178,6 @@ T vect<T>::pop_front()
     assert(_size > 0);
     T res = front();
     memmove(point, point + 1, (_size - 1) * size_item);
-    if (_size > 1)
-        point = (T *)p_realloc(point, (_size - 1) * size_item);
-    else
-    {
-        free(point);
-        point = NULL;
-    }
     _size--;
     return res;
 }
@@ -185,43 +196,50 @@ T *vect<T>::end()
     return point + _size;
 }
 
+// Shared by insertBefore()/insertAfter(): grows capacity by doubling
+// (same reasoning as push_back()'s own comment) before an insert that's
+// about to need one more slot than is currently available.
+template <typename T>
+void vect<T>::_growIfFull()
+{
+    if (_size >= _capacity)
+    {
+        int new_capacity = (_capacity == 0) ? 1 : (int)_capacity * 2;
+        point = (T *)p_realloc(point, new_capacity * size_item);
+        _capacity = (uint16_t)new_capacity;
+    }
+}
+
 template <typename T>
 T *vect<T>::insertBefore(T *object,T asset )
 {
-    assert(object - point <= size_item * _size);
+    // `object - point` is pointer arithmetic on T* -- an *element*
+    // count -- but this used to compare it against `size_item * _size`,
+    // a *byte* count (size_item times too large a bound for any
+    // size_item > 1, i.e. almost always). A genuinely out-of-bounds
+    // `object` could never actually trip this, silently letting the
+    // memmove below run with garbage `diff` instead of catching the
+    // misuse where it happens. erase()'s own bounds assert already
+    // compares element counts to element counts correctly -- match it.
+    assert(object - point <= _size);
     uint32_t diff = object - point;
-    T *point2 = (T *)p_realloc(point, (_size + 1) * size_item);
-    memmove(point2 + diff + 1, point2 + diff, (size_item) * (_size - diff));
-    memcpy(point2 + diff, &asset, size_item);
+    _growIfFull();
+    memmove(point + diff + 1, point + diff, (size_item) * (_size - diff));
+    memcpy(point + diff, &asset, size_item);
     _size++;
-    point = point2;
-    return (point2 + diff);
+    return (point + diff);
 }
 
 template <typename T>
 void vect<T>::erase(T *asset)
 {
+    // Matches pop_back()/pop_front(): never reallocates on removal, so
+    // the realloc(ptr, 0) case that used to need special-casing here
+    // (see git history) can't come up at all any more -- there's no
+    // p_realloc() call on this path left to hit it.
     assert(asset - point < _size);
     uint32_t diff = asset - point;
     memmove(point + diff, point + diff + 1, (size_item) * (_size - diff - 1));
-    // Erasing the last remaining element shrinks to a 0-byte request.
-    // realloc(ptr, 0) is standards-compliant to return NULL (it's free()'s
-    // job in that case) -- p_realloc()'s assert(tmp!=NULL) treats that as
-    // an allocation failure, aborting. Harmless on host malloc (which
-    // historically tends to return a small non-NULL pointer here instead),
-    // but ASan's allocator and real hardware (confirmed: this exact path
-    // crashes on ESP32 for a trivial script) both return NULL as the
-    // standard permits. Special-case it the same way shrink_to_fit()
-    // already does below, instead of going through p_realloc at all.
-    if (_size == 1)
-    {
-        free(point);
-        point = NULL;
-    }
-    else
-    {
-        point = (T *)p_realloc(point, (_size - 1) * size_item);
-    }
     _size--;
 }
 
@@ -237,27 +255,34 @@ void vect<T>::erase(int k)
 template <typename T>
 void vect<T>::shrink_to_fit()
 {
-    
+    // The one place that actually gives unused capacity back -- safe to
+    // call after a burst of push_back()s/insertBefore()s followed by a
+    // long stretch where the vect's final size is now known and stable
+    // (tokenize.cpp/stackfunctions.h already do, at exactly those
+    // points).
     if (_size == 0 and point != NULL)
     {
         free(point);
         point = NULL;
-        
+        _capacity = 0;
     }
-    else if(_size > 0)
-    point = (T *)p_realloc(point, _size * size_item);
+    else if (_size > 0 and _size < _capacity)
+    {
+        point = (T *)p_realloc(point, _size * size_item);
+        _capacity = _size;
+    }
 }
 template <typename T>
 T *vect<T>::insertAfter(T *object,T asset )
 {
-    assert(object - point < size_item * _size);
+    // Same element-count-vs-byte-count fix as insertBefore()'s assert.
+    assert(object - point < _size);
     uint32_t diff = object - point;
-    T *point2 = (T *)p_realloc(point, (_size + 1) * size_item);
-    memmove(point2 + diff + 2, point2 + diff + 1, (size_item) * (_size - diff - 1));
-    memcpy(point2 + diff + 1, &asset, size_item);
+    _growIfFull();
+    memmove(point + diff + 2, point + diff + 1, (size_item) * (_size - diff - 1));
+    memcpy(point + diff + 1, &asset, size_item);
     _size++;
-    point = point2;
-    return (point2 + diff + 1);
+    return (point + diff + 1);
 }
 
 template <typename T>
@@ -275,6 +300,7 @@ void vect<T>::clear()
     if (point != NULL)
         free(point);
     _size = 0;
+    _capacity = 0;
     point = NULL;
 }
 template <typename T>

@@ -46,6 +46,18 @@ const char * asmInstructionsName[] =
         "beq%s a%d,a%d,%s%s",
         "bge%s a%d,a%d,%s%s",
         "bne%s a%d,a%d,%s%s",
+        // Branch-immediate forms (blti/beqi/bgei/bnei): one register, one
+        // *pre-encoded b4const table index* (0-15, not the actual
+        // comparison value -- e.g. comparing against 10 encodes as 9; see
+        // asm_encoders.h's bin_blti/bin_bgei/op_blti and visitnode.cpp's
+        // isBranchImmediate()/valBranchImmediate()), then the label. No
+        // "u" (unsigned) variant -- b4const's values are all small enough
+        // (1..256) that signed and unsigned comparisons agree, so this
+        // covers both without needing bltui/bgeui at all.
+        "blti a%d,%d,%s%s",
+        "beqi a%d,%d,%s%s",
+        "bgei a%d,%d,%s%s",
+        "bnei a%d,%d,%s%s",
         "ssl a%d",
         "sll a%d,a%d",
         "wsr a%d,%d",

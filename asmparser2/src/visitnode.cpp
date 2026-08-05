@@ -1176,6 +1176,140 @@ void _visitassignementNode(NodeToken *nd)
     register_numr.push(15);
 }
 
+// Ported from upstream ESPLiveScript (v1, NodeToken.h's isBranchImmediate()/
+// valBranchImmediate()): Xtensa's BccI branch-immediate instructions
+// (BLTI/BEQI/BGEI/BNEI) don't take an arbitrary immediate -- only 16
+// specific values, the "B4CONST" table {-1,1,2,3,4,5,6,7,8,10,12,16,32,
+// 64,128,256}, each identified by its table index (0-15), which is what
+// actually gets encoded (see asm_encoders.h's bin_blti/bin_bgei and
+// op_blti's l0_15 operand). _visitcomparatorNode() below uses these to
+// fold `if (x < 5)`-style comparisons against one of these 16 values
+// straight into a single branch instruction instead of a movi
+// (loading the constant into a register) followed by a register-register
+// branch.
+//
+// `inverse` supports `>`/`<=`, which Xtensa has no direct immediate form
+// for -- `x > 9` becomes `x >= 10` (BGEI) and `x <= 9` becomes `x < 10`
+// (BLTI) by incrementing the constant first, so eligibility has to be
+// checked against `val + 1` being in the table instead of `val` itself;
+// the 14 values here are exactly the regular table's values minus 1.
+// (Table index 0, value -1, is never reachable through either path --
+// nothing here ever calls this with val <= 0.)
+static bool isBranchImmediate(int val, bool inverse)
+{
+    if (!inverse)
+    {
+        switch (val)
+        {
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 5:
+        case 6:
+        case 7:
+        case 8:
+        case 10:
+        case 12:
+        case 16:
+        case 32:
+        case 64:
+        case 128:
+        case 256:
+            return true;
+        default:
+            return false;
+        }
+    }
+    else
+    {
+        switch (val)
+        {
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 5:
+        case 6:
+        case 7:
+        case 9:
+        case 11:
+        case 15:
+        case 31:
+        case 63:
+        case 127:
+        case 255:
+            return true;
+        default:
+            return false;
+        }
+    }
+}
+
+// Maps a value already confirmed eligible via isBranchImmediate(val, false)
+// to its B4CONST table index (what the instruction text/encoder actually
+// need -- see the comment above). Caller must have already incremented
+// `val` if this follows an isBranchImmediate(..., true) (inverse) check.
+//
+// v1's own version of this table has a real bug worth noting, not
+// repeating here: its case 256 returns 14 -- the same index as 128,
+// so encoding a comparison against the literal 256 would have silently
+// compared against 128 instead. 256 correctly maps to index 15 below.
+static int valBranchImmediate(int val)
+{
+    switch (val)
+    {
+    case 1:
+        return 1;
+    case 2:
+        return 2;
+    case 3:
+        return 3;
+    case 4:
+        return 4;
+    case 5:
+        return 5;
+    case 6:
+        return 6;
+    case 7:
+        return 7;
+    case 8:
+        return 8;
+    case 10:
+        return 9;
+    case 12:
+        return 10;
+    case 16:
+        return 11;
+    case 32:
+        return 12;
+    case 64:
+        return 13;
+    case 128:
+        return 14;
+    case 256:
+        return 15;
+    default:
+        // Unreachable if isBranchImmediate() was checked first, as every
+        // call site below does.
+        return 0;
+    }
+}
+
+// True if `nd` (a comparatorNode's RHS operand -- always a changeTypeNode
+// wrapper, see parser.cpp's parseExprConditionnal()) is nothing more than
+// a bare integer literal, e.g. `5` in `x < 5` -- not `x < y` or
+// `x < (y+1)`. Only that shape can become a branch-immediate: the actual
+// value has to be known at compile time, and the wrapper must have
+// exactly the one child parseExprConditionnal() gives a bare literal
+// (parseExpr()'s own operator loop never ran, so nothing else got added).
+static bool isLiteralIntOperand(NodeToken *changeTypeWrapper)
+{
+    return changeTypeWrapper->children_size() == 1 &&
+           changeTypeWrapper->getChildPtr(0)->_nodetype == numberNode &&
+           changeTypeWrapper->getChildPtr(0)->_vartype != __float__;
+}
+
 void _visitcomparatorNode(NodeToken *nd)
 {
     // printf("in comparator\n");
@@ -1224,6 +1358,17 @@ void _visitcomparatorNode(NodeToken *nd)
     int leftl = register_numl.get();
 
     // register_numl.duplicate();
+    // Real _texts index of whatever nd->getChildPtr(1)->visitNode() is
+    // about to emit (its movi, for the literal-int case the immediate-
+    // branch path below cares about) -- captured *before* the visit,
+    // via currentPos()+1 (the position the *next* addAfter() will land
+    // on). This survives _visitifNode/_visitforNode later rewinding
+    // bufferText's iterator to splice the condition in before an
+    // already-generated body: unlike bufferText->get() (an insert
+    // counter that keeps climbing across such a rewind without tracking
+    // _it's real position), currentPos() always matches _it's actual
+    // location (see its comment in stackfunctions.h).
+    int rhsPos = bufferText->currentPos() + 1;
     nd->getChildPtr(1)->visitNode();
     // register_numl.pop();
 
@@ -1339,82 +1484,257 @@ void _visitcomparatorNode(NodeToken *nd)
     }
     else
     {
+        // Ported from upstream ESPLiveScript's isBranchImmediate()-guarded
+        // codegen (see the comment on isBranchImmediate() above): if the
+        // RHS is a bare literal in Xtensa's B4CONST table, fold the
+        // comparison straight into a single blti/beqi/bgei/bnei instead
+        // of the movi-then-register-branch pair below. `>`/`<=` go
+        // through the "inverse" (val+1) eligibility check and increment
+        // `f` to their `>=`/`<` equivalent first, since Xtensa has no
+        // direct immediate form for strict-greater/less-or-equal.
+        //
+        // Each case that qualifies sets `leftl` to whichever of
+        // numl/leftl the *first* (LHS) operand's register actually ended
+        // up in -- necessary since which of the two held it (and
+        // whether the regular, non-immediate form below needs a swap or
+        // not) differs per case/block; the immediate form always reads
+        // its one register operand from `leftl`.
+        bool immediate = false;
+        int f = 0;
+        if (isLiteralIntOperand(nd->getChildPtr(1)))
+        {
+            f = stringToInt(nd->getChildPtr(1)->getChildPtr(0)->getText());
+        }
+
         if (nd->_total_size > 127)
         {
-            switch (nd->type)
+            if (isLiteralIntOperand(nd->getChildPtr(1)))
             {
-            case TokenLessThan:
-                compop = blt; //"blt"; // greater or equal
-                //  bufferText->addAfter( string_format("%s_end:\n",nd->target.c_str()));
-                break;
-            case TokenDoubleEqual:
-                compop = beq; //"beq"; // not equal
-                break;
-            case TokenNotEqual:
-                compop = bne; //"bne"; // equal
-                break;
-            case TokenMoreOrEqualThan:
-                compop = bge; //"bge"; // less then
-                break;
-            case TokenMoreThan:
-                compop = blt; //"blt"; // not equal
-                h = numl;
-                numl = leftl;
-                leftl = h;
-                break;
-            case TokenLessOrEqualThan:
-                compop = bge; //"bge"; // not equal
-                h = numl;
-                numl = leftl;
-                leftl = h;
-                break;
-            default:
-                compop = bge;
-                break;
+                switch (nd->type)
+                {
+                case TokenLessThan:
+                    if (isBranchImmediate(f, false))
+                    {
+                        compop = blti;
+                        leftl = numl;
+                        immediate = true;
+                    }
+                    break;
+                case TokenDoubleEqual:
+                    if (isBranchImmediate(f, false))
+                    {
+                        compop = bnei;
+                        leftl = numl;
+                        immediate = true;
+                    }
+                    break;
+                case TokenNotEqual:
+                    if (isBranchImmediate(f, false))
+                    {
+                        compop = beqi;
+                        leftl = numl;
+                        immediate = true;
+                    }
+                    break;
+                case TokenMoreOrEqualThan:
+                    if (isBranchImmediate(f, false))
+                    {
+                        compop = bgei;
+                        leftl = numl;
+                        immediate = true;
+                    }
+                    break;
+                case TokenMoreThan:
+                    if (isBranchImmediate(f, true))
+                    {
+                        compop = bgei;
+                        leftl = numl;
+                        f++;
+                        immediate = true;
+                    }
+                    break;
+                case TokenLessOrEqualThan:
+                    if (isBranchImmediate(f, true))
+                    {
+                        compop = blti;
+                        leftl = numl;
+                        f++;
+                        immediate = true;
+                    }
+                    break;
+                default:
+                    break;
+                }
             }
-            bufferText->addAfter(string_format(compop, _add, numl, leftl, nd->getTargetText(), "_if"));
+            if (!immediate)
+            {
+                switch (nd->type)
+                {
+                case TokenLessThan:
+                    compop = blt; //"blt"; // greater or equal
+                    //  bufferText->addAfter( string_format("%s_end:\n",nd->target.c_str()));
+                    break;
+                case TokenDoubleEqual:
+                    compop = beq; //"beq"; // not equal
+                    break;
+                case TokenNotEqual:
+                    compop = bne; //"bne"; // equal
+                    break;
+                case TokenMoreOrEqualThan:
+                    compop = bge; //"bge"; // less then
+                    break;
+                case TokenMoreThan:
+                    compop = blt; //"blt"; // not equal
+                    h = numl;
+                    numl = leftl;
+                    leftl = h;
+                    break;
+                case TokenLessOrEqualThan:
+                    compop = bge; //"bge"; // not equal
+                    h = numl;
+                    numl = leftl;
+                    leftl = h;
+                    break;
+                default:
+                    compop = bge;
+                    break;
+                }
+                bufferText->addAfter(string_format(compop, _add, numl, leftl, nd->getTargetText(), "_if"));
+            }
+            else
+            {
+                // The RHS's own codegen (nd->getChildPtr(1)->visitNode()
+                // above) already emitted the movi that loaded it into a
+                // register the immediate form doesn't need -- blank it
+                // by its captured real position (rhsPos), not
+                // blankCurrent()'s hardcoded "last element of _texts":
+                // _visitifNode/_visitforNode may have already rewound
+                // bufferText's iterator to splice this condition in
+                // before an already-generated body, in which case the
+                // true last element is somewhere inside that body, not
+                // the RHS's own movi.
+                bufferText->replaceText(rhsPos, " ");
+                bufferText->addAfter(string_format(compop, leftl, valBranchImmediate(f), nd->getTargetText(), "_if"));
+            }
             bufferText->addAfter(string_format("j %s_end", nd->getTargetText()));
             bufferText->addAfter(string_format("%s_if:", nd->getTargetText()));
-          
+
             register_numl.increase();
         }
         else
         {
-            switch (nd->type)
+            if (isLiteralIntOperand(nd->getChildPtr(1)))
             {
-            case TokenLessThan:
-                compop = bge; //"bge"; // greater or equal blt
-                //  bufferText->addAfter( string_format("%s_end:\n",nd->target.c_str()));
-                break;
-            case TokenDoubleEqual:
-                compop = bne; //"bne"; // not equal beq
-                break;
-            case TokenNotEqual:
-                compop = beq; //"beq"; // equal
-                break;
-            case TokenMoreOrEqualThan:
-                compop = blt; //"blt"; // less then
-                break;
-            case TokenMoreThan:
-                compop = bge; //"bge"; // not equal
-                h = numl;
-                numl = leftl;
-                leftl = h;
-                break;
-            case TokenLessOrEqualThan:
-                compop = blt; //"blt"; // not equal
-                h = numl;
-                numl = leftl;
-                leftl = h;
-                break;
-            default:
-                compop = bge;
-                break;
+                switch (nd->type)
+                {
+                case TokenLessThan:
+                    if (isBranchImmediate(f, false))
+                    {
+                        compop = bgei;
+                        h = numl;
+                        numl = leftl;
+                        leftl = h;
+                        immediate = true;
+                    }
+                    break;
+                case TokenDoubleEqual:
+                    if (isBranchImmediate(f, false))
+                    {
+                        compop = bnei;
+                        leftl = numl;
+                        immediate = true;
+                    }
+                    break;
+                case TokenNotEqual:
+                    if (isBranchImmediate(f, false))
+                    {
+                        compop = beqi;
+                        leftl = numl;
+                        immediate = true;
+                    }
+                    break;
+                case TokenMoreOrEqualThan:
+                    if (isBranchImmediate(f, false))
+                    {
+                        compop = blti;
+                        h = numl;
+                        numl = leftl;
+                        leftl = h;
+                        immediate = true;
+                    }
+                    break;
+                case TokenMoreThan:
+                    if (isBranchImmediate(f, true))
+                    {
+                        compop = blti;
+                        h = numl;
+                        numl = leftl;
+                        leftl = h;
+                        f++;
+                        immediate = true;
+                    }
+                    break;
+                case TokenLessOrEqualThan:
+                    if (isBranchImmediate(f, true))
+                    {
+                        compop = bgei;
+                        h = numl;
+                        numl = leftl;
+                        leftl = h;
+                        f++;
+                        immediate = true;
+                    }
+                    break;
+                default:
+                    break;
+                }
             }
-            bufferText->addAfter(string_format(compop, _add, numl, leftl, nd->getTargetText(), "_end"));
-            // bufferText->addAfter(_compare.back()+1,string_format("j %s_end", nd->target.c_str()));
-            // bufferText->addAfter(_compare.back()+2,string_format("%s_if:", nd->target.c_str()));
-           // free(_add);
+            if (!immediate)
+            {
+                switch (nd->type)
+                {
+                case TokenLessThan:
+                    compop = bge; //"bge"; // greater or equal blt
+                    //  bufferText->addAfter( string_format("%s_end:\n",nd->target.c_str()));
+                    break;
+                case TokenDoubleEqual:
+                    compop = bne; //"bne"; // not equal beq
+                    break;
+                case TokenNotEqual:
+                    compop = beq; //"beq"; // equal
+                    break;
+                case TokenMoreOrEqualThan:
+                    compop = blt; //"blt"; // less then
+                    break;
+                case TokenMoreThan:
+                    compop = bge; //"bge"; // not equal
+                    h = numl;
+                    numl = leftl;
+                    leftl = h;
+                    break;
+                case TokenLessOrEqualThan:
+                    compop = blt; //"blt"; // not equal
+                    h = numl;
+                    numl = leftl;
+                    leftl = h;
+                    break;
+                default:
+                    compop = bge;
+                    break;
+                }
+                bufferText->addAfter(string_format(compop, _add, numl, leftl, nd->getTargetText(), "_end"));
+                // bufferText->addAfter(_compare.back()+1,string_format("j %s_end", nd->target.c_str()));
+                // bufferText->addAfter(_compare.back()+2,string_format("%s_if:", nd->target.c_str()));
+               // free(_add);
+            }
+            else
+            {
+                // See the "_if" block's identical comment above -- rhsPos
+                // (not blankCurrent()) is what correctly survives a prior
+                // iterator rewind.
+                bufferText->replaceText(rhsPos, " ");
+                bufferText->addAfter(string_format(compop, leftl, valBranchImmediate(f), nd->getTargetText(), "_end"));
+            }
             register_numl.increase();
         }
     }
@@ -2847,7 +3167,28 @@ void _visitternaryIfNode(NodeToken *nd)
 
 void _visitcallConstructorNode(NodeToken *nd)
 {
-    int size = nd->_total_size / nd->getVarTypeObj()->total_size;
+    // getVarTypeObj()->total_size (the struct's own per-instance byte
+    // size, shared by the type -- NOT specific to this array
+    // declaration) is 0 for a struct with no data members (a
+    // constructor-only struct, e.g. one that only calls printfln()/does
+    // other side effects). nd->_total_size (this array's total byte
+    // footprint = element_count * that per-instance size) is then *also*
+    // unavoidably 0, since count*0==0 regardless of count -- so this used
+    // to be a genuine 0/0 integer division, undefined behavior in C++.
+    // On host (ARM64) that silently evaluates to 0, masking it; compiled
+    // for Xtensa/ESP32 (no hardware integer divide, so this routes
+    // through a software libgcc division routine at actual script-
+    // compile time, since Parser::parse() itself runs on-device),
+    // divide-by-zero behavior is implementation-defined and was
+    // confirmed to produce a real, reproduced-on-hardware crash (Guru
+    // Meditation Error: InstrFetchProhibited, PC=0x00000000) for exactly
+    // this case. Guarding the divisor to at least 1 makes this
+    // deterministic instead: size still comes out 0 (the array's own
+    // element count is unrecoverable once multiplied by a 0-byte
+    // per-instance size -- a separate, pre-existing limitation, not
+    // fixed here), so only the first element's constructor still runs,
+    // but safely, with no UB.
+    int size = nd->_total_size / (nd->getVarTypeObj()->total_size > 0 ? nd->getVarTypeObj()->total_size : 1);
 
     if (nd->stack_pos > 0)
     {

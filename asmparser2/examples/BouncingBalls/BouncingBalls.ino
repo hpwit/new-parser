@@ -1,7 +1,8 @@
 // A more realistic ESPLiveScript program: a struct with a constructor and
 // two member functions, nested for loops, +=, the ^ (power) operator, an
-// array of structs, float division, and five host-bound calls --
-// rand/setPixel/clear/show/printfln.
+// array of structs, float division, four host-bound calls (rand/setPixel/
+// clear/show) and one compiler built-in (printfln -- see setup()'s own
+// comment on why it must NOT be bound here).
 //
 // Three real compiler gaps used to block this script from ever reaching
 // createBinary() successfully, let alone running it reliably; all three
@@ -76,7 +77,11 @@ external uint32_t rand(uint32_t s);
 external void setPixel(int x, int y, int c);
 external void clear();
 external void show();
-external void printfln(char* a0, Args a1);
+// printfln is a compiler built-in (see runtime_functions.h/README.md's
+// "Built-in printf / printfln" and ScriptPrintf.ino) -- no `external`
+// declaration or bindFunction() call needed, unlike every other host
+// call in this script. See setup()'s own comment on the bindFunction()
+// call this used to have here, before printf/printfln became built-in.
 
 #define max_nb_balls 20
 #define rmax 8
@@ -180,9 +185,16 @@ void setup()
    bindFunction((char *)"void", (char *)"setPixel", (char *)"int,int,int", (void *)scriptSetPixel);
    bindFunction((char *)"void", (char *)"clear", NULL, (void *)scriptClear);
    bindFunction((char *)"void", (char *)"show", NULL, (void *)scriptShow);
-   // printfln is variadic ("Args") -- left unresolved here, a companion
-   // loader would bind it to a real printf-style function.
-   bindFunction((char *)"void", (char *)"printfln", (char *)"char*,Args", NULL);
+   // Do NOT bindFunction() printfln here: it's a compiler built-in (see
+   // the script's own comment above), auto-registered the first time
+   // anything is parsed -- but only if nothing has already bound that
+   // name first (registerBuiltinRuntimeFunctions(), runtime_functions.cpp,
+   // skips it via findLink() if so). This used to bind printfln to NULL
+   // ("left unresolved... a companion loader would bind it"), which
+   // shadowed the real built-in and left main()'s very first statement
+   // (printfln("numberof balls:%d",num);) calling through a null
+   // function pointer -- a real, reproduced-on-hardware crash (Guru
+   // Meditation Error: InstrFetchProhibited, PC=0x00000000).
 
    ScriptExecutable exec = parseScript(script);
    if (!exec.isExeExists())

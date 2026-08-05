@@ -295,6 +295,12 @@
         _it = getChildAtPos(pos);
         //position=pos-1;
     }
+    int Text::currentPos()
+    {
+        if (_it == _texts.end())
+            return _texts.size() - 1;
+        return (int)(_it - _texts.begin());
+    }
     void Text::end()
     {
         _it = getChildAtPos(_texts.size() - 1);

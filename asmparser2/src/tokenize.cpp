@@ -1865,37 +1865,50 @@ int tokenizer(Script *script, bool update, bool increae_line,
             pos_in_line++;
             while (c != '"' && c != EOF_TEXT)
             {
-                if (!_for_display)
-                {
-                    char c2 = script->nextChar();
-                    if (c == '\\' and c2 == 'n')
-                    {
-                        c = '\x0d';
-                        endchar++;
-                        c = '\x0a';
-                        endchar++;
-                        c = script->nextChar();
-                    }
-                    else
-                    {
-                        endchar++;
-                        c = c2;
-                    }
-
-                    pos_in_line++;
-                }
-                else
-                {
-                    endchar++;
-                    c = script->nextChar();
-                    pos_in_line++;
-                }
+                endchar++;
+                c = script->nextChar();
+                pos_in_line++;
             }
             // script->previousChar(); //on revient un caractere en arriere
             // pos--;
             endchar++;
             t.type = (int)TokenString;
-            t.addText(vchar, endchar);
+            if (_for_display)
+            {
+                t.addText(vchar, endchar);
+            }
+            else
+            {
+                // Substitute "\n" (the two literal source characters
+                // '\' and 'n') with real \x0d\x0a bytes, matching v1's
+                // tokenizer.h (same substitution, same CRLF choice).
+                // vchar/endchar are raw pointers into the original
+                // script text -- unlike v1's std::string-based vchar,
+                // which appended the already-substituted bytes as it
+                // scanned, addText(vchar,endchar) here just memcpy()s
+                // whatever's between them, so escape decoding has to
+                // happen into a separate heap buffer first. Output is
+                // never longer than the raw span (each "\n" pair
+                // collapses to 2 real bytes -- the same count), so
+                // endchar-vchar+2 bytes always fits it plus the NUL.
+                char *decoded = (char *)malloc((endchar - vchar) + 2);
+                int di = 0;
+                for (char *p = vchar; p <= endchar; p++)
+                {
+                    if (*p == '\\' && p + 1 <= endchar && p[1] == 'n')
+                    {
+                        decoded[di++] = '\x0d';
+                        decoded[di++] = '\x0a';
+                        p++;
+                    }
+                    else
+                    {
+                        decoded[di++] = *p;
+                    }
+                }
+                decoded[di] = 0;
+                t.addText(decoded);
+            }
             _tks->push(t);
             nbReadToken++;
             continue;

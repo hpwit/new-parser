@@ -1,6 +1,7 @@
 #include "asm_execute.h"
 #include "binding.h"
 #include "string_functions.h"
+#include "binary_hex.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +9,18 @@
 
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
 #include "esp_heap_caps.h"
+// xthal_dcache_region_writeback()/xthal_icache_region_invalidate(): the
+// Xtensa HAL's own cache-maintenance primitives (part of the toolchain's
+// Xtensa HAL, not an ESP-IDF-version-specific wrapper -- stable across
+// ESP-IDF/Arduino-ESP32 releases). Needed below, after memcpy()-ing
+// freshly compiled code into exec (heap_caps_malloc(..., MALLOC_CAP_EXEC)
+// memory): a plain memcpy only guarantees the *data* side sees the new
+// bytes, not that the CPU's instruction fetch path does too -- Xtensa's
+// D-cache/I-cache (and, for a loop like a struct array's constructor
+// calls, potentially loop/branch-prediction state keyed off the old
+// content that used to live at this same heap address) aren't
+// automatically kept coherent with plain stores the way x86 is.
+#include "xtensa/hal.h"
 #define ASM_EXEC_ON_TARGET 1
 #else
 #define ASM_EXEC_ON_TARGET 0
@@ -180,6 +193,36 @@ executable createExecutableFromBinary(Binary *bin)
 #endif
     uint8_t *binary_data = (uint8_t *)malloc(bin->data_size > 0 ? bin->data_size : 4);
 
+    // Neither allocation's result used to be checked before being handed
+    // to decodeBinaryHeader()/memcpy() below -- harmless on host, where
+    // a script this size never comes close to exhausting memory, but a
+    // real crash on target: confirmed via a decoded on-device backtrace
+    // landing right on this function's own memcpy(exec, ...) with
+    // EXCVADDR/A2 both 0x0 (a NULL destination) -- MALLOC_CAP_EXEC
+    // memory (must be IRAM-eligible, executable) is a far scarcer pool
+    // than general RAM, especially on an ESP32-S3 without PSRAM, and
+    // heap_caps_malloc() legitimately returns NULL rather than crashing
+    // itself when it can't find a large enough contiguous block. Turn
+    // that into the same clean "loader error" ScriptExecutable's
+    // constructor already knows how to report, instead of a silent
+    // NULL-pointer store.
+    if (exec == NULL || binary_data == NULL)
+    {
+        exe.error.error = 1;
+        exe.error.error_message = (char *)"could not allocate executable/data memory for this script "
+                                           "(out of MALLOC_CAP_EXEC or general heap)";
+#if ASM_EXEC_ON_TARGET
+        if (exec != NULL)
+            heap_caps_free(exec);
+#else
+        if (exec != NULL)
+            free(exec);
+#endif
+        if (binary_data != NULL)
+            free(binary_data);
+        return exe;
+    }
+
     asm_error_message_struct error = decodeBinaryHeader(
         bin->binary_data, bin->function_data, binary_data,
         (uint32_t)(uintptr_t)exec, &exe, bin->instruction_size);
@@ -210,11 +253,30 @@ executable createExecutableFromBinary(Binary *bin)
 
     memcpy(exec, bin->binary_data, bin->instruction_size);
 
+#if ASM_EXEC_ON_TARGET
+    // Without this, a script that runs cleanly the first time (or that
+    // never got called through this exact heap_caps_malloc() address
+    // before) can still fault later, unpredictably, on a *different*
+    // script loaded at the same now-reused address, or partway through
+    // its own execution once instruction fetch outruns what the data
+    // side actually flushed to memory -- a real, reproduced-on-hardware
+    // crash (Guru Meditation Error: InstrFetchProhibited/wild jump) that
+    // never shows up under QEMU (its simple TCG-based CPU emulation
+    // doesn't model instruction/data cache incoherency for freshly
+    // written code the way real Xtensa silicon does), confirmed by
+    // comparing execution of identical compiled bytes from a
+    // statically-linked .text location (fine) against a copy freshly
+    // written into a heap buffer immediately before being called (not).
+    xthal_dcache_region_writeback(exec, bin->instruction_size);
+    xthal_icache_region_invalidate(exec, bin->instruction_size);
+#endif
+
     exe.start_program = exec;
     exe.data = binary_data;
     exe.binary_size = bin->instruction_size;
     exe.data_size = bin->data_size;
-
+   // printExecutableHex(&exe);
+   // printExecutableFunctions(&exe);
     return exe;
 }
 
@@ -236,6 +298,26 @@ static bool functionNameMatches(const char *label, const char *name)
     return strlen(name) == len && strncmp(p, name, len) == 0;
 }
 
+// Same "@_"/"@__" prefix + "(...)" suffix strip as functionNameMatches(),
+// but returning the bare name (into `out`, capped at outSize-1 bytes)
+// instead of comparing it -- for display purposes only.
+static void cleanFunctionName(const char *label, char *out, size_t outSize)
+{
+    const char *p = label;
+    if (p[0] == '@' && p[1] == '_')
+    {
+        p += 2;
+        if (p[0] == '_')
+            p += 1;
+    }
+    const char *paren = strchr(p, '(');
+    size_t len = paren ? (size_t)(paren - p) : strlen(p);
+    if (len > outSize - 1)
+        len = outSize - 1;
+    memcpy(out, p, len);
+    out[len] = 0;
+}
+
 // A function declared with N>0 parameters gets a *wrapper* record whose
 // `variables` field is "N size1 size2 ..." (createBinaryHeader reads it
 // from the ".var N size..." line) and a *plain* record -- the real
@@ -250,6 +332,43 @@ static bool isWrapperRecord(globalcall *gc)
     return gc->variables != NULL && gc->variables[0] >= '0' && gc->variables[0] <= '9';
 }
 
+void printExecutableFunctions(executable *ex)
+{
+    if (ex == NULL || ex->functions.size() == 0)
+    {
+        printf("(no functions)\n");
+        return;
+    }
+    for (int i = 0; i < ex->functions.size(); i++)
+    {
+        globalcall *gc = ex->functions.getptr(i);
+        if (isWrapperRecord(gc))
+            continue;
+        char name[64];
+        cleanFunctionName(gc->name, name, sizeof(name));
+        printf("%s: offset=0x%04x  start=0x%04x (%u)\n", name, gc->address,
+               (uint32_t)(uintptr_t)ex->start_program, gc->address);
+    }
+}
+
+void printExecutableHex(executable *ex)
+{
+    if (ex == NULL || ex->start_program == NULL)
+        return;
+
+    // start_program is real MALLOC_CAP_EXEC/IRAM memory on-target --
+    // printHexWords() reads it a 32-bit word at a time, since a plain
+    // byte load from IRAM faults on real Xtensa/ESP32 silicon (see
+    // binary_hex.h). ex->data, in contrast, is plain malloc()'d RAM
+    // (createExecutableFromBinary() never puts it in MALLOC_CAP_EXEC), so
+    // ordinary byte access via printHex() is fine there.
+    printf("instructions (%u bytes):\n", ex->binary_size);
+    printHexWords(ex->start_program, ex->binary_size);
+
+    printf("data (%u bytes):\n", ex->data_size);
+    printHex(ex->data, ex->data_size);
+}
+
 // Places up to 6 int32/float(-as-bits) values into a10..a15 and calls
 // `entry` via callx8 -- the same registers (and the same a10 = first
 // argument mapping to the callee's a2) a compiled call8 caller like the
@@ -259,8 +378,10 @@ static bool isWrapperRecord(globalcall *gc)
 // also where the script's `return expr;` leaves its value (see
 // visitnode.cpp). A no-op returning 0 when not actually built for
 // Xtensa, since these register names aren't valid on any other target.
-static int32_t callXtensaDirect(void *entry, const int32_t *args, int nargs)
+static int32_t callXtensaDirect(void *entry, const int32_t *args, int nargs)  
 {
+   // printf("callXtensaDirect: calling entry=%p\n", entry);
+    
 #ifdef __xtensa__
     register int32_t r10 __asm__("a10") = nargs > 0 ? args[0] : 0;
     register int32_t r11 __asm__("a11") = nargs > 1 ? args[1] : 0;
@@ -271,7 +392,7 @@ static int32_t callXtensaDirect(void *entry, const int32_t *args, int nargs)
     register void *r8 __asm__("a8") = entry;
     __asm__ volatile("callx8 a8\n\t"
                       : "+r"(r10)
-                      : "r"(r11), "r"(r12), "r"(r13), "r"(r14), "r"(r15), "r"(r8)
+                      : "r"(r11), "r"(r12), "r"(r13), "r" (r14), "r"(r15),"r"(r8)
                       : "memory");
     return r10;
 #else
@@ -280,6 +401,7 @@ static int32_t callXtensaDirect(void *entry, const int32_t *args, int nargs)
     (void)nargs;
     return 0;
 #endif
+
 }
 
 // Converts a typed Arguments list into the raw int32_t[] the register-
@@ -382,6 +504,7 @@ bool runExecutableWithArgs(executable *ex, const int32_t *args, int nargs)
 
     uint8_t *entry = (uint8_t *)ex->start_program + target->address;
     void (*fn)() = (void (*)())(void *)entry;
+    printf("runExecutableWithArgs: calling entry=%p\n", (void *)entry);
     fn();
     return true;
 }

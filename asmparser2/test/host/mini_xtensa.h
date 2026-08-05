@@ -310,6 +310,32 @@ struct MiniXtensa
                 return true;
             }
         }
+        else if (strcmp(op, "blti") == 0 || strcmp(op, "bgei") == 0 || strcmp(op, "beqi") == 0 || strcmp(op, "bnei") == 0)
+        {
+            // Second operand is a *pre-encoded b4const table index*
+            // (0-15), not the literal value being compared against --
+            // see visitnode.cpp's isBranchImmediate()/valBranchImmediate()
+            // and asm_encoders.h's op_blti for the same table.
+            static const int32_t b4const[16] = {-1, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 32, 64, 128, 256};
+            int32_t a = readReg(args.get(0));
+            int idx = (int)toI32(args.get(1));
+            int32_t b = (idx >= 0 && idx < 16) ? b4const[idx] : 0;
+            bool taken = (strcmp(op, "blti") == 0 && a < b) ||
+                         (strcmp(op, "bgei") == 0 && a >= b) ||
+                         (strcmp(op, "beqi") == 0 && a == b) ||
+                         (strcmp(op, "bnei") == 0 && a != b);
+            if (taken)
+            {
+                int target = findLabel(labelNames, labelPos, args.get(2));
+                if (target < 0)
+                {
+                    *error = "unresolved branch target";
+                    return false;
+                }
+                *pcInOut = target;
+                return true;
+            }
+        }
         else
         {
             *error = op; // caller's error string just names the unsupported mnemonic

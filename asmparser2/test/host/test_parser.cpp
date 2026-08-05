@@ -1980,6 +1980,73 @@ int main()
         "void main(){int a; int b; int sum; a=1; b=0; "
         "for (a = 0; a < 5; a++) { if (a < 3) { b = b + a; } else { b = b - a; } } "
         "sum = b;}");
+    // Branch-immediate (blti/beqi/bgei/bnei) codegen correctness, for
+    // every comparison operator, in the "small" (target _end) comparator
+    // block -- see visitnode.cpp's isBranchImmediate()/valBranchImmediate()
+    // and _visitcomparatorNode(). Each single-statement if body keeps
+    // nd->_total_size well under the 127 threshold that would instead pick
+    // the "large" (target _if) block (already covered, for '<' only, by
+    // the nested for/if test above and gen_arithmetic.cpp's QEMU case,
+    // both real-hardware-verified).
+    //
+    // r1 collects one distinct bit per operator's TRUE case, plus the
+    // 256-vs-128 boundary case (regression coverage for a real bug found
+    // in upstream v1's valBranchImmediate(): it mapped both 128 and 256 to
+    // b4const index 14, when 256 should be index 15 -- v2's port fixes
+    // this, see visitnode.cpp) and one non-eligible-immediate case (11 is
+    // not in Xtensa's b4const table, so `a<11` must fall back to the
+    // ordinary register-register `bge`, exercising that this new
+    // eligibility check doesn't regress the pre-existing path). Expected
+    // 0xFF (all eight bits set) only if every TRUE case is actually taken.
+    //
+    // r2 mirrors the same eight cases with each comparison's FALSE
+    // outcome (or, for the boundary/fallback pair, the value that must
+    // NOT satisfy them) -- expected 0 only if none of them wrongly
+    // branch. Together these catch both "branch never taken" and "branch
+    // always taken" classes of bug per operator, e.g. an inverted compop
+    // or a wrong leftl/numl register swap for that specific case.
+    runCorrectnessTest(
+        "branch-immediate (blti/beqi/bgei/bnei): true cases all taken (r1 == 0xFF)",
+        "void main(){int a; int r1; int r2; r1=0; r2=0; "
+        "a=3; if(a<5){r1=r1+1;} "
+        "a=5; if(a==5){r1=r1+2;} "
+        "a=6; if(a!=5){r1=r1+4;} "
+        "a=5; if(a>=5){r1=r1+8;} "
+        "a=6; if(a>5){r1=r1+16;} "
+        "a=5; if(a<=5){r1=r1+32;} "
+        "a=256; if(a==256){r1=r1+64;} "
+        "a=9; if(a<11){r1=r1+128;} "
+        "a=7; if(a<5){r2=r2+1;} "
+        "a=6; if(a==5){r2=r2+2;} "
+        "a=5; if(a!=5){r2=r2+4;} "
+        "a=4; if(a>=5){r2=r2+8;} "
+        "a=5; if(a>5){r2=r2+16;} "
+        "a=6; if(a<=5){r2=r2+32;} "
+        "a=128; if(a==256){r2=r2+64;} "
+        "a=12; if(a<11){r2=r2+128;} "
+        "}",
+        60, 255);
+    runCorrectnessTest(
+        "branch-immediate (blti/beqi/bgei/bnei): false cases all skipped (r2 == 0)",
+        "void main(){int a; int r1; int r2; r1=0; r2=0; "
+        "a=3; if(a<5){r1=r1+1;} "
+        "a=5; if(a==5){r1=r1+2;} "
+        "a=6; if(a!=5){r1=r1+4;} "
+        "a=5; if(a>=5){r1=r1+8;} "
+        "a=6; if(a>5){r1=r1+16;} "
+        "a=5; if(a<=5){r1=r1+32;} "
+        "a=256; if(a==256){r1=r1+64;} "
+        "a=9; if(a<11){r1=r1+128;} "
+        "a=7; if(a<5){r2=r2+1;} "
+        "a=6; if(a==5){r2=r2+2;} "
+        "a=5; if(a!=5){r2=r2+4;} "
+        "a=4; if(a>=5){r2=r2+8;} "
+        "a=5; if(a>5){r2=r2+16;} "
+        "a=6; if(a<=5){r2=r2+32;} "
+        "a=128; if(a==256){r2=r2+64;} "
+        "a=12; if(a<11){r2=r2+128;} "
+        "}",
+        64, 0);
     runEquivalenceTest(
         "optimized/unoptimized equivalence: repeated-read arithmetic",
         "void main(){int a; int b; a = 7; b = a + a + a; a = b - a; }");
