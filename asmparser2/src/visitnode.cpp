@@ -466,7 +466,7 @@ void _visitoperatorNode(NodeToken *nd)
         if (ff)
         {
             bufferText->addAfter(string_format(movs, 1, register_numl.get()));
-            bufferText->addAfter(string_format(movs, 1, register_numr.get()));
+            bufferText->addAfter(string_format(movs, 2, register_numr.get()));
             bufferText->addAfter("call8  @___div(d|d)");
             bufferText->addAfter(string_format(movs, register_numl.get(), 0));
             addfloatdivision = true;
