@@ -12,6 +12,14 @@ int local_var_num = 0;
 vect<int> _compare;
 bool intest = false;
 bool addfloatdivision = false;
+// Set for the duration of a for-loop whose parse attached an onlyNode
+// marker (parser.cpp) -- exactly one external array/pointer was stored
+// into anywhere within it. While true, a7 already holds that array's
+// resolved base address (loaded once, before the loop, by _visitforNode
+// below), so _visitstoreExtGlocalVariableNode() can skip re-resolving it
+// per store and just copy from a7 instead. Ported from v1's identical
+// boolextern flag.
+bool boolextern = false;
 
 // Hand-assembled Xtensa FP division (there's no single hardware
 // instruction for it) -- ported verbatim from upstream ESPLiveScript's
@@ -1909,48 +1917,342 @@ void _visitcallFunctionNode(NodeToken *nd)
     }
 }
 
+// Emits a bottom-tested for-loop's own condition check: branches
+// *directly back to the loop body* when the condition still holds --
+// one instruction per iteration in the common case -- instead of
+// _visitcomparatorNode()'s top-tested "skip the body if false" shape
+// (kept unchanged, and still used as-is by _visitifNode/_visitwhileNode
+// and by _visitforNode()'s own fallback for anything this doesn't
+// handle). Mirrors _visitcomparatorNode()'s testNode branch
+// register-capture order and mnemonic-selection tables exactly (see the
+// two switches below), just with the near/far roles swapped: there, the
+// body is what's near (immediately following) and the loop end is
+// potentially far; here, the loop end is what's immediately adjacent
+// (the caller emits "%s_end:" right after this returns) and the body
+// -- now the branch-back target -- is what's potentially far away.
+// `test` is the testNode itself (a comparatorNode's child0, already
+// confirmed non-float and one of the 6 relational token types by
+// _visitforNode() *before* calling this, using only parse-time-resolved
+// fields -- this function's own child visits below have real,
+// one-shot side effects, same as _visitcomparatorNode()'s). `distance`
+// is the already-measured byte gap from the loop body's own start back
+// to here, analogous to _visitcomparatorNode()'s nd->_total_size but
+// measured in the opposite direction, since this condition sits *after*
+// the body in program order instead of before it.
+void _visitforConditionRotated(NodeToken *test, char *bodyLabel, int distance)
+{
+    int numl = register_numl.get();
+
+    if (test->getChildPtr(0)->_vartype == __float__)
+        test->getChildPtr(1)->_vartype = __float__;
+    if (test->getChildPtr(1)->_vartype == __float__)
+        test->getChildPtr(0)->_vartype = __float__;
+    char *_add = NULL;
+    if (test->getChildPtr(0)->_vartype == __uint32_t__ || test->getChildPtr(1)->_vartype == __uint32_t__)
+        _add = str_concat("%s%s", _add, "u");
+    else
+        _add = str_concat("%s%s", _add, "");
+
+    test->getChildPtr(0)->visitNode();
+    int leftl = register_numl.get();
+    int rhsPos = bufferText->currentPos() + 1;
+    test->getChildPtr(1)->visitNode();
+
+    asmInstruction compop;
+    int h;
+    bool immediate = false;
+    int f = 0;
+    if (isLiteralIntOperand(test->getChildPtr(1)))
+        f = stringToInt(test->getChildPtr(1)->getChildPtr(0)->getText());
+
+    if (distance <= 127)
+    {
+        // Body is within short-branch range: natural sense (matches
+        // _visitcomparatorNode()'s own >127/"_if" block's mnemonic
+        // choices exactly), straight back to it, one instruction.
+        if (isLiteralIntOperand(test->getChildPtr(1)))
+        {
+            switch (test->type)
+            {
+            case TokenLessThan:
+                if (isBranchImmediate(f, false)) { compop = blti; leftl = numl; immediate = true; }
+                break;
+            case TokenDoubleEqual:
+                if (isBranchImmediate(f, false)) { compop = bnei; leftl = numl; immediate = true; }
+                break;
+            case TokenNotEqual:
+                if (isBranchImmediate(f, false)) { compop = beqi; leftl = numl; immediate = true; }
+                break;
+            case TokenMoreOrEqualThan:
+                if (isBranchImmediate(f, false)) { compop = bgei; leftl = numl; immediate = true; }
+                break;
+            case TokenMoreThan:
+                if (isBranchImmediate(f, true)) { compop = bgei; leftl = numl; f++; immediate = true; }
+                break;
+            case TokenLessOrEqualThan:
+                if (isBranchImmediate(f, true)) { compop = blti; leftl = numl; f++; immediate = true; }
+                break;
+            default:
+                break;
+            }
+        }
+        if (!immediate)
+        {
+            switch (test->type)
+            {
+            case TokenLessThan:
+                compop = blt;
+                break;
+            case TokenDoubleEqual:
+                compop = beq;
+                break;
+            case TokenNotEqual:
+                compop = bne;
+                break;
+            case TokenMoreOrEqualThan:
+                compop = bge;
+                break;
+            case TokenMoreThan:
+                compop = blt;
+                h = numl; numl = leftl; leftl = h;
+                break;
+            case TokenLessOrEqualThan:
+                compop = bge;
+                h = numl; numl = leftl; leftl = h;
+                break;
+            default:
+                compop = bge;
+                break;
+            }
+            bufferText->addAfter(string_format(compop, _add, numl, leftl, bodyLabel, ""));
+        }
+        else
+        {
+            bufferText->replaceText(rhsPos, " ");
+            bufferText->addAfter(string_format(compop, leftl, valBranchImmediate(f), bodyLabel, ""));
+        }
+    }
+    else
+    {
+        // Body is too far for a direct short branch: inverted sense
+        // (matches _visitcomparatorNode()'s own <=127/"_end" block's
+        // mnemonic choices exactly) short-branches to a label right
+        // here -- always in range -- when the condition is false,
+        // falling through to a long-range unconditional jump back to
+        // the body when it's still true.
+        if (isLiteralIntOperand(test->getChildPtr(1)))
+        {
+            switch (test->type)
+            {
+            case TokenLessThan:
+                if (isBranchImmediate(f, false)) { compop = bgei; h = numl; numl = leftl; leftl = h; immediate = true; }
+                break;
+            case TokenDoubleEqual:
+                if (isBranchImmediate(f, false)) { compop = bnei; leftl = numl; immediate = true; }
+                break;
+            case TokenNotEqual:
+                if (isBranchImmediate(f, false)) { compop = beqi; leftl = numl; immediate = true; }
+                break;
+            case TokenMoreOrEqualThan:
+                if (isBranchImmediate(f, false)) { compop = blti; h = numl; numl = leftl; leftl = h; immediate = true; }
+                break;
+            case TokenMoreThan:
+                if (isBranchImmediate(f, true)) { compop = blti; h = numl; numl = leftl; leftl = h; f++; immediate = true; }
+                break;
+            case TokenLessOrEqualThan:
+                if (isBranchImmediate(f, true)) { compop = bgei; h = numl; numl = leftl; leftl = h; f++; immediate = true; }
+                break;
+            default:
+                break;
+            }
+        }
+        if (!immediate)
+        {
+            switch (test->type)
+            {
+            case TokenLessThan:
+                compop = bge;
+                break;
+            case TokenDoubleEqual:
+                compop = bne;
+                break;
+            case TokenNotEqual:
+                compop = beq;
+                break;
+            case TokenMoreOrEqualThan:
+                compop = blt;
+                break;
+            case TokenMoreThan:
+                compop = bge;
+                h = numl; numl = leftl; leftl = h;
+                break;
+            case TokenLessOrEqualThan:
+                compop = blt;
+                h = numl; numl = leftl; leftl = h;
+                break;
+            default:
+                compop = bge;
+                break;
+            }
+            bufferText->addAfter(string_format(compop, _add, numl, leftl, bodyLabel, "_skip"));
+        }
+        else
+        {
+            bufferText->replaceText(rhsPos, " ");
+            bufferText->addAfter(string_format(compop, leftl, valBranchImmediate(f), bodyLabel, "_skip"));
+        }
+        bufferText->addAfter(string_format("j %s", bodyLabel));
+        bufferText->addAfter(string_format("%s_skip:", bodyLabel));
+    }
+
+    if (_add != NULL)
+        free(_add);
+}
+
 void _visitforNode(NodeToken *nd)
 {
     // printf("ente for\n") ;
     point_regnum = 5;
 
+    // Ported from v1 (NodeToken.h's _visitforNode): if parser.cpp's
+    // for-loop parsing attached an onlyNode marker to this node (exactly
+    // one distinct external array/pointer got stored into anywhere
+    // within this -- possibly nested -- for-loop), resolve that array's
+    // base address once, here, before the loop, instead of letting
+    // _visitstoreExtGlocalVariableNode() re-resolve it on every single
+    // store. onlyNode is always the *last* child when present (appended
+    // after every real child parser.cpp gives a for-node), so checking
+    // its type there -- not children_size() alone -- is what
+    // distinguishes it from a real, already-existing 5th child (a
+    // for-loop with more than one comma-separated increment expression,
+    // e.g. `for(...;...;i++,j++)`) rather than colliding with that
+    // unrelated, pre-existing use of a variable child count.
+    int realChildren = nd->children_size();
+    bool hasOnlyExternal = realChildren > 0 &&
+                            nd->getChildPtr(realChildren - 1)->_nodetype == (int)onlyNode;
+    if (hasOnlyExternal)
+        realChildren--;
+
     register_numl.duplicate();
     nd->getChildPtr(0)->visitNode();
     register_numl.pop();
 
-    bufferText->addAfter(string_format("%s:", nd->getTargetText()));
-    _compare.push_back(bufferText->get());
-
-    register_numl.duplicate();
-    if (nd->children_size() > 4)
+    if (hasOnlyExternal)
     {
-        nd->getChildPtr(3)->visitNode();
-        nd->getChildPtr(4)->visitNode();
+        // v2's movExt (unlike v1's) already resolves straight to the
+        // external variable's final value -- no separate dereference
+        // needed, see _visitstoreExtGlocalVariableNode()'s own existing,
+        // un-hoisted movExt emission for the same thing.
+        bufferText->addAfter(string_format("movExt a7,@_ext_%s", nd->getChildPtr(realChildren)->getTargetText()));
+        boolextern = true;
+    }
+
+    // Bottom-tested (loop-rotated) fast path, ported from v1: one branch
+    // per iteration instead of a compare-and-fall-through plus a
+    // separate unconditional jump back. Only takes it for a plain,
+    // non-float, testNode-wrapped relational condition (i<96-style) --
+    // by far the common shape for a for-loop -- checked here using only
+    // already parse-time-resolved fields (node type, vartype), *before*
+    // emitting anything, since _visitforConditionRotated()'s own child
+    // visits have real, one-shot side effects there's no clean way to
+    // undo if eligibility were checked mid-emission instead. Anything
+    // else (float bound, or a non-relational/generic-boolean condition)
+    // falls through to the original top-tested shape below, unchanged.
+    bool rotated = false;
+    NodeToken *test = NULL;
+    if (nd->getChildPtr(1)->getChildPtr(0)->_nodetype == (int)testNode)
+    {
+        test = nd->getChildPtr(1)->getChildPtr(0);
+        if (test->getChildPtr(0)->_vartype != __float__ && test->getChildPtr(1)->_vartype != __float__)
+        {
+            switch (test->type)
+            {
+            case TokenLessThan:
+            case TokenMoreOrEqualThan:
+            case TokenDoubleEqual:
+            case TokenNotEqual:
+            case TokenMoreThan:
+            case TokenLessOrEqualThan:
+                rotated = true;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
+    if (rotated)
+    {
+        bufferText->addAfter(string_format("j test_%s", nd->getTargetText()));
+        bufferText->addAfter(string_format("%s:", nd->getTargetText()));
+        int bodyStart = bufferText->get();
+
+        register_numl.duplicate();
+        if (realChildren > 4)
+        {
+            nd->getChildPtr(3)->visitNode();
+            nd->getChildPtr(4)->visitNode();
+        }
+        else
+        {
+            nd->getChildPtr(3)->visitNode();
+        }
+        register_numl.pop();
+
+        bufferText->addAfter(string_format("%s_continue:", nd->getTargetText()));
+
+        register_numl.duplicate();
+        nd->getChildPtr(2)->visitNode();
+        register_numl.pop();
+
+        bufferText->addAfter(string_format("test_%s:", nd->getTargetText()));
+
+        int distance = (bufferText->get() - bodyStart) * 3;
+        register_numl.duplicate();
+        _visitforConditionRotated(test, nd->getTargetText(), distance);
+        register_numl.pop();
+
+        bufferText->addAfter(string_format("%s_end:", nd->getTargetText()));
     }
     else
     {
-        nd->getChildPtr(3)->visitNode();
+        bufferText->addAfter(string_format("%s:", nd->getTargetText()));
+        _compare.push_back(bufferText->get());
+
+        register_numl.duplicate();
+        if (realChildren > 4)
+        {
+            nd->getChildPtr(3)->visitNode();
+            nd->getChildPtr(4)->visitNode();
+        }
+        else
+        {
+            nd->getChildPtr(3)->visitNode();
+        }
+        register_numl.pop();
+
+        bufferText->addAfter(string_format("%s_continue:", nd->getTargetText()));
+
+        register_numl.duplicate();
+        nd->getChildPtr(2)->visitNode();
+        register_numl.pop();
+
+        int jumpsize = (bufferText->get() - _compare.back()) * 3;
+        nd->getChildPtr(1)->_total_size = jumpsize;
+        bufferText->putIteratorAtPos(_compare.back());
+
+        register_numl.duplicate();
+        nd->getChildPtr(1)->visitNode();
+        register_numl.pop();
+
+        _compare.pop_back();
+        bufferText->putIteratorAtPos(bufferText->get());
+        bufferText->addAfter(string_format("j %s", nd->getTargetText()));
+        bufferText->addAfter(string_format("%s_end:", nd->getTargetText()));
     }
-    register_numl.pop();
 
-    bufferText->addAfter(string_format("%s_continue:", nd->getTargetText()));
-
-    register_numl.duplicate();
-    nd->getChildPtr(2)->visitNode();
-    register_numl.pop();
-
-    int jumpsize = (bufferText->get() - _compare.back()) * 3;
-    nd->getChildPtr(1)->_total_size = jumpsize;
-    bufferText->putIteratorAtPos(_compare.back());
-
-    register_numl.duplicate();
-    nd->getChildPtr(1)->visitNode();
-    register_numl.pop();
-
-    _compare.pop_back();
-    bufferText->putIteratorAtPos(bufferText->get());
-    bufferText->addAfter(string_format("j %s", nd->getTargetText()));
-    bufferText->addAfter(string_format("%s_end:", nd->getTargetText()));
+    if (hasOnlyExternal)
+        boolextern = false;
     // clearNodeToken(nd);
     return;
 }
@@ -2736,8 +3038,21 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
         bufferText->addAfter(string_format("__test_safe_%d:", for_if_num2));
         for_if_num2++;
     }
-    bufferText->addAfter(string_format("movExt a%d,@_ext_%s",
-                                       point_regnum, nd->getText()));
+    // boolextern (see _visitforNode()): if the enclosing for-loop already
+    // resolved this exact array's base address into a7 once, before the
+    // loop, just copy it -- nbofextern's parse-time count already
+    // guarantees a store reached while boolextern is true can only ever
+    // be to that one hoisted array, no name check needed here either
+    // (matching v1's identical, equally unconditional `if (!boolextern)`).
+    if (!boolextern)
+    {
+        bufferText->addAfter(string_format("movExt a%d,@_ext_%s",
+                                           point_regnum, nd->getText()));
+    }
+    else
+    {
+        bufferText->addAfter(string_format(mov, point_regnum, 7));
+    }
     if (nd->isPointer && nd->children_size() > 0)
     {
         // f=f+number.f;

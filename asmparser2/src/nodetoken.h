@@ -61,6 +61,16 @@ enum nodeType
 	defInputArgumentsNode,
 	declarationFunctionNode,
 	jsonBindingNode,
+	// Marker child a for-loop's parse attaches to itself (see parser.cpp's
+	// createNodeVariable()/for-loop parsing and visitnode.cpp's
+	// _visitforNode()) when exactly one distinct external array/pointer
+	// was stored into anywhere within it (including nested for-loops --
+	// only the outermost for-loop of a directly-nested chain gets this).
+	// Its target text is that variable's name. Lets codegen hoist the
+	// movExt+dereference that resolves the array's base address to once,
+	// before the loop, instead of once per iteration -- ported from v1's
+	// identical onlyNode/nbofextern/extvariablestore mechanism.
+	onlyNode,
 	UnknownNode
 
 };

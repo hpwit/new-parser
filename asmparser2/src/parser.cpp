@@ -31,6 +31,23 @@ bool saveRegAbs = false;
 bool _asPointer = false;
 int for_if_num = 0;
 int block_statement_num = 0;
+// Ported from v1 (NodeToken.h/ESPLiveScript.h): tracks, across a
+// (possibly nested) chain of directly-nested for-loops, how many
+// *distinct* external array/pointer variables got stored into anywhere
+// within it. _for_num is the current for-loop nesting depth (see the
+// TokenKeywordFor case below); nbofextern/extvariablestore only get
+// reset once _for_num returns to 0, i.e. once the *outermost* for-loop
+// of the chain finishes parsing -- so a store seen in an inner loop
+// still counts toward the outer loop's tally. If exactly one distinct
+// array was found, an onlyNode marker recording its name gets attached
+// to that outermost for-loop, letting visitnode.cpp's _visitforNode()
+// hoist resolving that array's base address to once before the loop
+// instead of once per iteration (see createNodeVariable()'s two
+// extGlobalVariableNode/defExtGlobalVariableNode isStore cases below for
+// where nbofextern/extvariablestore actually get updated).
+int _for_num = 0;
+int nbofextern = 0;
+char *extvariablestore = NULL;
 char *signature;
 bool isExtra;
 vect<NodeToken> nodeTokenList;
@@ -1747,6 +1764,7 @@ void Parser::parseStatement()
             current_node = current_node->addChild(NodeToken(statementNode));
 
             _is_variable_as_register.set(false);
+            _for_num++;
 
             if (_for_depth_reg.get() <= _MAX_FOR_DEPTH_REG)
             {
@@ -1796,6 +1814,19 @@ void Parser::parseStatement()
             }
 
             Error.error = 0;
+
+            _for_num--;
+            if (_for_num == 0)
+            {
+                if (nbofextern == 1)
+                {
+                    NodeToken nd = NodeToken(onlyNode);
+                    nd.addTargetText(extvariablestore);
+                    current_node->addChild(nd);
+                }
+                nbofextern = 0;
+                extvariablestore = NULL;
+            }
 
             current_cntx = current_cntx->parent;
             current_node = current_node->parent;
@@ -3015,6 +3046,18 @@ void createNodeVariable(Token *_var, bool isStore)
             // NodeStoreExtGlobalVariable v = NodeStoreExtGlobalVariable(var);
             // NodeStoreExtGlobalVariable v = NodeStoreExtGlobalVariable(_var);
             v._nodetype = (int)storeExtGlocalVariableNode;
+            // See the _for_num/nbofextern/extvariablestore comment near
+            // this file's top -- ported from v1's identical tracking.
+            if (extvariablestore != NULL)
+            {
+                if (strcmp(extvariablestore, v.getText()) != 0)
+                    nbofextern++;
+            }
+            else
+            {
+                extvariablestore = v.getText();
+                nbofextern++;
+            }
             // current_node->asPointer=asPointer;
             //  return;
         }
@@ -3034,6 +3077,16 @@ void createNodeVariable(Token *_var, bool isStore)
         {
             // NodeStoreExtGlobalVariable v = NodeStoreExtGlobalVariable(_var);
             v._nodetype = (int)storeExtGlocalVariableNode;
+            if (extvariablestore != NULL)
+            {
+                if (strcmp(extvariablestore, v.getText()) != 0)
+                    nbofextern++;
+            }
+            else
+            {
+                extvariablestore = v.getText();
+                nbofextern++;
+            }
             // current_node->asPointer=asPointer;
             // return;
         }
