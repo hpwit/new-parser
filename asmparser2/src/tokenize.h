@@ -167,7 +167,8 @@ extern int pos_in_line;
 // boilerplate's line count so reported error lines stay relative to the
 // user's own text (see script_executable.cpp's parseScript()).
 extern int _tokenizer_start_line;
-//char *line_ref = NULL;
+extern char *line_ref;
+extern int _token_line;
 extern bool isStructFunction;
 extern bool insecond;
 #endif

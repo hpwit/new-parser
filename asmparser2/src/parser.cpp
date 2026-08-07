@@ -1178,6 +1178,27 @@ void Parser::parseFunctionCall()
                     // string toinsert = external_links[i].name; //"external " + external_links[i].out + " " + external_links[i].name + "("+external_links[i].in + ");";
                    
                     //  main_script.previousChar();
+                    // _token_line/pos_in_line/line_ref are globals shared by
+                    // every Tokens instance (tokenize.cpp) -- tokenizing this
+                    // scratch declaration below (update=true) resets them to
+                    // point into extra_script's own buffer (and, worse,
+                    // _token_line resets to whatever _tokenizer_start_line
+                    // currently is, which during a parseScript() call is a
+                    // large negative kPrelude offset, not 1 -- see
+                    // script_executable.cpp). extra_script is a local that
+                    // gets .clear()'d a few lines down, so without this
+                    // save/restore, every token the *real* script tokenizes
+                    // after this call returns carries a wrapped-negative
+                    // uint16_t line number and a dangling lineref into freed
+                    // memory, until the next real newline happens to
+                    // resync line_ref -- so any parse error reported before
+                    // that point (even one genuinely unrelated to this
+                    // function, possibly much later in the script) displays
+                    // this declaration's own text/position instead of its
+                    // real location.
+                    int savedTokenLine = _token_line;
+                    int savedPosInLine = pos_in_line;
+                    char *savedLineRef = line_ref;
                     Script extra_script;
                     extra_script.clear();
 
@@ -1220,6 +1241,12 @@ void Parser::parseFunctionCall()
                         //           printf("cold\n\r");
                         return;
                     }
+                    // Restore the real script's own line-tracking state now
+                    // that the detour into extra_script is done -- see this
+                    // block's opening comment.
+                    _token_line = savedTokenLine;
+                    pos_in_line = savedPosInLine;
+                    line_ref = savedLineRef;
                    // current_node = sav_token.pop_back();
                    // _node_token_stack.pop_back();
                    current_node=sav_current_node;
@@ -1229,7 +1256,7 @@ void Parser::parseFunctionCall()
                     // return;
 
                 }
-                
+
             }
             _tks = &__allTokens;
             
@@ -2652,6 +2679,14 @@ void Parser::getVariable(bool isStore)
                 current_node = &extra_parser;
                // current_node = &program;
                 // string toinsert = external_links[i].name;
+                // Same save/restore as parseFunctionCall()'s auto-declare
+                // path -- see its comment for why _token_line/pos_in_line/
+                // line_ref (globals shared across every Tokens instance)
+                // need saving before this scratch tokenization and
+                // restoring once it's done.
+                int savedTokenLine = _token_line;
+                int savedPosInLine = pos_in_line;
+                char *savedLineRef = line_ref;
                 Script extra_script;
                 extra_script.clear();
                 _extra_tks.clear();
@@ -2718,6 +2753,9 @@ void Parser::getVariable(bool isStore)
                 extra_parser.clear();
                 extra_script.clear();
                 _extra_tks.clear();
+                _token_line = savedTokenLine;
+                pos_in_line = savedPosInLine;
+                line_ref = savedLineRef;
               // current_cntx->findVariable(&sav_t.back(), false);
             //PARSER_LOG("looking for %s",sav_t.backptr()->getText());
                 findVariable(current_cntx,sav_t.backptr(), false);
