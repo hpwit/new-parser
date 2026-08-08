@@ -17,7 +17,7 @@
 #include "asm_types.h"
 #include "arguments.h"
 
-static int32_t callXtensaDirect(void *entry, const int32_t *args, int nargs) __attribute__((noinline, optimize("O0")));
+//static int32_t callXtensaDirect(void *entry, const int32_t *args, int nargs);
 // Allocates memory for `bin`, relocates every external/internal reference
 // via binded_assets, and copies the code in. On error, ex.error.error is
 // non-zero and no memory has been leaked (nothing else is populated).
