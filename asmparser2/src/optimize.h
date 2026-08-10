@@ -25,5 +25,12 @@ void optimize(Text *text);
 // worth a dedicated pass. See optimize.cpp's optimizeSpeed() for why this
 // needs its own call8/callExt invalidation rule, not just a wider loop
 // bound on the existing one.
+//
+// Also removes a `retw.n` immediately following another `retw.n` (dead --
+// unreachable, and never a jump target since a label in between resets
+// the check): _visitdefFunctionNode() (visitnode.cpp) always appends its
+// own closing retw.n after a function's body regardless of whether the
+// body's last statement was already a `return`, so every function ending
+// in `return` compiles with one dead retw.n.
 void optimizeSpeed(Text *text);
 #endif

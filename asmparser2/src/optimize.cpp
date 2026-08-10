@@ -629,4 +629,44 @@ void optimizeSpeed(Text *text)
         free(str);
         free(registername);
     }
+
+    // Pass 2: a `retw.n` immediately following another `retw.n` (nothing
+    // but blanked-out lines in between -- no label, meaning nothing can
+    // jump into it) is unreachable dead code. _visitdefFunctionNode()
+    // (visitnode.cpp) always appends its own closing retw.n after
+    // visiting a function's body, regardless of whether the body's last
+    // statement was already a `return` (whose own retw.n comes from
+    // _visitreturnNode) -- so *every* function ending in `return`, not
+    // just this one, compiles with this exact dead instruction. Confirmed
+    // against examples/FibonacciTiming.ino's fib(): its compiled
+    // `@_fib(num)` ends in "add a2,a15,a14 / retw.n / retw.n", the second
+    // one dead. A label resets `sawRetw` (not just the immediately-prior
+    // line) since a blanked-out line in between must not hide an
+    // intervening label this second retw.n could actually be a real
+    // jump target for.
+    bool sawRetw = false;
+    for (int i = 0; i < text->size(); i++)
+    {
+        char *tmp = *text->getChildAtPos(i);
+        if (tmp == NULL || strcmp(tmp, " ") == 0 || strcmp(tmp, "") == 0)
+            continue;
+
+        if (strchr(tmp, ':') != NULL)
+        {
+            sawRetw = false;
+            continue;
+        }
+
+        if (strcmp(tmp, "retw.n") == 0)
+        {
+            if (sawRetw)
+                text->replaceText(i, " ");
+            else
+                sawRetw = true;
+        }
+        else
+        {
+            sawRetw = false;
+        }
+    }
 }
