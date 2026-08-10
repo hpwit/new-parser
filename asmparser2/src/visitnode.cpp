@@ -737,6 +737,41 @@ void _visitglobalVariableNode(NodeToken *nd)
             // ("add a%d,a%d,a%d", all three registers) -- matching that.
             bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
         }
+        else if (v->total_size == 2 || v->total_size == 3 || v->total_size == 5 || v->total_size == 7 || v->total_size == 9)
+        {
+            // Scale the index in place with a single self-referencing
+            // add/addx2/addx4/subx8 (ar=ar+ar / ar=(ar<<1)+ar /
+            // ar=(ar<<2)+ar / ar=(ar<<3)-ar -- 2x/3x/5x/7x respectively)
+            // instead of movi+mull, then combine with the loaded base
+            // exactly like the >4 case below -- one fewer instruction.
+            // 4 and 8 have no equally-cheap self-referencing form (see
+            // the size==4 case below and asm_encoders.h's addx2/addx4/
+            // addx8 comment), so they're deliberately not listed here.
+            asmInstruction scaleInstr;
+            switch (v->total_size)
+            {
+            case 2: scaleInstr = add; break;
+            case 3: scaleInstr = addx2; break;
+            case 5: scaleInstr = addx4; break;
+            case 7: scaleInstr = subx8; break;
+            default: scaleInstr = addx8; break; // 9
+            }
+            bufferText->addAfter(string_format(scaleInstr, register_numl.get(), register_numl.get(), register_numl.get()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
+        }
+        else if (v->total_size == 4)
+        {
+            // ar*4 via two self-doublings -- same instruction count as
+            // the movi+mull path just below (4 total either way: two
+            // adds + l32r + add vs movi+mull+l32r+add), but avoids the
+            // full multiply. Kept as its own case for consistency with
+            // the sizes above rather than falling into the general path.
+            bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), register_numl.get()));
+            bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), register_numl.get()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
+        }
         else if (v->total_size > 4)
         {
             // string tmp=content.l->back();
@@ -2916,6 +2951,33 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
         {
             bufferText->addAfter(string_format(movi, point_regnum, nd->_total_size));
             bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(), point_regnum));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
+        }
+        else if (v->total_size == 2 || v->total_size == 3 || v->total_size == 5 || v->total_size == 7 || v->total_size == 9)
+        {
+            // See _visitglobalVariableNode()'s identical case for the
+            // rationale -- one fewer instruction than movi+mull, via a
+            // single self-referencing add/addx2/addx4/subx8.
+            asmInstruction scaleInstr;
+            switch (v->total_size)
+            {
+            case 2: scaleInstr = add; break;
+            case 3: scaleInstr = addx2; break;
+            case 5: scaleInstr = addx4; break;
+            case 7: scaleInstr = subx8; break;
+            default: scaleInstr = addx8; break; // 9
+            }
+            bufferText->addAfter(string_format(scaleInstr, register_numl.get(), register_numl.get(), register_numl.get()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
+        }
+        else if (v->total_size == 4)
+        {
+            // ar*4 via two self-doublings -- see
+            // _visitglobalVariableNode()'s identical case.
+            bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), register_numl.get()));
+            bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), register_numl.get()));
             bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
             bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
         }

@@ -438,7 +438,9 @@ void optimize(Text *text)
         }
         else if ((strcmp(op, "remu") == 0 || strcmp(op, "or") == 0 || strcmp(op, "and") == 0 ||
                   strcmp(op, "mull") == 0 || strcmp(op, "sub") == 0 || strcmp(op, "add") == 0 ||
-                  strcmp(op, "quou") == 0 || strcmp(op, "quos") == 0) &&
+                  strcmp(op, "quou") == 0 || strcmp(op, "quos") == 0 ||
+                  strcmp(op, "addx2") == 0 || strcmp(op, "addx4") == 0 || strcmp(op, "addx8") == 0 ||
+                  strcmp(op, "subx2") == 0 || strcmp(op, "subx4") == 0 || strcmp(op, "subx8") == 0) &&
                  d.size() > 1)
         {
             SplitResult d2(d.get(1), ",");
