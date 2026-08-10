@@ -2425,9 +2425,39 @@ void _visitextGlobalVariableNode(NodeToken *nd)
 
             bufferText->addAfter(string_format("movExt a%d,@_ext_%s", point_regnum, nd->getText()));
             // f=f+number.f;
-            for (int i = 0; i < v->total_size; i++)
+            // Same strength reduction as _visitglobalVariableNode()'s
+            // identical case: scale the index in place with a single
+            // self-referencing add/addx2/addx4/subx8 instead of
+            // v->total_size repeated adds. 4 uses two self-doublings;
+            // any other size (1, 6, 8, 10+) keeps the plain repeated-add
+            // loop -- there's no movi+mull path in this function to fall
+            // back to for a large size, unlike the global-variable case.
+            if (v->total_size == 2 || v->total_size == 3 || v->total_size == 5 || v->total_size == 7 || v->total_size == 9)
             {
+                asmInstruction scaleInstr;
+                switch (v->total_size)
+                {
+                case 2: scaleInstr = add; break;
+                case 3: scaleInstr = addx2; break;
+                case 5: scaleInstr = addx4; break;
+                case 7: scaleInstr = subx8; break;
+                default: scaleInstr = addx8; break; // 9
+                }
+                bufferText->addAfter(string_format(scaleInstr, register_numl.get(), register_numl.get(), register_numl.get()));
                 bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
+            }
+            else if (v->total_size == 4)
+            {
+                bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), register_numl.get()));
+                bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), register_numl.get()));
+                bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
+            }
+            else
+            {
+                for (int i = 0; i < v->total_size; i++)
+                {
+                    bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
+                }
             }
         }
         else
