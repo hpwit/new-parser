@@ -390,6 +390,18 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         return parseOperandes(sp.operandes, 3, op_quou, 3, bin_quou);
     if (strcmp(op, "quos") == 0)
         return parseOperandes(sp.operandes, 3, op_quou, 3, bin_quos);
+    if (strcmp(op, "addx2") == 0)
+        return parseOperandes(sp.operandes, 3, op_addx2, 3, bin_addx2);
+    if (strcmp(op, "addx4") == 0)
+        return parseOperandes(sp.operandes, 3, op_addx4, 3, bin_addx4);
+    if (strcmp(op, "addx8") == 0)
+        return parseOperandes(sp.operandes, 3, op_addx8, 3, bin_addx8);
+    if (strcmp(op, "subx2") == 0)
+        return parseOperandes(sp.operandes, 3, op_subx2, 3, bin_subx2);
+    if (strcmp(op, "subx4") == 0)
+        return parseOperandes(sp.operandes, 3, op_subx4, 3, bin_subx4);
+    if (strcmp(op, "subx8") == 0)
+        return parseOperandes(sp.operandes, 3, op_subx8, 3, bin_subx8);
     if (strcmp(op, "addi") == 0)
         return parseOperandes(sp.operandes, 3, op_addi, 3, bin_addi);
     if (strcmp(op, "and") == 0)

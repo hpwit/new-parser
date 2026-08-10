@@ -32,6 +32,12 @@ operandeType op_add[3] = {operandeType::registers, operandeType::registers, oper
 operandeType *op_quou = op_add;
 operandeType *op_sub = op_add;
 operandeType *op_mull = op_add;
+operandeType *op_addx2 = op_add;
+operandeType *op_addx4 = op_add;
+operandeType *op_addx8 = op_add;
+operandeType *op_subx2 = op_add;
+operandeType *op_subx4 = op_add;
+operandeType *op_subx8 = op_add;
 
 operandeType op_rsr[2] = {operandeType::registers, operandeType::l0_255};
 
@@ -143,6 +149,44 @@ uint32_t bin_sub(uint32_t *values)
 uint32_t bin_mull(uint32_t *values)
 {
     return (((values[2] << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) + (((values[0] << 12) & 0xF000)) + 0x820000;
+}
+
+// "ar,as,at" -- ar = (as << {1,2,3}) + at (addx*) / ar = (as << {1,2,3}) - at
+// (subx*). Same RRR shape and field layout as add/sub (op1=0, r/s/t in the
+// same nibbles), just op2=0x9/0xA/0xB (addx2/4/8) and 0xD/0xE/0xF
+// (subx2/4/8) instead of add's 0x8/sub's 0xC -- confirmed against real
+// assembled output from both xtensa-esp32-elf-gcc (LX6/ESP32) and
+// xtensa-esp32s3-elf-gcc (LX7/ESP32-S2/S3): byte-identical encoding on
+// both, so one encoder covers every ESP32-family target this project
+// supports. Xtensa doesn't have a single-cycle general multiplier
+// mandated on every core config, but these *are* single-cycle ALU
+// instructions wherever the base ISA is present -- useful for the small
+// constant multiplies (2/3/4/5/8/9x, e.g. `n*4` as `addx4 aY,aY,aY`,
+// `n*3` as `addx2 aY,aY,aN`-into-add, etc.) codegen currently always
+// routes through a full movi+mull instead.
+uint32_t bin_addx2(uint32_t *values)
+{
+    return (((values[2] << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) + (((values[0] << 12) & 0xF000)) + 0x900000;
+}
+uint32_t bin_addx4(uint32_t *values)
+{
+    return (((values[2] << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) + (((values[0] << 12) & 0xF000)) + 0xA00000;
+}
+uint32_t bin_addx8(uint32_t *values)
+{
+    return (((values[2] << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) + (((values[0] << 12) & 0xF000)) + 0xB00000;
+}
+uint32_t bin_subx2(uint32_t *values)
+{
+    return (((values[2] << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) + (((values[0] << 12) & 0xF000)) + 0xD00000;
+}
+uint32_t bin_subx4(uint32_t *values)
+{
+    return (((values[2] << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) + (((values[0] << 12) & 0xF000)) + 0xE00000;
+}
+uint32_t bin_subx8(uint32_t *values)
+{
+    return (((values[2] << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) + (((values[0] << 12) & 0xF000)) + 0xF00000;
 }
 
 uint32_t bin_add_n(uint32_t *values)
