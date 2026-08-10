@@ -545,3 +545,88 @@ void optimize(Text *text)
             text->replaceText(i, " ");
     }
 }
+
+// See optimize.h's doc comment for why this is a separate pass from
+// optimize()'s own Pass 1 rather than just widening that loop's bound:
+// Pass 1's call8-only invalidation (`regnum >= 8`) is safe for a3..a10
+// because only call8 (a windowed call, shifting the register file by 8)
+// ever runs between two of its tracked reloads in practice at that
+// range -- but a11..a15 is also exactly where callExt (an *unwindowed*
+// call into arbitrary host C code, e.g. atan2/hypot/hsv in
+// examples/MultiEffectController.ino-style scripts) passes outgoing
+// arguments and receives its return value, so a callExt in between two
+// otherwise-identical reloads has to invalidate them too, not just
+// call8 -- confirmed load-bearing against a real script (verbatim from
+// a user session): `movi a14,96` reloaded a few lines after an
+// identical one, with a `callExt a8,@_hypot(num|num)` sitting in
+// between, must NOT be treated as redundant, while the same reload
+// pattern with no call in between (the common case: two array stores
+// sharing one index sub-expression, e.g. rMapAngle[i]=...;
+// rMapRadius[i]=...; from the same script) safely is.
+void optimizeSpeed(Text *text)
+{
+    for (int regnum = 11; regnum < 16; regnum++)
+    {
+        char *registername = string_format("a%d", regnum);
+        char *str = ownedCopy("__");
+
+        for (int i = 0; i < text->size(); i++)
+        {
+            char *tmp = *text->getChildAtPos(i);
+            if (tmp != NULL && strlen(tmp) > 0)
+            {
+                if (strncmp(tmp, "@_", 2) == 0 || strchr(tmp, ':') != NULL)
+                {
+                    free(str);
+                    str = ownedCopy("__");
+                }
+                else
+                {
+                    SplitResult d(tmp, " ");
+                    if (d.size() > 0 && (strcmp(d.get(0), "call8") == 0 || strcmp(d.get(0), "callExt") == 0))
+                    {
+                        free(str);
+                        str = ownedCopy("_");
+                    }
+                    else if (d.size() > 1)
+                    {
+                        // Same prefix-match caveat as Pass 1: "a1" also
+                        // matches "a10".."a15". Not an issue here since
+                        // registername is always exactly 3 characters
+                        // ("a11".."a15"), so it can only prefix-match
+                        // itself.
+                        if (strncmp(d.get(1), registername, strlen(registername)) == 0)
+                        {
+                            if (strcmp(str, tmp) == 0)
+                            {
+                                text->replaceText(i, " ");
+                            }
+                            else
+                            {
+                                char *op = d.get(0);
+                                free(str);
+                                // l32r is included here (unlike Pass 1)
+                                // because its operand is always a label --
+                                // a compile-time-constant address -- so a
+                                // repeated `l32r aY,@_same_label` is always
+                                // safe to treat as a redundant reload, not
+                                // just the register-indirect loads Pass 1
+                                // already trusts.
+                                if (strcmp(op, "movi") == 0 || strcmp(op, "l32i") == 0 ||
+                                    strcmp(op, "l16i") == 0 || strcmp(op, "l16ui") == 0 ||
+                                    strcmp(op, "l8ui") == 0 || strcmp(op, "movExt") == 0 ||
+                                    strcmp(op, "l32r") == 0)
+                                    str = ownedCopy(tmp);
+                                else
+                                    str = ownedCopy("__");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        free(str);
+        free(registername);
+    }
+}

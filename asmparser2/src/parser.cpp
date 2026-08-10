@@ -109,6 +109,8 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     program.visitNode();
     PARSER_LOG("optimize")
     optimize(&content);
+    PARSER_LOG("optimize speed")
+    optimizeSpeed(&content);
 }
 
 void Parser::parseProgram()
