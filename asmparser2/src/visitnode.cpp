@@ -499,9 +499,48 @@ void _visitoperatorNode(NodeToken *nd)
         {
             asmInstr = mull;
         }
+        // Same "peek at the movi that just loaded the right operand"
+        // trick TokenAddition/TokenSubstraction above already use to fold
+        // into addi -- here folding a multiply-by-{2,3,5,9} into a single
+        // add/addx2/addx4/addx8 (ar=ar+ar, ar=(ar<<1)+ar, ar=(ar<<2)+ar,
+        // ar=(ar<<3)+ar) instead of movi+mull. Found by diffing this
+        // compiler's output for a real LED-matrix script's `angle*4`-
+        // style expressions against real xtensa-esp32-elf-gcc's -O1
+        // output, which uses exactly this self-referencing addx idiom
+        // (confirmed against real hardware encoding -- see asm_encoders.h).
+        // 4/8 have no equally-cheap one-instruction form without a spare
+        // zero register (addx4/addx8 need a real third operand, not an
+        // implicit zero), so they're left as mull; 2/3/5/9 are the only
+        // constants a single self-referencing instruction covers.
+        if (!ff)
+        {
+            char *_last = bufferText->current();
+            char *tocmp = string_format("movi a%d,", register_numr.get());
+            if (strncmp(_last, tocmp, strlen(tocmp)) == 0)
+            {
+                int a, b;
+                sscanf(_last, "movi a%d,%d", &a, &b);
+                asmInstruction strengthReduced;
+                bool found = true;
+                switch (b)
+                {
+                case 2: strengthReduced = add; break;
+                case 3: strengthReduced = addx2; break;
+                case 5: strengthReduced = addx4; break;
+                case 9: strengthReduced = addx8; break;
+                default: found = false; break;
+                }
+                if (found)
+                {
+                    bufferText->blankCurrent();
+                    bufferText->addAfter(string_format(strengthReduced, register_numl.get(), register_numl.get(), register_numl.get()));
+                    free(tocmp);
+                    break;
+                }
+            }
+            free(tocmp);
+        }
         bufferText->addAfter(string_format(asmInstr, register_numl.get(), register_numl.get(), register_numr.get()));
-        // bufferText->addAfter(string_format("mull a%d,a%d,a%d", register_numl.get(), register_numl.get(), register_numr.get()));
-        // return;
         break;
     case TokenPlusPlus:
         if (nd->getChildPtr(0)->isPointer && nd->getChildPtr(0)->children_size() == 0)
