@@ -123,7 +123,17 @@ bool ScriptExecutable::executeAsTask(const char *name, uint32_t stackSize, UBase
 }
 #endif
 
-ScriptExecutable parseScript(const char *script)
+// Shared front half of parseScript()/parseScriptToBinary(): prepends
+// kPrelude, tokenizes+parses (offsetting reported line numbers past the
+// prelude), and assembles via createBinary(). Returns a Binary with
+// .error.error set on any failure -- the specific problem (a parse
+// error via display_error(), an assembler error via printf) is already
+// printed by the time this returns, matching every hand-written
+// example's own error handling, so callers just need to check
+// .error.error before using the result (and freeBinary() it either way,
+// see freeBinary()'s own NULL-safety -- a parse failure returns a
+// Binary whose buffers never got allocated).
+static Binary compileScriptToBinary(const char *script)
 {
     Script s;
     // addContent()/the tokenizer need a mutable buffer they can own for
@@ -172,7 +182,10 @@ ScriptExecutable parseScript(const char *script)
         // freed buf unconditionally right after parse() returned.
         display_error(&Error);
         free(buf);
-        return ScriptExecutable();
+        Binary bin;
+        bin.error.error = 1;
+        bin.error.error_message = NULL;
+        return bin;
     }
     free(buf);
 
@@ -180,6 +193,15 @@ ScriptExecutable parseScript(const char *script)
     if (bin.error.error)
     {
         printf("assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+    }
+    return bin;
+}
+
+ScriptExecutable parseScript(const char *script)
+{
+    Binary bin = compileScriptToBinary(script);
+    if (bin.error.error)
+    {
         freeBinary(&bin);
         return ScriptExecutable();
     }
@@ -188,4 +210,48 @@ ScriptExecutable parseScript(const char *script)
     // ScriptExecutable's class comment for why this specific shape (not
     // a named local variable then `return that;`) is load-bearing.
     return ScriptExecutable(&bin);
+}
+
+uint8_t *parseScriptToBinary(const char *script, uint32_t *size)
+{
+    Binary bin = compileScriptToBinary(script);
+    if (bin.error.error)
+    {
+        freeBinary(&bin);
+        if (size != NULL)
+        {
+            *size = 0;
+        }
+        return NULL;
+    }
+
+    uint8_t *serialized = serializeBinary(&bin, size);
+    freeBinary(&bin);
+    return serialized;
+}
+
+executable createExecutableFromBuffer(const uint8_t *buf, uint32_t size)
+{
+    Binary bin = deserializeBinary(buf, size);
+    if (bin.error.error)
+    {
+        printf("deserializeBinary error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+        // createExecutableFromBinary() doesn't validate bin->error.error
+        // itself (it unconditionally uses bin->instruction_size/
+        // binary_data/function_data, trusting a well-formed Binary) --
+        // so a deserialize failure has to short-circuit here, into a
+        // safely zeroed executable, rather than being handed off to it.
+        executable exe;
+        exe.error.error = 1;
+        exe.error.error_message = bin.error.error_message;
+        return exe;
+    }
+
+    executable exe = createExecutableFromBinary(&bin);
+    freeBinary(&bin);
+    if (exe.error.error)
+    {
+        printf("loader error: %s\n", exe.error.error_message ? exe.error.error_message : "?");
+    }
+    return exe;
 }

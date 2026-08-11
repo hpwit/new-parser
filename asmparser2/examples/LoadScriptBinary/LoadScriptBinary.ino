@@ -10,23 +10,26 @@
 // this sketch (it does not erase the filesystem, so the earlier write
 // survives the re-flash) to load and execute it.
 //
-// asm_serialize.h's deserializeBinary() reconstructs a Binary from the
-// saved bytes; createExecutableFromBinary() then resolves "key_char"/
-// "report" through binding.h's findLink() using *this* sketch's
-// bindings -- not whatever (nothing, in SaveScriptBinary.ino's case) was
-// in scope when the script was compiled. That's the whole point: the
-// relocation is late-bound by name, so the compiling and executing
-// sketches don't need to agree on anything but those names.
+// createExecutableFromBuffer() (script_executable.h) is the one-call
+// version of deserializeBinary() + createExecutableFromBinary() +
+// freeBinary(): it reconstructs a Binary from the saved bytes, then
+// resolves "key_char"/"report" through binding.h's findLink() using
+// *this* sketch's bindings -- not whatever (nothing, in
+// SaveScriptBinary.ino's case) was in scope when the script was
+// compiled. That's the whole point: the relocation is late-bound by
+// name, so the compiling and executing sketches don't need to agree on
+// anything but those names.
 //
 // Verified on host (deserializes and reloads correctly under freshly
 // bound names) via test/host/test_parser.cpp's save/load test. Real
 // execution proof -- that a second, independent program's own bound
 // variable and callback are genuinely what the loaded code reads and
-// calls -- is QEMU-verified: test/qemu/gen_saveload.cpp + runner_saveload.c.
+// calls -- is QEMU-verified: test/qemu/gen_saveload.cpp + runner_saveload.c
+// (createExecutableFromBuffer() shares that exact same
+// deserialize+load pipeline under the hood, see script_executable.cpp).
 #include <LittleFS.h>
 #include "binding.h"
-#include "asm_execute.h"
-#include "asm_serialize.h"
+#include "script_executable.h"
 
 int hostKeyChar = 0;
 
@@ -65,19 +68,12 @@ void setup()
       return;
    }
 
-   Binary bin = deserializeBinary(buf, size);
+   executable exe = createExecutableFromBuffer(buf, size);
    free(buf);
-   if (bin.error.error)
-   {
-      printf("deserializeBinary error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
-      return;
-   }
-
-   executable exe = createExecutableFromBinary(&bin);
-   freeBinary(&bin);
    if (exe.error.error)
    {
-      printf("loader error: %s\n", exe.error.error_message ? exe.error.error_message : "?");
+      // createExecutableFromBuffer() already printed the specific
+      // deserialize/loader error.
       return;
    }
 

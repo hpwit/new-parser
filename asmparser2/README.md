@@ -150,7 +150,27 @@ i:19 3*i:57
 
 ## Freeing an executable
 
-Nothing to call. `ScriptExecutable` frees the compiled binary automatically when it goes out of scope -- v1's `exec.free()` doesn't exist in v2 because there's nothing left to free by the time you'd call it. This is also why `ScriptExecutable` can't be copied or reassigned (only constructed once, directly, from `parseScript()`) -- see its class comment in `script_executable.h` if you're curious why.
+`ScriptExecutable` already frees the compiled binary automatically when it goes out of scope, so most of the time there's nothing to call. `exec.free()` (matching v1's own `free()`) exists for the case that isn't scope-shaped: you're done with the *compiled script* before you're done with the *variable* -- e.g. compiling a second script right after the first, and wanting the first one's memory back now, not whenever the enclosing function eventually returns:
+
+```cpp
+ScriptExecutable exec1 = parseScript(script1);
+if (exec1.isExeExists())
+{
+   exec1.execute("main");
+}
+exec1.free(); // release script1's memory now
+
+ScriptExecutable exec2 = parseScript(script2);
+if (exec2.isExeExists())
+{
+   exec2.execute("main");
+}
+exec2.free();
+```
+
+**NB: `ScriptExecutable` still can't be copied or reassigned (only constructed once, directly, from `parseScript()`) -- see its class comment in `script_executable.h`. So "reusing" one for a second script means calling `free()` on the existing object, then compiling a *second*, separately-named `ScriptExecutable` for the next script, not assigning a fresh `parseScript()` result back into the first one, the way the example above does.**
+
+`free()` is safe to call more than once, and safe to just let the destructor handle instead if scope-based cleanup already does what you want -- calling it explicitly is purely an option for reclaiming memory sooner. See [TwoScripts](examples/TwoScripts) for the complete sketch.
 
 # The function you call can have input parameters
 
@@ -528,14 +548,23 @@ Balls[i].updateBall();
 
 # Saving executables
 
-Same idea as v1 -- compile once, write the machine code out, load and run it later without the source, possibly from a completely different sketch. The API is different: v2's `parseScript()`/`ScriptExecutable` hide the intermediate `Binary` (freeing it once loaded), so saving needs the lower-level pipeline instead:
+Same idea as v1 -- compile once, write the machine code out, load and run it later without the source, possibly from a completely different sketch.
+
+```cpp
+uint8_t *serialized = parseScriptToBinary(script, &size);
+```
+
+is the one-call version -- parses, assembles, and flattens the result into one self-contained buffer, without loading or running it. Same `script_executable.h` header as `parseScript()`, and the same error handling: `NULL` back (with `size` set to `0`) and the specific parse/assembler error already printed, on any failure.
 
 ```cpp
 // compiling sketch -- never runs the script itself
-Binary bin = createBinary(&footer, &header, &content, false);
 uint32_t size = 0;
-uint8_t *serialized = serializeBinary(&bin, &size);
-// ... write `serialized` (size bytes) to LittleFS/SD ...
+uint8_t *serialized = parseScriptToBinary(script, &size);
+if (serialized != NULL)
+{
+   // ... write `serialized` (size bytes) to LittleFS/SD ...
+   free(serialized);
+}
 ```
 
 ```cpp
@@ -543,15 +572,17 @@ uint8_t *serialized = serializeBinary(&bin, &size);
 bindVariable(...);   // same external names this binary was compiled against
 bindFunction(...);
 // ... read the saved bytes back ...
-Binary bin = deserializeBinary(buf, size);
-executable exe = createExecutableFromBinary(&bin);
-freeBinary(&bin);
+executable exe = createExecutableFromBuffer(buf, size);
 int32_t result = 0;
 callFunction(&exe, "someFunction", NULL, 0, &result);
 freeExecutable(&exe);
 ```
 
+`createExecutableFromBuffer()` is `parseScriptToBinary()`'s load-side counterpart -- the one-call version of `deserializeBinary()` + `createExecutableFromBinary()` + `freeBinary()`. Same deal as before: register `bindVariable()`/`bindFunction()` for every `external` name the saved script uses *first* (that's what actually resolves them), check `exe.error.error` before using the result (the specific deserialize/loader error is already printed on failure), and `freeExecutable(&exe)` it yourself when done -- `createExecutableFromBuffer()` hands back a real `executable`, not a `ScriptExecutable`, so there's no automatic cleanup here.
+
 See `examples/SaveScriptBinary`/`examples/LoadScriptBinary` for the full working pair.
+
+**NB: saving and loading is the one place `ScriptExecutable` doesn't apply on either end -- `parseScriptToBinary()` hands back bytes, not an executable (the whole point is deferring loading/running to later, possibly elsewhere), and `createExecutableFromBuffer()` hands back the lower-level `executable` those bytes load into, not a `ScriptExecutable` wrapping it. If you need lower-level access too -- e.g. to print the AST or generated assembly before serializing -- the individual `Parser`/`createBinary()`/`serializeBinary()`/`deserializeBinary()`/`createExecutableFromBinary()` steps both convenience functions call are all still available; see `examples/LanguageBasics` for every step spelled out.**
 
 ## Binded functions
 
@@ -658,6 +689,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `ScriptPrintf` | A script printing directly with `printf()`/`printfln()`. |
 | `Factorial` | `Arguments`, calling a function multiple times with different values. |
 | `CallScriptFunction` | Calling a named function with a raw `int32_t[]` and using its return value. |
+| `TwoScripts` | Compiling and running two different scripts one after another, freeing the first with `exec.free()` before compiling the second. |
 | `FibonacciTiming` | Timing a script's own execution with `micros()`. |
 | `BouncingBalls` | Structs with methods/constructors, an array of structs, several bound host calls. |
 | `StructsAndHostBindings` | Structs + `bindFunction()`/`bindVariable()`, more minimal. |

@@ -72,6 +72,20 @@ public:
     ScriptExecutable(ScriptExecutable &&) = delete;
     ScriptExecutable &operator=(ScriptExecutable &&) = delete;
 
+    // Matches v1's Executable::free() -- releases the compiled script's
+    // memory right now instead of waiting for `this` to go out of scope.
+    // Useful when compiling several scripts one after another and only
+    // one needs to be live at a time (see examples/TwoScripts): calling
+    // free() between them keeps peak memory down instead of letting both
+    // stay resident until whatever scope holds them both finally exits.
+    // Safe to call more than once (freeExecutable() is itself
+    // idempotent -- it NULLs/empties everything it frees) and safe to
+    // let the destructor run afterward, which is exactly what happens
+    // when `this` then goes out of scope normally. After this,
+    // isExeExists() is false and no execute()/executeOnly() call will
+    // find anything to run.
+    void free() { freeExecutable(&exe); }
+
     // Matches upstream's Executable::isExeExists() -- true if parsing,
     // assembling, and loading all succeeded and there's at least one
     // callable function. Not const-qualified: vect<T>::size() (vect.h)
@@ -174,5 +188,47 @@ public:
 // path, but nowhere else). Only the returned ScriptExecutable's own
 // executable survives, freed automatically when it's destroyed.
 ScriptExecutable parseScript(const char *script);
+
+// Parses, assembles, and serializes `script` in one call, without
+// loading or running it -- the one-call equivalent of upstream v1's
+// Parser::parseScriptBinary() combined with serializeBinary(), for the
+// "compile now, save the bytes, run them later (possibly from a
+// completely different sketch)" case -- see "Saving and loading
+// compiled scripts" in README.md. Shares its whole compile pipeline
+// with parseScript() (same kPrelude, same error handling/reporting),
+// it just serializes the result instead of loading it.
+//
+// - `script` -- same meaning as parseScript()'s: a plain C string, only
+//   needs to stay valid for the duration of this call.
+// - `size` -- if non-NULL, receives the returned buffer's length in
+//   bytes (needed to actually write it anywhere, e.g. to a file). Set
+//   to 0 on failure.
+// - Returns a malloc'd buffer the caller owns (free() it when done, or
+//   hand it off -- e.g. written to LittleFS/SD, see
+//   examples/SaveScriptBinary), or NULL on any failure (parse or
+//   assembler error -- already printed the same way parseScript()'s
+//   own errors are).
+uint8_t *parseScriptToBinary(const char *script, uint32_t *size);
+
+// The load-time counterpart to parseScriptToBinary() -- the one-call
+// version of deserializeBinary() + createExecutableFromBinary() +
+// freeBinary(), for a sketch that loaded a previously-saved binary blob
+// (e.g. from LittleFS/SD, see "Saving and loading compiled scripts" in
+// README.md) and just wants a real, callable executable back. Register
+// bindVariable()/bindFunction() for every `external` name the saved
+// script uses *before* calling this -- exactly as createExecutableFromBinary()
+// itself requires, since that's what actually resolves them.
+//
+// - `buf`, `size` -- the serialized bytes and their length, exactly as
+//   parseScriptToBinary()/serializeBinary() produced them (or
+//   deserializeBinary()'s own doc comment's format, if you built them
+//   another way). Only read during this call; not retained.
+// - Returns a real `executable` (asm_types.h) -- check `.error.error`
+//   before using it (a bad/corrupt buffer or a missing external
+//   binding surfaces here, with the specific problem already printed
+//   the same way parseScript()'s own errors are). The caller owns it:
+//   call freeExecutable(&exe) when done (see examples/LoadScriptBinary),
+//   same as if createExecutableFromBinary() had been called by hand.
+executable createExecutableFromBuffer(const uint8_t *buf, uint32_t size);
 
 #endif

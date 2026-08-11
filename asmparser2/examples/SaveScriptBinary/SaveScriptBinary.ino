@@ -7,8 +7,9 @@
 // executes the script itself -- compiling only needs the `external ...;`
 // declarations in the script text (see StructsAndHostBindings.ino for
 // the case where a sketch *does* also need to bind+run its own script).
-// asm_serialize.h's serializeBinary() flattens createBinary()'s output
-// (instruction bytes + the relocation header, which still holds
+// parseScriptToBinary() (script_executable.h) is the one-call version of
+// parse -> createBinary -> serializeBinary: it flattens the compiled
+// result (instruction bytes + the relocation header, which still holds
 // "key_char"/"report" as *names*, not addresses) into one buffer that's
 // meaningful on its own, in any process that later binds those same
 // names to something real.
@@ -25,11 +26,11 @@
 // and serialize the same shape of script, then a second, independent
 // program (standing in for LoadScriptBinary.ino) deserializes it, binds
 // its own key_char/report, and runs it correctly on a real Xtensa CPU
-// emulation.
+// emulation -- parseScriptToBinary() shares that exact same compile
+// pipeline under the hood (see script_executable.cpp), it's just a
+// thinner wrapper around it.
 #include <LittleFS.h>
-#include "parser.h"
-#include "asm_parser.h"
-#include "asm_serialize.h"
+#include "script_executable.h"
 
 char script[] = R"EOF(
 external int key_char;
@@ -52,32 +53,12 @@ void setup()
 {
    Serial.begin(115200);
 
-   Script s;
-   s.addContent(script);
-   s.init();
-
-   Parser p;
-   p.clean();
-   p.parse(&s, &__allTokens);
-
-   if (Error.error)
-   {
-      display_error(&Error);
-      return;
-   }
-
-   Binary bin = createBinary(&footer, &header, &content, false);
-   if (bin.error.error)
-   {
-      printf("assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
-      return;
-   }
-
    uint32_t size = 0;
-   uint8_t *serialized = serializeBinary(&bin, &size);
+   uint8_t *serialized = parseScriptToBinary(script, &size);
    if (serialized == NULL)
    {
-      printf("serializeBinary failed\n");
+      // parseScriptToBinary() already printed the specific parse/
+      // assembler error.
       return;
    }
 
