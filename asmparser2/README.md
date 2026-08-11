@@ -1,424 +1,70 @@
-# ESPLiveScript2
-
-A from-scratch C++ port of [ESPLiveScript](https://github.com/hpwit/asmparser) (v1) -- a
-small, C-like scripting language that compiles directly to real Xtensa
-machine code and runs on an ESP32, with no interpreter overhead. You
-write scripts as plain strings in your sketch (or load them from flash,
-or over the network), compile them on-device in milliseconds, and call
-into them like any other function.
-
-v1's own README explains the motivation in full (interpreted scripting
-languages like Lua/Gravity were too slow for real-time LED animation on
-a 12,000+ pixel panel; compiling to real machine code isn't). This
-document covers what v2 actually is and does, which differs from v1 in
-a few real ways covered at the end.
-
-## Why a rewrite
-
-v2 is not a refactor of v1 -- it's an independent reimplementation of
-the same idea, built around one goal v1 didn't have: the ability to
-verify the compiler itself, not just trust that scripts happen to work
-on a board in front of you. That shows up in a few concrete ways:
-
-- The entire compiler (tokenizer, parser, assembler, loader) builds and
-  runs as an ordinary host program, with no ESP32 hardware or Arduino
-  framework involved -- see `test/host/`.
-- A real Xtensa CPU emulator (QEMU, Espressif's ESP32/ESP32-S3 machine
-  models) executes the *actual compiled bytes* of representative
-  scripts and checks real results, not just that the compiler didn't
-  crash -- see `test/qemu/`.
-- Every real-world example script from v1's own `sc_examples/` corpus
-  is compiled and checked against this pipeline -- see
-  `test/sc_examples/`.
-
-None of that changes what you write in a script day to day. It's why
-you can trust that what's described below actually works, rather than
-"works on my board."
-
-## Quick start
-
-```cpp
-#include "script_executable.h"
-
-char script[] = R"EOF(
-int fact(int h)
-{
-   if (h == 1)
-   {
-      return 1;
-   }
-   return h * fact(h - 1);
-}
-
-void main()
-{
-}
-)EOF";
-
-void setup()
-{
-   Serial.begin(115200);
-
-   ScriptExecutable exec = parseScript(script);
-   if (exec.isExeExists())
-   {
-      // main() itself, no return value used.
-      exec.execute("main");
-
-      // fact() directly, with a real argument and a real result back.
-      Arguments args;
-      args.add(6);
-      int32_t result = 0;
-      if (exec.execute("fact", &args, &result))
-      {
-         printf("fact(6) = %d\n", result);
-      }
-   }
-}
-
-void loop()
-{
-}
-```
-
-`parseScript()` does the whole parse -> assemble -> load pipeline in one
-call and hands back a `ScriptExecutable` that owns the compiled,
-loaded script. No manual cleanup needed: when `exec` goes out of scope,
-the loaded executable (and every intermediate buffer the pipeline
-allocated) is freed automatically.
-
-`isExeExists()` tells you whether compiling and loading succeeded.
-`execute(name, ...)` calls any function declared in the script by name
--- `main`, or any other one -- and can hand back its real return value,
-here via the `Arguments` overload (more on that next). Full parameter
-reference for `execute()`/`executeOnly()`/`executeAsTask()` below.
-
-(A script can also print directly via `printfln("i:%d", i)` -- no
-`bindFunction()`/`external` declaration needed, it's always available;
-see [Built-in printf / printfln](#built-in-printf--printfln) below.)
-
-## `ScriptExecutable` reference
-
-```cpp
-bool isExeExists();
-```
-
-`true` if parsing, assembling, and loading all succeeded and the script
-has at least one callable function. No parameters. Always check this
-before calling `execute()`/`executeOnly()`/`executeAsTask()`.
-
-```cpp
-bool execute(const char *name, int32_t *result = NULL);
-bool execute(const char *name, Arguments *args, int32_t *result = NULL);
-bool execute(const char *name, const int32_t *args, int nargs, int32_t *result = NULL);
-```
-
-Calls a function declared in the script by name. Before doing so,
-**always calls the script's top-level initialization first**
-(`@__footer` -- wherever `createBinary()` put any work a script's
-global scope needs done before anything else runs, most commonly a
-global struct array's element constructors, e.g. `BouncingBalls.ino`'s
-`ball Balls[max_nb_balls];`) -- harmless no-op if the script has none.
-Matches upstream ESPLiveScript's own `execute()` exactly, including
-running that initialization again on *every* call, not just the first.
-
-- `name` -- the function's name exactly as declared in the script (e.g.
-  `"main"`, `"fact"`). No signature/overload resolution; must match a
-  real declared function or `execute()` returns `false`.
-- `result` -- if non-`NULL`, receives the function's real return value
-  (whatever it left in Xtensa's return register). Pass `NULL` if you
-  don't need it, e.g. calling a `main()` that never returns.
-- `args` (2nd overload) -- a typed `Arguments` list (`arguments.h`),
-  built with one `args.add(value)` call per parameter, in declaration
-  order; handles int/float marshaling for you.
-- `args`, `nargs` (3rd overload) -- a raw `int32_t[]` and its length,
-  for callers that already have arguments in that form. A float
-  argument must be passed as its bits reinterpreted as `int32_t`
-  (`Arguments` does this for you; this overload doesn't).
-- Returns `true` if a function named `name` was found and called,
-  `false` otherwise.
-
-```cpp
-bool executeOnly(const char *name, int32_t *result = NULL);
-bool executeOnly(const char *name, Arguments *args, int32_t *result = NULL);
-bool executeOnly(const char *name, const int32_t *args, int nargs, int32_t *result = NULL);
-```
-
-Identical parameters and behavior to the three `execute()` overloads
-above, **except `@__footer` is never called first**. Use this instead
-of `execute()` when re-entering a script repeatedly (e.g.
-`KeyboardCallback.ino`'s pattern, once per keypress) and top-level
-state -- a global struct array's constructors included -- shouldn't be
-reset on every call. Matches upstream's own `executeOnly()`.
-
-```cpp
-// ESP32 only -- not declared at all otherwise, including this repo's
-// own host test build; guard call sites that need to compile for both.
-bool executeAsTask(const char *name, uint32_t stackSize = 8192,
-                    UBaseType_t priority = 1, BaseType_t core = tskNO_AFFINITY);
-```
-
-Runs `execute(name)` (footer included, no arguments, no return value)
-on its own FreeRTOS task instead of blocking the caller -- returns as
-soon as the task is created, before the script function itself has run.
-A deliberately minimal port of upstream's much larger `executeAsTask()`
-family -- see "Known limitations" below for exactly what's not here.
-
-- `name` -- same meaning as `execute()`'s. Must stay valid for as long
-  as the task runs (a string literal is safest, same assumption every
-  other call site already makes) -- unlike `execute()`, this doesn't
-  read it until the task is actually scheduled, not before returning.
-- `stackSize` -- the new task's stack, in bytes, passed straight to
-  `xTaskCreatePinnedToCore()`. Default `8192` (matches upstream's own
-  default of `4096 * 2`). Increase it for a script with deep recursion
-  or large local structs/arrays.
-- `priority` -- the new task's FreeRTOS priority; higher runs
-  preferentially over lower. Default `1`, one above idle.
-- `core` -- which CPU to pin the task to: `0` or `1` on a real
-  dual-core ESP32 (single-core variants like ESP32-S2/C3 only have
-  core 0; `xTaskCreatePinnedToCore()` handles that transparently).
-  Default `tskNO_AFFINITY` -- no pinning, left entirely to the
-  scheduler, matching plain `xTaskCreate()`'s behavior. Arduino's own
-  `setup()`/`loop()` run pinned to core 1 by default (WiFi/BT's stack
-  owns core 0) -- pass `0` explicitly to keep a script's task off the
-  same core as `loop()`.
-- Returns `true` if the task was created successfully
-  (`xTaskCreatePinnedToCore()` returned `pdPASS`), `false` otherwise.
-- `this` (the `ScriptExecutable`) must outlive the task -- make it
-  `static` in `setup()`, same lifetime pattern `KeyboardCallback.ino`
-  uses for holding one alive past `setup()` returning.
-- See `examples/ExecuteAsTask` for a full working sketch.
-
-```cpp
-ScriptExecutable parseScript(const char *script);
-```
-
-Parses, assembles, and loads `script` in one call -- the v2 equivalent
-of upstream's `Parser::parseScript()`.
-
-- `script` -- the script source text, a plain C string. Only needs to
-  stay valid for the duration of this call; nothing downstream keeps a
-  reference to it. `true`/`false` and the `_handle_`/`_execaddr_`
-  globals `pinInterrupt()` needs are silently prepended before parsing.
-- Returns a `ScriptExecutable`. On any failure (parse, assemble, or
-  load error), its `isExeExists()` is `false`; the specific error is
-  also printed (`display_error()` for a parse error, a plain `printf`
-  for an assembler/loader error).
-
-## Calling a function with arguments, and getting a value back
-
-```cpp
-#include "script_executable.h"
-
-char script[] = R"EOF(
-int fact(int h)
-{
-   if (h == 1)
-   {
-      return 1;
-   }
-   return h * fact(h - 1);
-}
-
-void main()
-{
-}
-)EOF";
-
-void setup()
-{
-   Serial.begin(115200);
-
-   ScriptExecutable exec = parseScript(script);
-   if (!exec.isExeExists())
-   {
-      return;
-   }
-
-   Arguments args;
-   args.add(5);
-   int32_t result = 0;
-   if (exec.execute("fact", &args, &result))
-   {
-      printf("factorial of 5 is %d\n", result);
-   }
-}
-
-void loop()
-{
-}
-```
-
-`Arguments` (`arguments.h`) is a typed list of `int`/`float` values --
-build it with `add()`, `clear()` it to reuse for another call. There's
-also a raw-array overload, `execute(name, int32_t args[], nargs,
-&result)`, if you'd rather not build an `Arguments` object.
-
-Calling a function this way -- by name, not through `main()`'s own
-argument-passing convention -- is what actually gets you a return
-value. `main()` itself can be called the exact same way (`execute("main")`,
-with or without arguments) and also returns a real value in v2; see
-[Calling `main()` vs. calling other
-functions](#calling-main-vs-calling-other-functions) for the one
-internal difference that can matter.
-
-See `examples/Factorial` and `examples/CallScriptFunction` for the full
-working sketches this is drawn from, and `examples/FibonacciTiming` for
-the same pattern used to benchmark a script's own performance with
-`micros()`.
-
-## Built-in printf / printfln
-
-Scripts can call `printf(fmt, ...)` and `printfln(fmt, ...)` directly,
-with no `bindFunction()` call and no `external` declaration needed:
-
-```cpp
-char script[] = R"EOF(
-void main()
-{
-   int a = 5;
-   printfln("i:%d 3*i:%d", a, 3 * a);
-}
-)EOF";
-```
-
-They're registered automatically the first time anything is compiled
-(`registerBuiltinRuntimeFunctions()`, called from inside `Parser::parse()`,
-see `src/runtime_functions.h`/`.cpp`) -- real, genuinely variadic host
-functions (`vprintf` underneath), matching v1's own `artiPrintf`/
-`artiPrintfln`. `printfln` appends a trailing `\r\n`; `printf` doesn't.
-
-If your own code already calls `bindFunction()` for a function named
-`printf`/`printfln` before parsing (e.g. to capture output somewhere
-other than stdout), that binding wins -- the built-in one only fills in
-a name that isn't already bound.
-
-## Talking to your own C++ code
-
-A script can call real functions and read/write real variables in your
-sketch -- `bindFunction()`/`bindVariable()` (`binding.h`) register them
-*before* parsing:
-
-```cpp
-#include "script_executable.h"
-#include "binding.h"
-
-int brightnessPercent = 100;
-
-void scriptPrintln(int v)
-{
-   printf("script says: %d\n", v);
-}
-
-char script[] = R"EOF(
-external void println(int v);
-external int brightness;
-
-void main()
-{
-   println(brightness);
-}
-)EOF";
-
-void setup()
-{
-   Serial.begin(115200);
-
-   bindFunction((char *)"void", (char *)"println", (char *)"int", (void *)scriptPrintln);
-   bindVariable((char *)"int", (char *)"brightness", NULL, (void *)&brightnessPercent);
-
-   ScriptExecutable exec = parseScript(script);
-   if (exec.isExeExists())
-   {
-      exec.execute("main");
-   }
-}
-
-void loop()
-{
-}
-```
-
-`bindFunction(returnType, name, argTypesCommaSeparated, functionPointer)`
-and `bindVariable(type, name, arraySizeOrNull, variablePointer)`. The
-script must still declare each bound name `external` itself (as above)
--- binding alone registers the host pointer, but the assembler needs
-the explicit declaration to reserve a jump-table slot for the call; see
-`examples/StructsAndHostBindings` and `examples/BouncingBalls` for
-larger, working examples of this (structs with methods, external
-functions, external arrays).
-
-The library doesn't provide a built-in `CRGB`/`hsv()` -- if you're
-driving LEDs, bind your own `hsv()`/`leds` the same way (see
-`examples/BouncingBalls`), the same as any other host function or
-array.
-
-## Calling back into a script from an event handler
-
-Because `execute()` re-enters the loaded script by name on demand, a
-script's executable can be kept around and called into repeatedly --
-e.g. once per keypress, once per sensor reading:
-
-```cpp
-#include "script_executable.h"
-#include "binding.h"
-
-char script[] = R"EOF(
-external int key_char;
-
-int keyboard()
-{
-   int c = key_char;
-   if (c >= 97)
-   {
-      if (c <= 122)
-      {
-         c = c - 32;
-      }
-   }
-   return c;
-}
-
-void main()
-{
-}
-)EOF";
-
-int hostKeyChar = 0;
-ScriptExecutable *g_exec = NULL;
-
-void setup()
-{
-   Serial.begin(115200);
-   bindVariable((char *)"int", (char *)"key_char", NULL, (void *)&hostKeyChar);
-
-   // `static` gives this the lifetime it needs to still be valid in
-   // loop() -- see examples/KeyboardCallback for the full explanation
-   // of why this specific shape (not a plain global, later assigned)
-   // matters.
-   static ScriptExecutable holder = parseScript(script);
-   g_exec = &holder;
-}
-
-void loop()
-{
-   if (g_exec != NULL && g_exec->isExeExists() && Serial.available())
-   {
-      hostKeyChar = Serial.read();
-      int32_t result = 0;
-      if (g_exec->execute("keyboard", &result))
-      {
-         Serial.println((char)result);
-      }
-   }
-}
-```
-
-See `examples/KeyboardCallback` for the complete sketch.
-
-## The language
-
-A loose, more strongly-typed C-like syntax:
+# Introduction
+
+A while back I got tired of loading code onto the esp32 through an IDE every time I wanted to try a new led animation, so I wrote [ESPLiveScript](https://github.com/hpwit/asmparser) (what is now "v1" of this library): a small C-like language that compiles straight to real Xtensa machine code on the device itself, no interpreter, no re-flash.
+
+That worked, people used it, [StarLight](https://github.com/MoonModules/StarLight) picked it up. But v1 was written the way most first compilers are written: fast, by hand, no grammar, and -- crucially -- with no real way to check that a change to the compiler hadn't quietly broken something other than the one script I happened to test it against. Every fix was "works on my board." That's fine until it isn't.
+
+**So I rewrote it.** Not a refactor -- a from-scratch reimplementation of the same idea (same language, same approach: compile to real Xtensa machine code, run it on-device), built around one thing v1 never had: the ability to actually verify the compiler, not just trust it.
+
+- The whole compiler (tokenizer, parser, assembler, loader) builds and runs as an ordinary program on my laptop, no ESP32 or Arduino framework involved -- see `test/host/`.
+- A real Xtensa CPU emulator (QEMU, Espressif's own ESP32/ESP32-S3 machine models) runs the *actual compiled bytes* of representative scripts and checks the real results, not just "did it crash" -- see `test/qemu/`.
+- Every real-world script from v1's own `sc_examples/` corpus gets compiled and checked against this same pipeline -- see `test/sc_examples/`.
+
+None of that changes what you actually write in a script day to day -- this document is about that part. But it's why I can say something works instead of hoping it does.
+
+**This is v2.** The language is close enough to v1 that most of what you already know still applies -- but the C++-side API you call from your sketch (`ScriptExecutable`, `bindFunction()`, `bindVariable()`, `parseScript()`) is different, some things v1 had aren't here yet (see [Known limitations](#known-limitations)), and a couple of behaviors changed on purpose. This README describes v2 as it actually is.
+
+<!-- TOC start -->
+
+- [Which language?](#which-language)
+  * [C-like language](#c-like-language)
+  * [DIY parser and compiler](#diy-parser-and-compiler)
+  * [Not a development environment](#not-a-development-environment)
+
+- [First light](#first-light)
+  * [Checking for errors](#checking-for-errors)
+  * [Freeing an executable](#freeing-an-executable)
+
+- [The function you call can have input parameters](#the-function-you-call-can-have-input-parameters)
+
+- [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions)
+  * [Access to pre-compiled variables](#access-to-pre-compiled-variables)
+  * [Calling pre-compiled functions](#calling-pre-compiled-functions)
+
+- [CRGB and the hue function](#crgb-and-the-hue-function)
+
+- [Safe mode and arrays](#safe-mode-and-arrays)
+
+- [Variable types](#variable-types)
+  * [Arrays and multidimensional arrays](#arrays-and-multidimensional-arrays)
+  * [Structures](#structures)
+
+- [Saving executables](#saving-executables)
+  * [Binded functions](#binded-functions)
+
+- [What you can do with the language](#what-you-can-do-with-the-language)
+  * [Use of define](#use-of-define)
+
+- [Running scripts in the background](#running-scripts-in-the-background)
+
+- [Performance](#performance)
+
+- [Advanced stuff](#advanced-stuff)
+  * [Pointer to the executable, and interrupts](#pointer-to-the-executable-and-interrupts)
+
+- [Verification & testing infrastructure](#verification--testing-infrastructure)
+
+- [Known limitations](#known-limitations)
+
+- [Conclusion](#conclusion)
+
+<!-- TOC end -->
+
+# Which language?
+
+## C-like language
+
+Same choice as v1: a C-like syntax, a bit closer to JavaScript, with stronger typing. A loose adaptation, not a strict C subset -- but you can write things like this:
 
 ```c
 void main()
@@ -439,22 +85,386 @@ void main()
 }
 ```
 
-**Types**: `int` (32-bit), `s_int` (16-bit signed), `uint8_t`,
-`uint16_t`, `uint32_t`, `float`, `bool` (`true`/`false`), `char`,
-`CRGB`, `CRGBW`.
+## DIY parser and compiler
 
-**Control flow / operators**: `if`/`else`, `while`, `for`, `break`,
-`continue`, the ternary `cond ? a : b`, `&&`/`||` and the `and`/`or`
-keyword forms, `++`/`--`, `+=`/`-=`/`*=`/`/=`, `<<`/`>>`, `^` for
-*power* (not XOR -- `x^2` is `x` squared), explicit casts written as
-`(int)(expr)` (the parens around `expr` are required -- `(int)x` alone
-is a parse error), implicit int<->float conversion elsewhere.
+Still hand-written, still no grammar-generator tool involved, still not written by a compiler specialist. What's different from v1 is that this time the whole thing is exercised by a real test suite instead of by hand -- see [Verification & testing infrastructure](#verification--testing-infrastructure).
 
-**Constants**: `#define NAME value` (the `#` is required -- a bare
-`define NAME value` is not valid syntax, despite appearing in some
-older example scripts).
+## Not a development environment
 
-**Arrays**, including multi-dimensional via comma indexing:
+Same as v1: this library compiles and runs scripts, it doesn't give you anywhere to write them. If you want an actual editor/terminal environment around this, [LedOS](https://github.com/hpwit/LedOS) (built for v1) is the closest thing, and [StarLight](https://github.com/MoonModules/StarLight) wraps v1 into a full web-enabled ESP32 application. Neither has been ported to v2 yet.
+
+# First light
+
+- Compile a script and get back a live, callable object: `ScriptExecutable exec = parseScript(script);`
+- Check it actually compiled: `if (exec.isExeExists())`
+- Call a function declared in it by name, e.g. `main`: `exec.execute("main");`
+
+If you run this ([SimpleScript](examples/SimpleScript)):
+
+```cpp
+#include "script_executable.h"
+
+char script[] = R"EOF(
+void main()
+{
+   for (int i = 0; i < 20; i++)
+   {
+      printfln("i:%2d  3*i:%2d", i, 3 * i);
+   }
+}
+)EOF";
+
+void setup()
+{
+   Serial.begin(115200);
+
+   ScriptExecutable exec = parseScript(script);
+   if (exec.isExeExists())
+   {
+      exec.execute("main");
+   }
+}
+
+void loop()
+{
+}
+```
+
+the output is:
+
+```
+i: 0 3*i: 0
+i: 1 3*i: 3
+i: 2 3*i: 6
+...
+i:19 3*i:57
+```
+
+`printf`/`printfln` need no setup at all -- they're built into the compiler, not something you bind (see [Talking to your own code](#interaction-with-pre-compiled-functions) for functions that do need binding).
+
+**NB: `execute()` doesn't only work on `main` -- any function declared in the script can be called by name, and (unlike v1) it hands you back its real return value if you ask for one. See [the next section](#the-function-you-call-can-have-input-parameters).**
+
+## Checking for errors
+
+`ScriptExecutable::isExeExists()` is `true` if parsing, assembling, and loading all succeeded and the script has at least one callable function. Check it before calling anything else. On failure, `parseScript()` already printed why -- the parse error's exact line/position for a syntax error, or an assembler/loader error message otherwise -- so there's no separate error object to inspect the way v1's `Executable::error` worked.
+
+## Freeing an executable
+
+Nothing to call. `ScriptExecutable` frees the compiled binary automatically when it goes out of scope -- v1's `exec.free()` doesn't exist in v2 because there's nothing left to free by the time you'd call it. This is also why `ScriptExecutable` can't be copied or reassigned (only constructed once, directly, from `parseScript()`) -- see its class comment in `script_executable.h` if you're curious why.
+
+# The function you call can have input parameters
+
+```cpp
+Arguments args;
+args.add(5);
+int32_t result = 0;
+exec.execute("fact", &args, &result);
+```
+
+**NB: for now, arguments are `int`/`float` only, same restriction v1 had.**
+
+Factorial, computed in the script and read back into the sketch ([Factorial](examples/Factorial)):
+
+```cpp
+#include "script_executable.h"
+
+char script[] = R"EOF(
+int fact(int h)
+{
+   if (h == 1)
+   {
+      return 1;
+   }
+   return h * fact(h - 1);
+}
+
+void main()
+{
+}
+)EOF";
+
+void setup()
+{
+   Serial.begin(115200);
+
+   ScriptExecutable exec = parseScript(script);
+   if (exec.isExeExists())
+   {
+      Arguments args;
+      for (int g = 5; g <= 7; g++)
+      {
+         args.clear();
+         args.add(g);
+         int32_t result = 0;
+         if (exec.execute("fact", &args, &result))
+         {
+            printf("factorial of %d is %d\n", g, result);
+         }
+      }
+   }
+}
+
+void loop()
+{
+}
+```
+
+result:
+
+```
+factorial of 5 is 120
+factorial of 6 is 720
+factorial of 7 is 5040
+```
+
+**NB: this is the real, load-bearing difference from v1 worth calling out here -- `execute()` calls a function directly by its own address, exactly like one script function calling another, which is what makes a genuine return value available. `main()` gets no special treatment: `exec.execute("main", &result)` returns its value too, the same way. The one place this can matter is `sync()` -- see [Calling `main()` vs. calling other functions](#calling-main-vs-calling-other-functions) below if a script uses it.**
+
+# Interaction with pre-compiled functions
+
+The script language can't do everything the real Espressif toolchain can -- no WiFi, no I2C/SPI, no reusing FastLED or any other existing library's code -- so a script needs to be able to call out to real, pre-compiled C++ functions, and read/write real C++ variables. In v2 this is `bindFunction()`/`bindVariable()` (`binding.h`), called *before* `parseScript()`.
+
+## Access to pre-compiled variables
+
+```cpp
+bindVariable((char *)"type", (char *)"name_in_script", arraySizeOrNull, (void *)&hostVariable);
+```
+
+The script must still declare it `external` itself -- binding registers the host pointer, the `external` declaration is what makes the assembler reserve a jump-table slot for it:
+
+```cpp
+#include "script_executable.h"
+#include "binding.h"
+
+int variable = 0;
+uint16_t _array[10];
+
+char script[] = R"EOF(
+external int value;
+external uint16_t array[10];
+
+void fillArray()
+{
+   for (int i = 0; i < 10; i++)
+   {
+      array[i] = i * 3;
+   }
+}
+void change()
+{
+   value = value + 2;
+}
+void main()
+{
+   printfln("value: %d", value);
+}
+)EOF";
+
+void setup()
+{
+   Serial.begin(115200);
+
+   bindVariable((char *)"int", (char *)"value", NULL, (void *)&variable);
+   bindVariable((char *)"uint16_t", (char *)"array", (char *)"[10]", (void *)_array);
+
+   ScriptExecutable exec = parseScript(script);
+   if (exec.isExeExists())
+   {
+      variable = 5;
+      exec.execute("main");
+      variable = 240;
+      exec.execute("main");
+
+      variable = 15;
+      printf("old value:%d ", variable);
+      exec.execute("change");
+      printf("new value:%d\n", variable);
+
+      exec.execute("fillArray");
+      for (int i = 0; i < 10; i++)
+      {
+         printf("%d:%d\n", i, _array[i]);
+      }
+   }
+}
+
+void loop()
+{
+}
+```
+
+**NB: three different functions, all defined in the same script, called independently by name.**
+
+## Calling pre-compiled functions
+
+```cpp
+bindFunction((char *)"returnType", (char *)"name_in_script", (char *)"argTypesCommaSeparated", (void *)hostFunctionPointer);
+```
+
+```cpp
+#include "script_executable.h"
+#include "binding.h"
+
+void displayfloat(float nb)
+{
+   printf("from pre-compiled %f\n", nb);
+}
+float calcul(int pos)
+{
+   return (float)pos / 34.0;
+}
+void otherfunction()
+{
+   printf("from other function\n");
+}
+
+char script[] = R"EOF(
+external float calc(int pos);
+external void displayfloat(float nb);
+external void otherfunction();
+
+void main()
+{
+   float h = calc(52);
+   displayfloat(h);
+   otherfunction();
+}
+)EOF";
+
+void setup()
+{
+   Serial.begin(115200);
+
+   bindFunction((char *)"float", (char *)"calc", (char *)"int", (void *)calcul);
+   bindFunction((char *)"void", (char *)"displayfloat", (char *)"float", (void *)displayfloat);
+   bindFunction((char *)"void", (char *)"otherfunction", NULL, (void *)otherfunction);
+
+   ScriptExecutable exec = parseScript(script);
+   if (exec.isExeExists())
+   {
+      exec.execute("main");
+   }
+}
+
+void loop()
+{
+}
+```
+
+result:
+
+```
+from pre-compiled 1.529412
+from other function
+```
+
+See `examples/StructsAndHostBindings` and `examples/BouncingBalls` for larger, real working sketches built the same way (structs with methods, several bound functions and an external array).
+
+# CRGB and the hue function
+
+`CRGB` is a real type in the language -- `CRGB color = CRGB(r, g, b);` works out of the box, no binding needed.
+
+**Unlike v1, v2 doesn't ship a built-in `hsv()`/FastLED integration.** There's no `USE_FASTLED` switch. If your script wants `hsv()`, or an `leds[]` array driven by a real driver's `show()`, bind them yourself the exact same way as any other host function/variable:
+
+```cpp
+#include "script_executable.h"
+#include "binding.h"
+#define NUM_LEDS 256
+
+CRGB ledsBuffer[NUM_LEDS];
+CRGB scriptHsv(int hue, int sat, int val) { return CHSV(hue, sat, val); } // e.g. via FastLED
+void scriptShow() { FastLED.show(); }
+
+char script[] = R"EOF(
+external CRGB leds[256];
+external CRGB hsv(int h, int s, int v);
+external void show();
+
+void main()
+{
+   int k = 0;
+   while (true)
+   {
+      for (int i = 0; i < 128; i++)
+         for (int j = 0; j < 96; j++)
+            leds[j * 16 + i] = hsv(i + j + k, 255, 255);
+      k++;
+      show();
+   }
+}
+)EOF";
+
+void setup()
+{
+   Serial.begin(115200);
+   FastLED.addLeds<NEOPIXEL, DATA_PIN>(ledsBuffer, NUM_LEDS);
+
+   bindVariable((char *)"CRGB", (char *)"leds", (char *)"[256]", (void *)ledsBuffer);
+   bindFunction((char *)"CRGB", (char *)"hsv", (char *)"int,int,int", (void *)scriptHsv);
+   bindFunction((char *)"void", (char *)"show", NULL, (void *)scriptShow);
+
+   ScriptExecutable exec = parseScript(script);
+   if (exec.isExeExists())
+   {
+      exec.execute("main");
+   }
+}
+
+void loop()
+{
+}
+```
+
+See `examples/BouncingBalls` for a complete, working version of exactly this pattern.
+
+# Safe mode and arrays
+
+Same footgun as v1: an external array with no bounds checking will happily write past its end.
+
+```c
+external uint16_t array[10];
+
+void main()
+{
+   for (int i = 0; i < 200; i++)
+   {
+      array[i] = 200; // out of bounds past i == 9
+   }
+}
+```
+
+`safe_mode` (still the same keyword, no `#`) turns on a bounds check before every write to a `safe_mode`-declared array:
+
+```c
+safe_mode
+external uint16_t array[10];
+
+void main()
+{
+   for (int i = 0; i < 200; i++)
+   {
+      array[i] = 200;
+   }
+}
+```
+
+**NB: the check runs on every single write, so it costs real speed -- turn it on while debugging an array-indexing bug, not by default.**
+
+# Variable types
+
+```
+uint8_t
+char
+bool      : true, false
+int       : 32-bit
+s_int     : 16-bit signed
+uint16_t
+uint32_t
+float
+CRGB
+CRGBW
+```
+
+## Arrays and multidimensional arrays
 
 ```c
 int array[23];
@@ -464,20 +474,37 @@ int array3D[depth, height, width];
 int h = array3D[2, 12, 23];
 ```
 
-**Structs**, with fields, methods, and a constructor (same name as the
-struct):
+## Structures
+
+```c
+struct new_type
+{
+   float k;
+   int l;
+}
+```
+
+Structures can have methods:
+
+```c
+struct new_type
+{
+   float h;
+   int l;
+   void display()
+   {
+      printfln("l:%d", l);
+   }
+}
+```
+
+And constructors (same name as the struct):
 
 ```c
 struct ball
 {
    float vx, vy, xc, yc, r;
    int color;
-
-   void updateBall()
-   {
-      xc += vx;
-      ...
-   }
 
    ball()
    {
@@ -491,59 +518,31 @@ ball Balls[max_nb_balls];
 Balls[i].updateBall();
 ```
 
-**Calling out to your own code**: `external` declarations, resolved at
-load time against whatever you registered with `bindFunction()`/
-`bindVariable()` (see above) -- e.g. `external void show();`,
-`external CRGB leds[height, width];`.
+`varname d;` is equivalent to `varname d = varname();`; a constructor that takes arguments works the same way you'd expect: `varname d2 = varname(23);`.
 
-**Inline assembly**, for the rare case a script needs to drop to real
-Xtensa instructions directly (e.g. reading the cycle counter for a
-custom `millis()`):
+**NB 1: you can have arrays of structs -- `new_type arr[10];`.**
 
-```c
-uint32_t __baseTime[1];
-__ASM__ void setTime()
-{
-   "entry a1,32"
-   "rsr a14,234"
-   "l32r a5,@___baseTime"
-   "s32i a14,a5,0"
-   "retw.n"
-}
-```
+**NB 2: a function has to be declared before it's called, same as v1 -- no forward references (yet).**
 
-**JSON-driven variables**: `json "path.to.value" as <type> name;`
-declares a script variable that gets populated from a JSON document at
-runtime (see `json_binding.h` -- the structural half needs no
-dependency; actually applying a JSON document needs ArduinoJson,
-opted into with `-D__JSON_OPTION__`).
+**NB 3: fields inside a struct still need to go from largest to smallest (`float`/`uint32_t`/`int`, then `s_int`/`uint16_t`, then `uint8_t`/`CRGB`/`CRGBW`) -- same memory-alignment reason as v1. `examples/BouncingBalls`'s own `ball` struct above is written in exactly this order for that reason.**
 
-**Interrupts**: `pinInterrupt(_execaddr_, "function_name", pin)`, bound
-the same way as any other external function -- `_execaddr_` is an
-always-available variable holding a handle to the currently running
-script, so registering a callback doesn't need anything script-specific
-beyond the function name.
+# Saving executables
 
-## Saving and loading compiled scripts
-
-A compiled script's machine code can be flattened to a self-contained
-byte buffer, written to flash, and loaded back later -- by a
-*completely different* sketch, as long as it registers the same
-external names:
+Same idea as v1 -- compile once, write the machine code out, load and run it later without the source, possibly from a completely different sketch. The API is different: v2's `parseScript()`/`ScriptExecutable` hide the intermediate `Binary` (freeing it once loaded), so saving needs the lower-level pipeline instead:
 
 ```cpp
-// SaveScriptBinary.ino -- compiles, never runs the script itself.
+// compiling sketch -- never runs the script itself
 Binary bin = createBinary(&footer, &header, &content, false);
 uint32_t size = 0;
 uint8_t *serialized = serializeBinary(&bin, &size);
-// ... write `serialized` (size bytes) to a file, e.g. via LittleFS ...
+// ... write `serialized` (size bytes) to LittleFS/SD ...
 ```
 
 ```cpp
-// LoadScriptBinary.ino -- a separate sketch, doesn't see the source.
-bindVariable(...);   // same external names, this sketch's own bindings
+// a *different* sketch, later -- doesn't see the source at all
+bindVariable(...);   // same external names this binary was compiled against
 bindFunction(...);
-// ... read the saved bytes back from a file ...
+// ... read the saved bytes back ...
 Binary bin = deserializeBinary(buf, size);
 executable exe = createExecutableFromBinary(&bin);
 freeBinary(&bin);
@@ -552,176 +551,137 @@ callFunction(&exe, "someFunction", NULL, 0, &result);
 freeExecutable(&exe);
 ```
 
-The relocation header stores external references by *name*, not
-address, so the compiling and executing sketches only need to agree on
-those names -- see `examples/SaveScriptBinary`/`examples/LoadScriptBinary`
-for the full pair, and `asm_serialize.h` for `serializeBinary()`/
-`deserializeBinary()`.
+See `examples/SaveScriptBinary`/`examples/LoadScriptBinary` for the full working pair.
 
-This is also the one case where `parseScript()`/`ScriptExecutable`
-don't apply -- they hide the intermediate `Binary` (freeing it once the
-executable is loaded), and saving needs to serialize that `Binary`
-directly. Use the lower-level pipeline (`Parser`/`createBinary()`/
-`createExecutableFromBinary()`, all still available -- see
-`examples/LanguageBasics` for every individual step spelled out,
-including printing the AST and generated assembly) for that case.
+## Binded functions
 
-## Inspecting a compiled binary
+Same rule as v1: bound functions/variables travel with neither the source nor the saved binary. Whatever sketch loads the binary back needs to call `bindFunction()`/`bindVariable()` for every `external` name the script uses, exactly as the original compiling sketch did -- the relocation header matches them up by *name*, so as long as both sketches agree on the names, the two don't need to be the same sketch, or even know about each other.
 
-`binary_hex.h` prints a compiled script's raw bytes as a hex dump --
-useful for understanding or debugging what the compiler actually
-produced, independent of running it:
+# What you can do with the language
 
-```cpp
-#include "binary_hex.h"
+Like any normal language:
+- loops (`while`, `for`)
+- `break`, `continue`
+- testing: `if`/`else`, the ternary `cond ? a : b`
+- `++`/`--` for integers and pointers
+- `+=`, `-=`, `/=`, `*=`
+- pointers
+- `^` for power (not XOR -- `x^2` is `x` squared)
+- `>>` and `<<`
+- explicit casts: `(int)(expr)`, `(float)(expr)` -- the parens around `expr` are required, `(int)x` alone is a parse error. int<->float conversion elsewhere is automatic.
+- `&&`/`||`, and the `and`/`or` keyword spellings of the same thing
+- built-ins: `printf`, `printfln` (real varargs, always available, no binding needed)
 
-Binary bin = createBinary(&footer, &header, &content, false);
-printBinaryHex(&bin);
-// instructions (128 bytes):
-// 000000: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-// 000010: 00 00 00 00 36 11 01 91 fd ff a2 29 00 65 00 00
-// ...
-// relocation header (170 bytes):
-// 000000: 09 00 00 00 00 00 00 00 00 00 08 00 00 00 01 00
-// ...
+## Use of define
+
+Unlike v1, the `#` is required -- a bare `define NAME value` is not valid syntax in v2:
+
+```c
+#define TOKEN 25
+
+if (i < TOKEN)
+{
+   ...
+}
+
+// compiles as if you had written
+if (i < 25)
+{
+   ...
+}
 ```
 
-```cpp
-void printBinaryHex(Binary *bin);
-```
+**NB: no macros yet, same as v1 -- `#define` is a plain textual constant, not a function-like substitution.**
 
-Dumps a `Binary`'s two meaningful pieces, each labeled.
-
-- `bin` -- a `Binary` from `createBinary()`. Does nothing if `bin` is
-  `NULL` or `bin->error.error` is set.
-- Dumps `bin->binary_data` (`bin->instruction_size` bytes, labeled
-  "instructions") -- the actual compiled machine code, destined for
-  IRAM. The same byte count every size-budget check in this repo
-  already reports (e.g. `test_large_script.cpp`).
-- Dumps `bin->function_data` (`bin->function_size` bytes, labeled
-  "relocation header") -- decoded at load time to patch call sites and
-  reserve each declared function's entry point; a mix of small binary
-  fields and embedded, NUL-terminated name strings (e.g.
-  `@_fact(num)`), readable directly in the dump.
-- Uses `bin->instruction_size`, not the larger `tmp_instruction_size`
-  `serializeBinary()` persists (see `binary_hex.h`'s own comment for
-  exactly why).
+# Running scripts in the background
 
 ```cpp
-void printHex(const uint8_t *data, uint32_t size, uint32_t bytesPerLine = 16);
+exec.executeAsTask("function_name");
 ```
 
-The generic primitive `printBinaryHex()` is built on -- works on any
-byte buffer, not just a `Binary`'s fields.
+Runs one script function on its own FreeRTOS task instead of blocking the caller -- ESP32 only, see `examples/ExecuteAsTask`.
 
-- `data` -- pointer to the first byte to dump. `NULL` prints `(empty)`
-  and returns immediately.
-- `size` -- how many bytes to dump. `0` prints `(empty)` and returns
-  immediately.
-- `bytesPerLine` -- how many bytes per output line, each line prefixed
-  with its hex offset from `data`. Default `16`; `0` is treated as `16`.
-- Not specific to compiled scripts at all -- works equally on a
-  `serializeBinary()` blob (see "Saving and loading compiled scripts"
-  above) or any other byte buffer you want dumped.
+**This is the one place v2 is deliberately smaller than v1.** v1 has a full scheduler on top of this: `scriptRuntime`, a registry of several concurrently-running scripts addressable by name, `suspend()`/`kill()`/`restart()` with cross-task handshaking, and `sync()` for coordinating several scripts' output so they don't tear each other's frames. None of that exists in v2 yet -- `executeAsTask()` is fire-and-forget: no handle back, no way to stop it short of the script returning on its own, no registry to look other running scripts up in. If your project actually needs several independent, coordinated scripts running at once, that's still v1 territory for now. See [Known limitations](#known-limitations).
 
-Neither this port nor upstream v1 (ESPLiveScript) had a raw byte-dump
-utility before -- v1's closest relative, `asm_parser.h`'s
-`printparsdAsm()`, disassembles the pre-assembly intermediate form
-(address + opcode + mnemonic per instruction) rather than printing
-compiled bytes, and only ever ran behind a `__TEST_DEBUG` guard commented
-out at its one call site.
+# Performance
 
-See `examples/PrintBinaryHex` for the full pipeline (parse -> `createBinary()`
--> `printBinaryHex()`), and `binary_hex.h` for both functions' exact
-semantics (including why instruction dumps use `instruction_size`, not
-the larger `tmp_instruction_size` `serializeBinary()` persists).
+I don't have a v2 apples-to-apples frame-rate comparison on real LED hardware yet the way v1's README does (that table was measured on my own 128x96/12,288-pixel panel; I haven't rebuilt that specific rig against v2). What I do have is real, QEMU-measured Xtensa cycle counts for a naive recursive `fib()`, which at least says something about per-call overhead:
 
-## Calling `main()` vs. calling other functions
+| calls | cycles/call |
+|:----|:----:|
+| `fib(25)` -- 242,785 calls | ~5.3-6.5 |
+| `fib(30)` -- 2,692,537 calls | ~5.3-6.5 |
 
-Internally, `execute()`/`callFunction()` call a function directly by
-address, exactly the way compiled script code calls another script
-function -- which is what makes a real return value available.
-`runExecutable()`/`runExecutableWithArgs()` (still available, lower-
-level) call `main()` specifically through an argument-marshaling
-wrapper and additionally zero two data-region words some scripts'
-`sync()` depends on; that wrapper never surfaces a return value. Unlike
-`ScriptExecutable::execute()`, they also do *not* call `@__footer`
-first -- a script with a global struct array driven through this
-lower-level pair needs its own explicit `callFunction(&exe, "footer",
-...)` call first, same as `execute()` does internally. Unless a script
-calls `sync()`, calling `main()` via `execute("main")` is equivalent,
-does give you its return value, and handles `@__footer` for you --
-prefer it.
+(measured directly under QEMU via the Xtensa cycle-counter register, `test/qemu/gen_fib_timing.cpp`/`runner_fib_timing.c` -- the two figures agreeing across an 11x difference in call count is itself the check that this is a real, constant per-call cost and not a fluke.) Projected out, that's `fib(40)` (331,160,281 calls) in a bit over 8 real seconds at 240MHz on actual hardware.
 
-## Verification & testing infrastructure
+I'd rather publish that honestly than reuse v1's old table with a different compiler underneath it. A real led-panel comparison is on the list.
 
-- `test/host/` -- the compiler built and run as an ordinary host
-  program (no ESP32 involved):
-  - `make run` -- the main hand-written test suite.
-  - `make check-optimized` -- the same suite built with `-Os`, matching
-    Arduino's default optimization level (catches bugs `-O0` alone
-    hides -- an include guard colliding with a GCC builtin macro was
-    found exactly this way).
-  - `make check-asan` -- the same suite under AddressSanitizer (catches
-    memory bugs plain `malloc` silently tolerates -- a heap-use-after-
-    free from an unsafe `vect<T>` copy was found exactly this way).
-  - `make run-sc` -- compiles every real-world script from v1's own
-    `sc_examples/` corpus.
-  - `make run-large` -- compiles a several-hundred-line synthetic
-    script and checks the resulting binary against a size budget for
-    an ESP32 *without* PSRAM.
-  - `make run-json` -- the ArduinoJson-dependent half of JSON binding
-    (needs `ARDUINOJSON_DIR=...`).
-- `test/qemu/` -- the *compiled bytes* executed for real under QEMU
-  (Espressif's ESP32 and ESP32-S3 machine models), checking actual
-  results: arithmetic, external calls, recursion, argument passing,
-  external variables, save/load, and a real-hardware cycle-count
-  projection for a naive `fib(40)`/`fib(50)`. See `test/qemu/README.md`
-  for exactly what is and isn't covered this way (notably: float
-  instructions hang this QEMU fork, so anything float-heavy is only
-  host-structurally verified, not execution-verified).
+# Advanced stuff
 
-## Examples
+## Pointer to the executable, and interrupts
+
+Same mechanism as v1: `_execaddr_` is an always-available variable holding a handle to the currently-running script, so registering an interrupt callback doesn't need anything script-specific beyond the target function's name:
+
+```c
+external void pinInterrupt(uint32_t exec, char *name, int pin);
+
+int number = 0;
+void increase()
+{
+   number++;
+}
+
+void main()
+{
+   pinInterrupt(_execaddr_, "increase", 23);
+   while (true)
+   {
+      printfln("number:%d", number);
+   }
+}
+```
+
+`pinInterrupt` itself is just another `bindFunction()`-registered host function, real interrupt setup happens on the C++ side (`gpio_isr_handler_add()` etc.) -- see v1's README for a complete `setup_gpio_interrupt()` implementation, which ports over unchanged.
+
+# Verification & testing infrastructure
+
+This is the part that's actually new relative to v1, and the whole reason for the rewrite -- see [Introduction](#introduction).
+
+- `test/host/` -- the compiler built and run as an ordinary host program, no ESP32 involved. `make run` for the main suite, `make check-optimized` (same suite at `-Os`, Arduino's default level), `make check-asan` (under AddressSanitizer), `make run-sc` (every real script from v1's own `sc_examples/`), `make run-large` (a size-budget check against a PSRAM-less ESP32).
+- `test/qemu/` -- the actual compiled bytes, executed for real under Espressif's QEMU fork: arithmetic, external calls, recursion, argument passing, external variables, save/load, and the cycle-count projection quoted above. See `test/qemu/README.md` for exactly what's covered.
+
+# Examples
 
 | Example | Demonstrates |
 | --- | --- |
 | `SimpleScript` | The quick-start pattern above. |
-| `ScriptPrintf` | A script printing directly with `printf()`/`printfln()` -- no `bindFunction()`/`external` needed. |
+| `ScriptPrintf` | A script printing directly with `printf()`/`printfln()`. |
 | `Factorial` | `Arguments`, calling a function multiple times with different values. |
 | `CallScriptFunction` | Calling a named function with a raw `int32_t[]` and using its return value. |
 | `FibonacciTiming` | Timing a script's own execution with `micros()`. |
-| `BouncingBalls` | Structs with methods/constructors, an array of structs, several `bindFunction()`-registered host calls. |
+| `BouncingBalls` | Structs with methods/constructors, an array of structs, several bound host calls. |
 | `StructsAndHostBindings` | Structs + `bindFunction()`/`bindVariable()`, more minimal. |
 | `KeyboardCallback` | An `external` variable read by the script, re-entering a loaded script by name from a host event handler. |
-| `LanguageBasics` | Every pipeline step spelled out individually, printing the AST and generated assembly -- useful for understanding or debugging the compiler itself. |
+| `LanguageBasics` | Every pipeline step spelled out individually -- printing the AST and generated assembly. |
 | `SaveScriptBinary` / `LoadScriptBinary` | Compiling once, saving to flash, loading and running from a separate sketch. |
-| `PrintBinaryHex` | Hex-dumping a compiled script's instruction bytes and relocation header with `printBinaryHex()`/`printHex()`. |
-| `MultiEffectController` | A real, several-hundred-line multi-effect script (structs, recursion, sorts, a button-driven mode switch) actually compiled *and run*, every host binding real (not `NULL`) -- see `test/host/fixtures/multi_effect_controller.sc` for the size-budget-only version of the same script. |
-| `ExecuteAsTask` | Running a script's own `main()` loop on its own FreeRTOS task with `executeAsTask()`, so the sketch's real `loop()` keeps running concurrently. ESP32-only. |
+| `PrintBinaryHex` | Hex-dumping a compiled script's instruction bytes and relocation header. |
+| `MultiEffectController` | A real, several-hundred-line multi-effect script actually compiled and run, every host binding real. |
+| `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently. ESP32-only. |
 
-## Known limitations
+# Known limitations
 
 Real, current gaps -- not aspirational TODOs:
 
-- **No multi-program task scheduler.** v1 has a full multi-task FreeRTOS
-  scheduler: a registry of several concurrently-running scripts
-  (`scriptRuntime`), `suspend()`/`restart()`/`kill()` with cross-task
-  handshaking, and inter-task coordination via `sync()`. v2 has none of
-  that -- deliberately; a single script, called directly, is still the
-  default. `ScriptExecutable::executeAsTask()` (`script_executable.h`,
-  ESP32-only) is a minimal exception: it hands one script function its
-  own FreeRTOS task (see `examples/ExecuteAsTask`) so it doesn't block
-  the caller -- fire-and-forget, no handle, no suspend/kill, no registry
-  of other running scripts to coordinate with.
-- **`import <stdlib-function>` (e.g. `import rand`) doesn't work.** v1
-  splices in a real implementation from a small standard library at
-  tokenize time; v2 has the same mechanism sketched but not wired up.
-  Declare the function `external` and bind a real host implementation
-  instead.
-- **Float instructions can't be verified under QEMU in this
-  environment** (the emulator hangs) -- doesn't affect real hardware,
-  only how deeply this repo's own test suite can verify float-heavy
-  scripts before you run them yourself.
-- No built-in `CRGB`/`hsv()`/LED-panel support -- always via
-  `bindFunction()`/`bindVariable()`, same as any other host
-  integration.
+- **No multi-program task scheduler** -- see [Running scripts in the background](#running-scripts-in-the-background).
+- **`import <stdlib-function>`** (e.g. `import rand`, v1's way of splicing in a small standard-library implementation at tokenize time) **doesn't work yet.** Declare the function `external` and bind a real host implementation instead.
+- **No built-in `CRGB`/`hsv()`/LED-panel support** -- always via `bindFunction()`/`bindVariable()`, see [CRGB and the hue function](#crgb-and-the-hue-function).
+
+## Calling `main()` vs. calling other functions
+
+One internal difference worth knowing if a script uses `sync()`: the lower-level `runExecutable()`/`runExecutableWithArgs()` call `main()` specifically through an argument-marshaling wrapper and zero two data-region words `sync()` depends on -- and never surface a return value. `ScriptExecutable::execute()` calls everything (`main()` included) directly by address instead, which is what makes a return value available, but skips that wrapper's zeroing step. Unless a script calls `sync()`, `execute("main")` is equivalent and strictly more useful (real return value) -- prefer it, which is what every example in this README already does.
+
+# Conclusion
+
+v1 was my first real attempt at "can I build a language for this." v2 is what happens when the answer to that turns into "now can I actually trust it." Same goal as always -- fast, live-editable led animations on an esp32 without an IDE in the loop -- just built this time so a change to the compiler either provably still works or provably doesn't, instead of "seemed fine on my desk."
+
+Issues and feature requests welcome, same as v1. As always, enjoy and have fun.
