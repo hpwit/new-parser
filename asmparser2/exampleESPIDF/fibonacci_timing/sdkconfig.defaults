@@ -1,0 +1,9 @@
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# Matches the 240MHz this example's own header comment and README.md's
+# projected fib(40) timing assume ("...on real hardware at the ESP32's
+# default 240 MHz") -- ESP-IDF's own default is 160MHz (CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160),
+# not 240, so without this the printed esp_timer_get_time() elapsed time
+# would be measured at 160MHz instead, not comparable to that figure.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
