@@ -232,7 +232,21 @@ void optimize(Text *text)
     // currently just a copy of aX"; later instructions that read aY get
     // rewritten to read aX directly and the movr's source slot is blanked,
     // until a label/call or a write to either register invalidates the
-    // fact.
+    // fact. Plain `mov aY,aX` gets the same treatment, but registered
+    // separately, further down in this same pass's op-dispatch (see the
+    // neg/abs/mov/sll/srl branch's own comment) -- `mov` already has to
+    // run through that dispatch regardless (to consume/rewrite against
+    // *older* facts, e.g. blanking a stale movr whose value this mov
+    // itself is just forwarding), so folding trackAdd() into the tail of
+    // that existing branch avoids re-processing the same line twice with
+    // conflicting effects: doing it here too, as a second, independent
+    // trigger, would have this pass's own dest-invalidation check (a few
+    // lines into that same dispatch branch) immediately undo the fact
+    // this trigger just added, since by the time dispatch runs, `from`
+    // already contains this line's own destination register -- confirmed
+    // the hard way, via a `movr a15,a2 / mov a2,a15` return-value
+    // round-trip (previously fully eliminated) surviving intact once
+    // both triggers ran independently on the same "mov a2,a15" line.
     vect<char *> from, to;
     vect<int> index;
 
@@ -293,7 +307,13 @@ void optimize(Text *text)
                 trackRemoveAt(from, to, index, ind);
         }
 
-        if (index.size() == 0)
+        // "mov" is the one op-dispatch branch below that can *establish*
+        // a tracked fact (see its own comment), not just consume/
+        // invalidate an existing one -- so, unlike every other branch
+        // here, it still needs to run even when nothing is tracked yet
+        // (e.g. fib()'s very first `mov a15,a10`, with no prior movr/mov
+        // anywhere to have populated `index`).
+        if (index.size() == 0 && strcmp(d.get(0), "mov") != 0)
             continue;
 
         char *op = d.get(0);
@@ -380,9 +400,11 @@ void optimize(Text *text)
             char *newstr = string_format("%s %s,", op, d2.get(0));
             bool found = false;
             int ind = -1;
+            char *finalSrc = d2.get(1);
             for (int mp = 0; mp < index.size(); mp++)
                 if (strcmp(d2.get(1), from.get(mp)) == 0)
                 {
+                    finalSrc = to.get(mp);
                     newstr = str_concat("%s%s", newstr, to.get(mp));
                     text->replaceText(index.get(mp), " ");
                     found = true;
@@ -401,6 +423,35 @@ void optimize(Text *text)
                 }
             if (found)
                 trackRemoveAt(from, to, index, ind);
+
+            // A plain "mov aY,aX" (unlike neg/abs/sll/srl, which compute
+            // something rather than copy verbatim) is itself a fresh,
+            // trackable "aY is a copy of aX" fact -- e.g.
+            // _visitcallFunctionNode() (visitnode.cpp) unconditionally
+            // copies a just-returned call result out of a10 into a
+            // scratch register this way, even when that register's only
+            // use is the very next instruction (fib()'s `mov a14,a10`
+            // right before `add a2,a15,a14`, which could just read
+            // `add a2,a15,a10` instead). Register it here, using
+            // whatever source this rewrite just settled on (finalSrc),
+            // so a later line reading aY can still be rewritten straight
+            // to aX -- skipped when finalSrc == the destination (a
+            // rewritten-down-to-self-move, already handled by Pass 5).
+            //
+            // Deliberately done here, at the tail of this branch,
+            // instead of as a second independent trigger alongside
+            // "movr"'s above: a `mov` line unavoidably reaches this
+            // branch regardless (to consume/rewrite against *older*
+            // facts, same as this comment's example needs), so adding a
+            // second, separate trigger for the same line would have this
+            // branch's own dest-invalidation check just above
+            // immediately undo the fact that other trigger had only just
+            // added -- confirmed the hard way, via a
+            // `movr a15,a2 / mov a2,a15` return-value round-trip
+            // (previously fully eliminated by this exact branch) surviving
+            // intact once both triggers ran independently on the same line.
+            if (strcmp(op, "mov") == 0 && strcmp(d2.get(0), finalSrc) != 0)
+                trackAdd(from, to, index, d2.get(0), finalSrc, i);
         }
         else if ((strcmp(op, "round.s") == 0 || strcmp(op, "floor.s") == 0 || strcmp(op, "float.s") == 0 ||
                   strcmp(op, "l32i") == 0 || strcmp(op, "s32i") == 0 || strcmp(op, "l16i") == 0 ||
@@ -670,5 +721,20 @@ void optimizeSpeed(Text *text)
         {
             sawRetw = false;
         }
+    }
+}
+
+// See optimize.h's own comment: physically deletes every line optimize()/
+// optimizeSpeed() left blanked out (" " or "") instead of erasing in
+// place, now that no pass still needs those slots to keep their original
+// position. Walks backwards so each erase() (a memmove, see vect.h)
+// never disturbs the indices of entries not yet visited.
+void removeBlankLines(Text *text)
+{
+    for (int i = text->size() - 1; i >= 0; i--)
+    {
+        char *tmp = *text->getChildAtPos(i);
+        if (tmp == NULL || strcmp(tmp, " ") == 0 || strcmp(tmp, "") == 0)
+            text->_texts.erase(i);
     }
 }
