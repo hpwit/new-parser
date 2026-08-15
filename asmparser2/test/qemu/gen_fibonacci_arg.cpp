@@ -50,18 +50,17 @@ int main()
     memcpy(codeCopy, bin.binary_data, bin.instruction_size);
     int instrSize = bin.instruction_size;
 
-    int entryOffset = -1;
-    for (int i = 0; i < instrSize; i++)
-    {
-        if (codeCopy[i] == 0x36)
-        {
-            entryOffset = i;
-            break;
-        }
-    }
-    uint32_t entryWord = codeCopy[entryOffset] | (codeCopy[entryOffset + 1] << 8) | (codeCopy[entryOffset + 2] << 16);
-    int realFnFrameSize = (int)(((entryWord & 0xFF000) >> 12) * 8);
-
+    // entry a1,N always encodes as a fixed 0x36 opcode byte (bin_entry(),
+    // asm_encoders.h) with N/8 packed into bits [12:19] of the 3-byte
+    // instruction -- true for *every* entry instruction, wrapper and
+    // real body alike. Decoding "the first 0x36 anywhere in the stream"
+    // (the old approach here) finds the *wrapper's* entry, since it's
+    // textually first -- mislabeled as "realFnFrameSize" below, but
+    // harmless as long as the wrapper's own entry a1,N literally reused
+    // the real function's frame size (true before the entry-size fix
+    // that made the wrapper use a small fixed frame instead -- see
+    // visitnode.cpp's _visitdefFunctionNode). Decode each function's own
+    // entry directly at its own known address instead of guessing.
     executable exe = createExecutableFromBinary(&bin);
     if (exe.error.error)
     {
@@ -85,12 +84,17 @@ int main()
         return 1;
     }
 
-    // The real function's own "entry a1,N" (found above, entryOffset) is
-    // always the *second* entry point textually (wrapper code comes
-    // first), and both happen to use the same frame size here since
-    // there's only one declared function -- reuse realFnFrameSize for the
-    // wrapper's frame too (verified against the disassembly during
-    // development: both say "entry a1,152" for this script).
+    // Each function's own entry point address is exactly where its own
+    // "entry a1,N" instruction starts (always the first instruction of
+    // any function/wrapper body) -- decode the immediate directly there
+    // instead of assuming wrapper and real-body frames match.
+    auto decodeEntryFrameSize = [&](uint32_t addr) -> int {
+        uint32_t w = codeCopy[addr] | (codeCopy[addr + 1] << 8) | (codeCopy[addr + 2] << 16);
+        return (int)(((w & 0xFF000) >> 12) * 8);
+    };
+    int wrapperFrameSize = decodeEntryFrameSize(wrapper->address);
+    int realFnFrameSize = decodeEntryFrameSize(realFn->address);
+
     printf("static unsigned char script_code[%d] __attribute__((section(\".text.script_code\"), aligned(4))) = {\n",
            instrSize);
     for (int i = 0; i < instrSize; i++)
@@ -103,7 +107,7 @@ int main()
     printf("#define SCRIPT_CODE_SIZE %d\n", instrSize);
     printf("#define WRAPPER_ENTRY_OFFSET %u\n", wrapper->address);
     printf("#define REAL_FN_ENTRY_OFFSET %u\n", realFn->address);
-    printf("#define WRAPPER_FRAME_SIZE %d\n", realFnFrameSize);
+    printf("#define WRAPPER_FRAME_SIZE %d\n", wrapperFrameSize);
     printf("#define REAL_FN_FRAME_SIZE %d\n", realFnFrameSize);
     printf("#define ARG_SLOT_DATA_OFFSET %u\n", wrapper->variableaddress);
     // The jump-table slot the wrapper's "l32r a9,@_stack__main(d)" reads
