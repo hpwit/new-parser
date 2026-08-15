@@ -33,4 +33,15 @@ void optimize(Text *text);
 // body's last statement was already a `return`, so every function ending
 // in `return` compiles with one dead retw.n.
 void optimizeSpeed(Text *text);
+
+// Physically deletes every blanked-out line optimize()/optimizeSpeed()
+// leave behind (blankCurrent()/replaceText(i, " ") mark a line dead in
+// place -- " " or "" -- rather than shifting every later index by
+// erasing it there, since a peephole pass is still walking the buffer by
+// position when it blanks something). Run once, after both passes are
+// completely done, so nothing still depends on a blanked slot's position.
+// Purely cosmetic/for-inspection -- createBinary() already tolerates
+// (and skips) blank lines on its own, so this changes what
+// content.display() prints, not what gets assembled.
+void removeBlankLines(Text *text);
 #endif

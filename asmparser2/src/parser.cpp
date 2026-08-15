@@ -109,8 +109,18 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     program.visitNode();
     PARSER_LOG("optimize")
     optimize(&content);
+    removeBlankLines(&content);
+    // Re-run optimize() now that blanked-out lines from the first pass
+    // are physically gone -- its peephole passes look at nearby lines
+    // (e.g. Pass 1's "is the immediately preceding instruction a reload
+    // of this same register") to decide what to do, so a blank sitting
+    // between two lines that are only adjacent *after* compaction can
+    // hide an optimization the first pass had no way to see yet.
+    PARSER_LOG("optimize")
+    optimize(&content);
     PARSER_LOG("optimize speed")
     optimizeSpeed(&content);
+    removeBlankLines(&content);
 }
 
 void Parser::parseProgram()
