@@ -1042,20 +1042,18 @@ void _visitdefFunctionNode(NodeToken *nd)
     if (nd->type == TokenUserDefinedVariableMemberFunction)
         isStructFunction = true;
     header.addAfter(string_format(".global @_%s", nd->getText()));
-    if (!isStructFunction)
-        header.addAfter(string_format(".global @__%s", nd->getText()));
+   //remove this becuase not needed anymore
+    // if (!isStructFunction)
+   //     header.addAfter(string_format(".global @__%s", nd->getText()));
     // string variables = "";
+    
+    /*
     if (!isStructFunction)
     {
         char *variables = NULL;
         for (int i = 0; i < nd->getChildPtr(1)->children_size(); i++)
         {
-            /*
-            if (variables == NULL)
-                variables = string_format(" %d", nd->getChildPtr(1)->getChildPtr(i)->getVarTypeObj()->total_size);
-            else
-                variables = string_format("%s %d", variables, nd->getChildPtr(1)->getChildPtr(i)->getVarTypeObj()->total_size);
-            */
+ 
            variables = str_concat("%s %d", variables, nd->getChildPtr(1)->getChildPtr(i)->getVarTypeObj()->total_size);
         }
         if (variables == NULL)
@@ -1105,6 +1103,7 @@ void _visitdefFunctionNode(NodeToken *nd)
             bufferText->addAfter(asmInstructionsName[retw]);
         }
     }
+    */
 
     bufferText->addAfter(string_format(arrobase_label, nd->getText()));
     bufferText->addAfter(string_format(entry, ((nd->stack_pos) / 8 + 1) * 8 + 16 + _STACK_SIZE)); // ((nd->stack_pos) / 8 + 1) * 8+20)
@@ -1226,8 +1225,8 @@ void _visitprogramNode(NodeToken *nd)
     if (addfloatdivision)
     {
         header.addAfter(" .global @___div(d|d)");
-        header.addAfter("@_stack___div(d|d):");
-        header.addAfter(".bytes 12");
+       // header.addAfter("@_stack___div(d|d):");
+       // header.addAfter(".bytes 12");
         content.end();
         for (int i = 0; i < _div_size; i++)
         {
