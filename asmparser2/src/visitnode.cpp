@@ -1106,7 +1106,8 @@ void _visitdefFunctionNode(NodeToken *nd)
     */
 
     bufferText->addAfter(string_format(arrobase_label, nd->getText()));
-    bufferText->addAfter(string_format(entry, ((nd->stack_pos) / 8 + 1) * 8 + 16 + _STACK_SIZE)); // ((nd->stack_pos) / 8 + 1) * 8+20)
+    // bufferText->addAfter(string_format(entry, ((nd->stack_pos) / 8 + 1) * 8 + 16 + _STACK_SIZE)); // ((nd->stack_pos) / 8 + 1) * 8+20)
+    bufferText->addAfter(string_format(entry, ((nd->stack_pos) / 8 + 1) * 8 + 16));
 #if _TRIGGER == 0
     int sav = 9;
     bufferText->addAfterNoDouble(string_format("l32r a%d,@_stack_%s", sav, nd->getText()));
@@ -2608,7 +2609,8 @@ void _visitdefInputArgumentsNode(NodeToken *nd)
     else
     {
         int reg_num = 2;
-        int stek = ((nd->parent->stack_pos) / 8 + 1) * 8 + 16 + _STACK_SIZE;
+       // int stek = ((nd->parent->stack_pos) / 8 + 1) * 8 + 16 + _STACK_SIZE;
+int stek = ((nd->parent->stack_pos) / 8 + 1) * 8 + 16;
         for (int i = 0; i < nd->children_size(); i++)
         {
             int start = nd->getChildPtr(i)->stack_pos;

@@ -135,7 +135,7 @@ void bindFunction(char * out,char * name,char *  in, void * ptr)
       
     }
     asmex.name_ref=extern_text.addText(_name);
-    printf("%s %s \n\r",extern_text.getText( asmex.sign_ref), extern_text.getText( asmex.name_ref));
+    PARSER_LOG("%s %s \n\r",extern_text.getText( asmex.sign_ref), extern_text.getText( asmex.name_ref))
     if(ptr!=NULL)
          asmex.ptr=ptr;
     binded_assets.push_back(asmex);

@@ -404,6 +404,6 @@
     {
        for(int i=0;i<_texts.size();i++)
        {
-        printf("tes %d:%s \n",i,_texts.get(i));
+        printf("%d:%s \n",i,_texts.get(i));
        }
     }
