@@ -40,8 +40,7 @@ static const char *kScriptPath = "../host/fixtures/multi_effect_controller.sc";
 static const char *kPrelude =
     "#define true 1\n"
     "#define false 0\n"
-    "uint32_t _handle_;\n"
-    "uint32_t _execaddr_;\n";
+    "uint32_t _handle_;\n";
 
 static std::string readFile(const char *path)
 {

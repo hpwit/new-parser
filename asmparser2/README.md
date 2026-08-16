@@ -651,7 +651,7 @@ I'd rather publish that honestly than reuse v1's old table with a different comp
 
 ## Pointer to the executable, and interrupts
 
-Same mechanism as v1: `_execaddr_` is an always-available variable holding a handle to the currently-running script, so registering an interrupt callback doesn't need anything script-specific beyond the target function's name:
+`_handle_` is an always-available variable holding the address of the `ScriptExecutable` running this script (or, for a script loaded through the raw `parse -> createBinary -> createExecutableFromBinary` pipeline with no `ScriptExecutable` wrapper, the address of the `executable` itself), so registering an interrupt callback doesn't need anything script-specific beyond the target function's name:
 
 ```c
 external void pinInterrupt(uint32_t exec, char *name, int pin);
@@ -664,13 +664,15 @@ void increase()
 
 void main()
 {
-   pinInterrupt(_execaddr_, "increase", 23);
+   pinInterrupt(_handle_, "increase", 23);
    while (true)
    {
       printfln("number:%d", number);
    }
 }
 ```
+
+(v1 called this variable `_execaddr_` and gave it a small scheduler-registry index rather than a real address -- see `asm_execute.cpp`'s `fillHandleWords()` for what v2 does instead, now that `_execaddr_` itself has been dropped.)
 
 `pinInterrupt` itself is just another `bindFunction()`-registered host function, real interrupt setup happens on the C++ side (`gpio_isr_handler_add()` etc.) -- see v1's README for a complete `setup_gpio_interrupt()` implementation, which ports over unchanged.
 
@@ -697,6 +699,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `LanguageBasics` | Every pipeline step spelled out individually -- printing the AST and generated assembly. |
 | `SaveScriptBinary` / `LoadScriptBinary` | Compiling once, saving to flash, loading and running from a separate sketch. |
 | `PrintBinaryHex` | Hex-dumping a compiled script's instruction bytes and relocation header. |
+| `PrintFibonacciAssembly` | Printing the generated Xtensa assembly for a recursive `fib()` before assembling/loading it, then running `fib(10)`. |
 | `MultiEffectController` | A real, several-hundred-line multi-effect script actually compiled and run, every host binding real. |
 | `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently. ESP32-only. |
 

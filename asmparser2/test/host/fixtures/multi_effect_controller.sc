@@ -754,7 +754,7 @@ int main()
    clear();
    runDiagnostics();
 
-   pinInterrupt(_execaddr_, "onModeButton", 4);
+   pinInterrupt(_handle_, "onModeButton", 4);
 
    uint32_t initialChecksum = trailChecksum();
    printfln("initial trail checksum: %d", initialChecksum);

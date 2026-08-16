@@ -17,9 +17,9 @@ static int32_t callInt(void *entry, int32_t arg)
 }
 
 /* Real backing storage for this script's data region (arr's own 12
-   bytes, plus every other header reservation -- _handle_/_execaddr_/
-   _sync, each function's stack-scratch slot -- that shares the same
-   region, sized ARR_DATA_SIZE == bin.data_size). On a loaded script
+   bytes, plus every other header reservation -- _handle_, each
+   function's stack-scratch slot -- that shares the same region, sized
+   ARR_DATA_SIZE == bin.data_size). On a loaded script
    (createExecutableFromBinary()) this would be a slice of the loader's
    own malloc'd buffer; here, since this runner calls compiled code
    directly with no loader involved, it's just a plain static buffer. */

@@ -186,6 +186,15 @@ struct executable
     uint8_t *data = NULL;
     uint32_t binary_size = 0;
     uint32_t data_size = 0;
+    // Set by ScriptExecutable's constructor (script_executable.cpp) to its
+    // own `this`, so asm_execute.cpp's fillHandleWord() can give a
+    // script's _handle_ global the address of the ScriptExecutable that
+    // owns it. NULL for an `executable` built directly via the raw
+    // parse -> createBinary() -> createExecutableFromBinary() pipeline
+    // (no ScriptExecutable wrapper involved, e.g. LanguageBasics.ino) --
+    // fillHandleWord() falls back to the executable's own address in
+    // that case.
+    void *owner = NULL;
 };
 
 #endif

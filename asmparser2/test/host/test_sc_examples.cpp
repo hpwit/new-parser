@@ -137,6 +137,15 @@ static std::string stripImportRand(const std::string &in)
 // into a host-bound "sync" external anyway -- see v1's functionlib.h's
 // `_sync` string), since that's behaviorally equivalent for the
 // structural verification this harness does.
+// _execaddr_ is declared here (unlike parseScript()'s own kPrelude, which
+// dropped it -- see asm_execute.cpp's fillHandleWord()/asm_types.h's
+// executable::owner doc comment for what replaced it) purely so
+// tetris.sc's pinInterrupt(_execaddr_, ...) calls (v1's sc_examples
+// corpus, a read-only sibling repo this harness compiles against but
+// never edits) still parse. It's an ordinary, uninitialized global now --
+// nothing populates it -- so tetris.sc gets a harmless garbage handle
+// instead of a real one; this harness only checks compile-time structural
+// success against the corpus, not that runtime.
 static const char *kPrelude =
     "#define true 1\n"
     "#define false 0\n"

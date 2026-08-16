@@ -207,7 +207,7 @@ void IRAM_ATTR onScriptInterrupt()
 }
 
 // external void pinInterrupt(uint32_t handle, char *fname, int pin);
-// _execaddr_ (the `handle` argument) isn't needed here -- g_exec already
+// _handle_ (the `handle` argument) isn't needed here -- g_exec already
 // points at the one script this sketch ever loads, unlike a framework
 // juggling several scripts at once that would need it to disambiguate.
 void scriptPinInterrupt(uint32_t handle, char *fname, int pin)
@@ -901,7 +901,7 @@ int main()
    clear();
    runDiagnostics();
 
-   pinInterrupt(_execaddr_, "onModeButton", 4);
+   pinInterrupt(_handle_, "onModeButton", 4);
 
    uint32_t initialChecksum = trailChecksum();
    printfln("initial trail checksum: %d", initialChecksum);

@@ -28,8 +28,7 @@
 static const char *kPrelude =
     "#define true 1\n"
     "#define false 0\n"
-    "uint32_t _handle_;\n"
-    "uint32_t _execaddr_;\n";
+    "uint32_t _handle_;\n";
 
 #define MAX_TYPE0_RECORDS 64
 #define MAX_TYPE1_RECORDS 16

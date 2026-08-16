@@ -10,12 +10,12 @@
 
 // v1's real compile entrypoints (Parser::parseScript() et al.) always
 // prepend this exact boilerplate before the user's own script text --
-// true/false and the _handle_/_execaddr_ globals (which pinInterrupt()
-// needs, see KeyboardCallback.ino-style scripts) real scripts routinely
-// depend on silently existing come from here. parseScript() is meant to
-// be the batteries-included entry point (see script_executable.h), so it
-// does the same -- without this, `bool b = true;` or
-// `pinInterrupt(_execaddr_, "fn", pin);` would fail to compile with a
+// true/false and the _handle_ global (which pinInterrupt() needs, see
+// KeyboardCallback.ino-style scripts) real scripts routinely depend on
+// silently existing come from here. parseScript() is meant to be the
+// batteries-included entry point (see script_executable.h), so it does
+// the same -- without this, `bool b = true;` or
+// `pinInterrupt(_handle_, "fn", pin);` would fail to compile with a
 // confusing "impossible to find variable declaration" for something the
 // script never declared itself. parseScript() below counts this
 // prelude's own lines and offsets _tokenizer_start_line accordingly, so
@@ -25,11 +25,19 @@
 static const char *kPrelude =
     "#define true 1\n"
     "#define false 0\n"
-    "uint32_t _handle_;\n"
-    "uint32_t _execaddr_;\n";
+    "uint32_t _handle_;\n";
 
 ScriptExecutable::ScriptExecutable(Binary *bin) : exe(createExecutableFromBinary(bin))
 {
+    // Safe to take `this` here despite the class's own copy/move-deletion
+    // comment being all about avoiding a *second*, differently-addressed
+    // copy existing: C++17's mandatory copy elision guarantees `this` is
+    // already the object's final, permanent address (every call site
+    // either direct-initializes a fresh local from this constructor's own
+    // prvalue, or -- parseScript() -- returns one straight through,
+    // itself elided into the caller's local by the same rule). See
+    // asm_types.h's `executable::owner` doc comment for what reads this.
+    exe.owner = this;
     freeBinary(bin);
     if (exe.error.error)
     {

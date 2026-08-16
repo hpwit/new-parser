@@ -88,9 +88,14 @@ compiler behaves -- they change what text the compiler is handed.
    etc.) *always* prepend a `_sync`/`_syncExt`/`base_ext_functions`
    boilerplate before the user's script (four near-identical
    `addContent()` sequences, confirmed by reading `ESPLiveScript.h:
-   303-356`) -- which is where `true`/`false` and the `_handle_`/
-   `_execaddr_` globals real scripts silently depend on actually come
-   from. v2's `Parser::parse()` is the raw, low-level entrypoint (same one
+   303-356`) -- which is where `true`/`false` and the `_handle_` global
+   real scripts silently depend on actually come from. `_execaddr_` is
+   declared here only so tetris.sc's `pinInterrupt(_execaddr_, ...)`
+   calls still parse -- v2 no longer gives it a built-in reservation or
+   populates it at load time (see `asm_execute.cpp`'s
+   `fillHandleWords()`), so this harness's copy is just an ordinary,
+   always-zero global; only `_handle_` carries a real value now. v2's
+   `Parser::parse()` is the raw, low-level entrypoint (same one
    `test_parser.cpp` calls directly) and has no higher-level "compile a
    user script" wrapper yet to attach this policy to, so it isn't done
    automatically -- a caller has to do it, same as this harness does here.

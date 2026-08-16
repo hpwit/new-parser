@@ -36,6 +36,7 @@ exampleESPIDF/
   factorial/
   fibonacci_timing/
   print_binary_hex/
+  print_fibonacci_assembly/
   keyboard_callback/
   execute_as_task/
   two_scripts/
@@ -78,6 +79,7 @@ idf.py -p /dev/tty.usbserial-XXXX flash monitor
 | `factorial` | `Factorial.ino` | `execute()`'s `Arguments` overload, called repeatedly with different arguments |
 | `fibonacci_timing` | `FibonacciTiming.ino` | Timing `fib(40)` on-device with `esp_timer_get_time()` |
 | `print_binary_hex` | `PrintBinaryHex.ino` | `printBinaryHex()`/`printHex()` -- inspecting a compiled script's raw bytes |
+| `print_fibonacci_assembly` | `PrintFibonacciAssembly.ino` | Printing the generated Xtensa assembly for a recursive `fib()` before assembling/loading it |
 | `keyboard_callback` | `KeyboardCallback.ino` | An `external` variable the script reads, re-entering a script function on demand |
 | `execute_as_task` | `ExecuteAsTask.ino` | `ScriptExecutable::executeAsTask()` -- running a script's `main()` on its own FreeRTOS task |
 | `two_scripts` | `TwoScripts.ino` | `ScriptExecutable::free()` -- compiling/running two different scripts sequentially |

@@ -22,8 +22,6 @@ extern const char *_separ_;
 extern const char *_comma_;
 extern const char *_opencloseparenthesis_;
 extern const char *_handle_;
-extern const char *_execaddr_;
-extern const char *_sync;
 extern const char *_space_;
 extern  char *_end_text;
 #endif

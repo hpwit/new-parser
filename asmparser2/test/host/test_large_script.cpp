@@ -51,13 +51,12 @@ static const char *kScriptPath = "fixtures/multi_effect_controller.sc";
 
 // Same boilerplate v1's real compile entrypoints always prepend before a
 // user script (see test_sc_examples.cpp's kPrelude for the full
-// citation) -- true/false, and the _handle_/_execaddr_ globals
-// pinInterrupt() calls here need.
+// citation) -- true/false, and the _handle_ global pinInterrupt() calls
+// here need.
 static const char *kPrelude =
     "#define true 1\n"
     "#define false 0\n"
-    "uint32_t _handle_;\n"
-    "uint32_t _execaddr_;\n";
+    "uint32_t _handle_;\n";
 
 // ESP32 (non-PSRAM) resource budget this script's compiled output is
 // checked against -- see the file header comment for how these were

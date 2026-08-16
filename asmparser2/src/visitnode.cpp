@@ -1188,10 +1188,6 @@ void _visitprogramNode(NodeToken *nd)
 
     header.addBefore(string_format(arrobase_label, _handle_));
     header.addBefore(string_format(bytes, 4));
-    header.addBefore(string_format(arrobase_label, _execaddr_));
-    header.addBefore(string_format(bytes, 4));
-    header.addBefore(string_format(arrobase_label, _sync));
-    header.addBefore(string_format(bytes, 4));
 
     register_numr.clear();
     register_numl.clear();
@@ -2690,7 +2686,7 @@ void _visitjsonBindingNode(NodeToken *nd)
 
 void _visitdefGlobalVariableNode(NodeToken *nd)
 {
-    if (strcmp(nd->getText(), _handle_) == 0 || strcmp(nd->getText(), _execaddr_) == 0)
+    if (strcmp(nd->getText(), _handle_) == 0)
         return;
     if (safeMode)
     {

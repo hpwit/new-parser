@@ -621,8 +621,8 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
                 asm_Error.error = 0;
                 ps.size = (uint16_t)((value / 4) * 4 + 4);
                 // ".bytes N" (no trailing values) is a plain zeroed
-                // reservation (e.g. the built-in _handle_/_execaddr_/
-                // _sync scratch words) -- nothing to store. ".bytes N
+                // reservation (e.g. the built-in _handle_ scratch word)
+                // -- nothing to store. ".bytes N
                 // XX XX XX ..." (a string literal's initial value,
                 // visitnode.cpp's globalVariableNode/stringNode
                 // handling) carries N space-separated hex byte values
@@ -890,9 +890,9 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
             // the 4-byte jump-table slot every ".bytes" line gets
             // above -- addInstr() copies that many bytes into it once
             // this line gets assembled. ".bytes N" alone (no trailing
-            // values, e.g. the built-in _handle_/_execaddr_/_sync
-            // scratch words) doesn't need this -- there's no payload
-            // to stage. Ported from upstream ESPLiveScript's identical
+            // values, e.g. the built-in _handle_ scratch word) doesn't
+            // need this -- there's no payload to stage. Ported
+            // from upstream ESPLiveScript's identical
             // asm_parser.h size-estimation pass, which this v2 port
             // had dropped -- without it, tmp_exec was always allocated
             // 4 bytes too small for any actual string content,

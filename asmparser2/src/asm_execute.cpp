@@ -450,6 +450,32 @@ static int marshalArguments(Arguments *args, int32_t out[6])
     return n;
 }
 
+// _handle_ scratch word some scripts (pinInterrupt()-style re-entry, see
+// README's "Pointer to the executable, and interrupts") expect at the
+// start of the data region. v1's executeBinary() (execute_asm.h) wrote
+// two separate words here -- `handle`, a small integer index into its
+// multi-program task registry (a feature v2 doesn't have, see README's
+// "Known limitations"), and `exePtr`, the caller's own running-script
+// controller object (`this`) -- but only ever read the first one back
+// (functionlib.h's sync()/syncExt() __ASM__ helpers both only reference
+// `_handle_`, never v1's second word), so v2 collapses them into this one
+// word instead of carrying the unused duplicate forward. It gets
+// `ex->owner` (set by ScriptExecutable's constructor, see asm_types.h's
+// doc comment on it) when one exists, falling back to the executable's
+// own address for the raw parse -> createBinary() ->
+// createExecutableFromBinary() pipeline (no ScriptExecutable wrapper
+// involved, e.g. LanguageBasics.ino). Shared by every call path that
+// actually enters compiled code (callFunction() and
+// runExecutableWithArgs()).
+static void fillHandleWord(executable *ex)
+{
+    if (ex->data != NULL && ex->data_size >= 4)
+    {
+        uint32_t *t = (uint32_t *)ex->data;
+        t[0] = (uint32_t)(uintptr_t)(ex->owner != NULL ? ex->owner : (void *)ex);
+    }
+}
+
 bool callFunction(executable *ex, const char *name, Arguments *args, int32_t *result)
 {
     int32_t raw[6];
@@ -474,6 +500,8 @@ bool callFunction(executable *ex, const char *name, const int32_t *args, int nar
     }
     if (target == NULL)
         return false;
+
+    fillHandleWord(ex);
 
     // target->address is a byte offset from the start of start_program
     // (see the type-4 case in decodeBinaryHeader).
@@ -520,15 +548,7 @@ bool runExecutableWithArgs(executable *ex, const int32_t *args, int nargs)
     if (target == NULL)
         return false;
 
-    // handle/execaddr scratch words some scripts' sync() expects at the
-    // start of the data region -- written for parity even though none of
-    // this library's examples call sync() yet.
-    if (ex->data != NULL && ex->data_size >= 8)
-    {
-        uint32_t *t = (uint32_t *)ex->data;
-        t[0] = 0;
-        t[1] = 0;
-    }
+    fillHandleWord(ex);
 
     if (nargs > 0 && args != NULL && ex->data != NULL)
         memcpy(ex->data + target->variableaddress, args, (size_t)nargs * 4);

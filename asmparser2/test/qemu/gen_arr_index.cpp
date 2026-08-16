@@ -44,18 +44,17 @@
 //     leaves every such slot at 0 -- confirmed via
 //     `qemu-system-xtensa -d guest_errors`: "Invalid write at addr 0x0".
 //  2. Patching *only* arr's own slot still crashed the same way: type-0
-//     records turn out to exist for *every* header reservation this
-//     script has -- `_handle_`/`_execaddr_`/`_sync`, each function's own
-//     stack-scratch slot, and arr -- eight records total here, each
-//     with its own bincode (offset within one shared data region sized
-//     bin.data_size) and its own nb_data (which word-slot in the
-//     instruction stream to patch). The real loader
-//     (decodeBinaryHeader) patches all of them unconditionally in one
-//     pass; skipping the other seven left at least one of them (a
-//     function's own stack-scratch indirection, referenced from that
-//     function's prologue regardless of whether the script itself
-//     declared any locals needing it) at 0 too. Fixed by collecting and
-//     patching every type-0 record, not just arr's.
+//     records turn out to exist for other header reservations this
+//     script has too -- `_handle_` and each function's own stack-scratch
+//     slot, alongside arr -- each with its own bincode
+//     (offset within one shared data region sized bin.data_size) and its
+//     own nb_data (which word-slot in the instruction stream to patch).
+//     The real loader (decodeBinaryHeader) patches all of them
+//     unconditionally in one pass; skipping the others left at least one
+//     of them (a function's own stack-scratch indirection, referenced
+//     from that function's prologue regardless of whether the script
+//     itself declared any locals needing it) at 0 too. Fixed by
+//     collecting and patching every type-0 record, not just arr's.
 //
 // IMPORTANT: createExecutableFromBinary() mutates bin.binary_data in
 // place, so the code bytes must be captured before calling it (see

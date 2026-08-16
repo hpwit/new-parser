@@ -544,7 +544,7 @@ static void runGenerateBinaryTest(const char *name, const char *script)
                     break;
                 }
             }
-            if (entryOffset < 12 || entryOffset % 4 != 0)
+            if (entryOffset < 4 || entryOffset % 4 != 0)
             {
                 printf("       no plausible entry opcode found in the jump-table-prefixed instruction stream\n");
                 ok = false;
@@ -1701,26 +1701,25 @@ static void runScriptExecutableTest()
 
         // Regression test: parseScript() prepends the same boilerplate
         // v1's real compile entrypoints always do (#define true/false,
-        // uint32_t _handle_/_execaddr_) -- an earlier version of this
-        // function didn't, so a script using a bare `true`/`false`
-        // literal or referencing _execaddr_ (both routine -- the latter
-        // is what pinInterrupt(_execaddr_, "fn", pin) needs, see
-        // KeyboardCallback-style scripts) failed to compile with a
-        // confusing "impossible to find variable declaration" for
-        // something the script never declared itself. No external
-        // binding needed here -- just referencing _execaddr_/_handle_ as
-        // plain variables is enough to prove they're declared.
+        // uint32_t _handle_) -- an earlier version of this function
+        // didn't, so a script using a bare `true`/`false` literal or
+        // referencing _handle_ (both routine -- the latter is what
+        // pinInterrupt(_handle_, "fn", pin) needs, see KeyboardCallback-
+        // style scripts) failed to compile with a confusing "impossible
+        // to find variable declaration" for something the script never
+        // declared itself. No external binding needed here -- just
+        // referencing _handle_ as a plain variable is enough to prove
+        // it's declared.
         {
             ScriptExecutable exec = parseScript(
                 "void main(){"
-                "   uint32_t x = _execaddr_;"
                 "   uint32_t y = _handle_;"
                 "   bool b = true;"
                 "   bool c = false;"
                 "}");
             if (!exec.isExeExists())
             {
-                printf("       script using true/false/_execaddr_/_handle_ (no explicit declaration) failed to compile\n");
+                printf("       script using true/false/_handle_ (no explicit declaration) failed to compile\n");
                 ok = false;
             }
         }
@@ -1910,8 +1909,8 @@ int main()
     // declared function's own stack-size slot), so the jump table never
     // reserved instruction-stream space and every subsequent l32r/callExt
     // pointed at the wrong address. This script's external call exercises
-    // that path directly -- entryOffset must be at or past 4 reserved
-    // slots (handle/execaddr/sync/setResult) instead of 3.
+    // that path directly -- entryOffset must be at or past 2 reserved
+    // slots (handle/setResult) instead of 1.
     runGenerateBinaryTest(
         "generates executable binary: external function call",
         "external void setResult(int a); void main(){int a; a=7; setResult(a*6);}");

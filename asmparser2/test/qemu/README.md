@@ -87,12 +87,12 @@ mathematically correct result:
    `createExecutableFromBinary()` (which this scheme never actually
    calls, unlike a normal load): an internal global's `l32r @_name`
    literal is a placeholder, patched at load time the same way an
-   external variable's slot is (case 6) -- except *every* header
-   reservation this script has (`_handle_`/`_execaddr_`/`_sync`, each
-   function's own stack-scratch slot, and the array itself) turns out to
-   need the identical treatment, not just the array -- eight relocation
-   records total for this script, each patched by hand in
-   `runner_arr_index.c` before the compiled code ever runs, mirroring
+   external variable's slot is (case 6) -- except other header
+   reservations this script has too (`_handle_`, each function's own
+   stack-scratch slot, alongside the array itself) turn out to need the
+   identical treatment, not just the array -- every one of them a
+   relocation record patched by hand in `runner_arr_index.c` before the
+   compiled code ever runs, mirroring
    exactly what `asm_execute.cpp`'s `decodeBinaryHeader` does for a real
    load. Confirmed the hard way: patching only the array's own slot left
    the runner hanging with no output at all; `qemu-system-xtensa -d
