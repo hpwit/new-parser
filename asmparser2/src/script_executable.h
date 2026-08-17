@@ -214,7 +214,7 @@ uint8_t *parseScriptToBinary(const char *script, uint32_t *size);
 // version of deserializeBinary() + createExecutableFromBinary() +
 // freeBinary(), for a sketch that loaded a previously-saved binary blob
 // (e.g. from LittleFS/SD, see "Saving and loading compiled scripts" in
-// README.md) and just wants a real, callable executable back. Register
+// README.md) and just wants a real, callable script back. Register
 // bindVariable()/bindFunction() for every `external` name the saved
 // script uses *before* calling this -- exactly as createExecutableFromBinary()
 // itself requires, since that's what actually resolves them.
@@ -223,12 +223,13 @@ uint8_t *parseScriptToBinary(const char *script, uint32_t *size);
 //   parseScriptToBinary()/serializeBinary() produced them (or
 //   deserializeBinary()'s own doc comment's format, if you built them
 //   another way). Only read during this call; not retained.
-// - Returns a real `executable` (asm_types.h) -- check `.error.error`
-//   before using it (a bad/corrupt buffer or a missing external
-//   binding surfaces here, with the specific problem already printed
-//   the same way parseScript()'s own errors are). The caller owns it:
-//   call freeExecutable(&exe) when done (see examples/LoadScriptBinary),
-//   same as if createExecutableFromBinary() had been called by hand.
-executable createExecutableFromBuffer(const uint8_t *buf, uint32_t size);
+// - Returns a ScriptExecutable, same as parseScript() -- check
+//   isExeExists() before using it (a bad/corrupt buffer or a missing
+//   external binding surfaces here, with the specific problem already
+//   printed the same way parseScript()'s own errors are). No explicit
+//   cleanup needed (see ScriptExecutable's own class comment); call
+//   execute()/executeOnly() the same way you would on a freshly
+//   parseScript()'d one (see examples/LoadScriptBinary).
+ScriptExecutable createExecutableFromBuffer(const uint8_t *buf, uint32_t size);
 
 #endif

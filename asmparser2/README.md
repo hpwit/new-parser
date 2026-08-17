@@ -572,17 +572,19 @@ if (serialized != NULL)
 bindVariable(...);   // same external names this binary was compiled against
 bindFunction(...);
 // ... read the saved bytes back ...
-executable exe = createExecutableFromBuffer(buf, size);
-int32_t result = 0;
-callFunction(&exe, "someFunction", NULL, 0, &result);
-freeExecutable(&exe);
+ScriptExecutable exec = createExecutableFromBuffer(buf, size);
+if (exec.isExeExists())
+{
+   int32_t result = 0;
+   exec.execute("someFunction", &result);
+}
 ```
 
-`createExecutableFromBuffer()` is `parseScriptToBinary()`'s load-side counterpart -- the one-call version of `deserializeBinary()` + `createExecutableFromBinary()` + `freeBinary()`. Same deal as before: register `bindVariable()`/`bindFunction()` for every `external` name the saved script uses *first* (that's what actually resolves them), check `exe.error.error` before using the result (the specific deserialize/loader error is already printed on failure), and `freeExecutable(&exe)` it yourself when done -- `createExecutableFromBuffer()` hands back a real `executable`, not a `ScriptExecutable`, so there's no automatic cleanup here.
+`createExecutableFromBuffer()` is `parseScriptToBinary()`'s load-side counterpart -- the one-call version of `deserializeBinary()` + `createExecutableFromBinary()` + `freeBinary()`. Same deal as before: register `bindVariable()`/`bindFunction()` for every `external` name the saved script uses *first* (that's what actually resolves them), and check `isExeExists()` before using the result (the specific deserialize/loader error is already printed on failure). It hands back a `ScriptExecutable`, same as `parseScript()` -- no manual `freeExecutable()` needed, and `execute()`/`executeOnly()` work exactly the same way.
 
 See `examples/SaveScriptBinary`/`examples/LoadScriptBinary` for the full working pair.
 
-**NB: saving and loading is the one place `ScriptExecutable` doesn't apply on either end -- `parseScriptToBinary()` hands back bytes, not an executable (the whole point is deferring loading/running to later, possibly elsewhere), and `createExecutableFromBuffer()` hands back the lower-level `executable` those bytes load into, not a `ScriptExecutable` wrapping it. If you need lower-level access too -- e.g. to print the AST or generated assembly before serializing -- the individual `Parser`/`createBinary()`/`serializeBinary()`/`deserializeBinary()`/`createExecutableFromBinary()` steps both convenience functions call are all still available; see `examples/LanguageBasics` for every step spelled out.**
+**NB: `parseScriptToBinary()` is the one place `ScriptExecutable` doesn't apply on the compiling end -- it hands back bytes, not an executable (the whole point is deferring loading/running to later, possibly elsewhere). The loading end, `createExecutableFromBuffer()`, hands back a real `ScriptExecutable` just like `parseScript()` does. If you need lower-level access instead -- e.g. to print the AST or generated assembly before serializing, or to hold the raw `executable` yourself -- the individual `Parser`/`createBinary()`/`serializeBinary()`/`deserializeBinary()`/`createExecutableFromBinary()` steps both convenience functions call are all still available; see `examples/LanguageBasics` for every step spelled out.**
 
 ## Binded functions
 

@@ -71,9 +71,9 @@ extern "C" void app_main(void)
       return;
    }
 
-   executable exe = createExecutableFromBuffer(buf, size);
+   ScriptExecutable exec = createExecutableFromBuffer(buf, size);
    free(buf);
-   if (exe.error.error)
+   if (!exec.isExeExists())
    {
       // createExecutableFromBuffer() already printed the specific
       // deserialize/loader error.
@@ -84,13 +84,14 @@ extern "C" void app_main(void)
    {
       hostKeyChar = n;
       int32_t result = 0;
-      if (!callFunction(&exe, "keyboard", NULL, 0, &result))
+      // executeOnly(), not execute() -- re-entering "keyboard" repeatedly
+      // here, same as keyboard_callback's own once-per-keypress pattern
+      // (see ScriptExecutable::executeOnly()'s own doc comment).
+      if (!exec.executeOnly("keyboard", &result))
       {
-         printf("callFunction(\"keyboard\") failed\n");
+         printf("executeOnly(\"keyboard\") failed\n");
          break;
       }
       printf("key_char=%d -> keyboard() returned %d\n", n, (int)result);
    }
-
-   freeExecutable(&exe);
 }

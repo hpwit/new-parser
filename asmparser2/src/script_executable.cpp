@@ -238,7 +238,7 @@ uint8_t *parseScriptToBinary(const char *script, uint32_t *size)
     return serialized;
 }
 
-executable createExecutableFromBuffer(const uint8_t *buf, uint32_t size)
+ScriptExecutable createExecutableFromBuffer(const uint8_t *buf, uint32_t size)
 {
     Binary bin = deserializeBinary(buf, size);
     if (bin.error.error)
@@ -247,19 +247,20 @@ executable createExecutableFromBuffer(const uint8_t *buf, uint32_t size)
         // createExecutableFromBinary() doesn't validate bin->error.error
         // itself (it unconditionally uses bin->instruction_size/
         // binary_data/function_data, trusting a well-formed Binary) --
-        // so a deserialize failure has to short-circuit here, into a
-        // safely zeroed executable, rather than being handed off to it.
-        executable exe;
-        exe.error.error = 1;
-        exe.error.error_message = bin.error.error_message;
-        return exe;
+        // so a deserialize failure has to short-circuit here, matching
+        // parseScript()'s own error path (compileScriptToBinary()'s
+        // failure case) instead of ever handing a bad Binary off to it.
+        // No freeBinary() needed here -- deserializeBinary() only ever
+        // fails before allocating binary_data/function_data, leaving
+        // both still NULL.
+        return ScriptExecutable();
     }
 
-    executable exe = createExecutableFromBinary(&bin);
-    freeBinary(&bin);
-    if (exe.error.error)
-    {
-        printf("loader error: %s\n", exe.error.error_message ? exe.error.error_message : "?");
-    }
-    return exe;
+    // A single, uninterrupted prvalue construction -- see
+    // ScriptExecutable's class comment for why this specific shape (not
+    // a named local variable then `return that;`) is load-bearing.
+    // ScriptExecutable's own constructor calls createExecutableFromBinary(),
+    // freeBinary()s bin, and prints any loader error -- same as
+    // parseScript()'s equivalent call.
+    return ScriptExecutable(&bin);
 }

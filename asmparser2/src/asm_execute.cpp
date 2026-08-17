@@ -2,6 +2,7 @@
 #include "binding.h"
 #include "string_functions.h"
 #include "binary_hex.h"
+#include "runtime_functions.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -208,6 +209,22 @@ static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binar
 
 executable createExecutableFromBinary(Binary *bin)
 {
+    // registerBuiltinRuntimeFunctions() (runtime_functions.h) is
+    // otherwise only ever triggered by Parser::parse() -- fine for
+    // parseScript()/the raw parse -> createBinary -> here pipeline
+    // (parsing always happens first, in the same process, before this
+    // runs), but a save/load consumer (createExecutableFromBuffer(), or
+    // hand-rolled deserializeBinary() + this) never calls Parser::parse()
+    // at all: a fresh process that only ever loads a previously-compiled
+    // binary would otherwise never register printf/printfln, so a saved
+    // script that calls either fails to relocate here with "external
+    // function @_printfln(char*|Args) not found" despite them being
+    // documented as always available with no binding needed. Idempotent
+    // (registerBuiltinRuntimeFunctions() guards itself with a static
+    // bool), so unconditionally safe to call again even when parsing
+    // already did.
+    registerBuiltinRuntimeFunctions();
+
     executable exe;
     exe.error.error = 0;
 
