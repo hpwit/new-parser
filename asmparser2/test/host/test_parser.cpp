@@ -1441,15 +1441,20 @@ static void runSaveLoadBinaryTest()
                 }
                 else
                 {
+                    // No isWrapper check needed here anymore -- see
+                    // asm_execute.cpp's isWrapperRecord() comment: with the
+                    // wrapper mechanism's own ".global @__NAME"/marshaling
+                    // body disabled (visitnode.cpp's _visitdefFunctionNode()),
+                    // every function gets exactly one record, always the
+                    // real, callable one.
                     globalcall *keyboardPlain = NULL;
                     for (int i = 0; i < exe.functions.size(); i++)
                     {
                         globalcall *gc = exe.functions.getptr(i);
-                        bool isWrapper = gc->variables != NULL && gc->variables[0] >= '0' && gc->variables[0] <= '9';
                         const char *p2 = gc->name + 2;
                         if (p2[0] == '_')
                             p2++;
-                        if (!isWrapper && strncmp(p2, "keyboard", 8) == 0 && (p2[8] == '(' || p2[8] == 0))
+                        if (strncmp(p2, "keyboard", 8) == 0 && (p2[8] == '(' || p2[8] == 0))
                             keyboardPlain = gc;
                     }
                     if (keyboardPlain == NULL)

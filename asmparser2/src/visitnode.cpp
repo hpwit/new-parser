@@ -1046,14 +1046,31 @@ void _visitdefFunctionNode(NodeToken *nd)
     // if (!isStructFunction)
    //     header.addAfter(string_format(".global @__%s", nd->getText()));
     // string variables = "";
-    
-    /*
+
+    // Pure metadata, not part of the disabled wrapper mechanism below --
+    // createBinaryHeader()'s function_declaration encoder (asm_parser.cpp)
+    // unconditionally reads the header line right after this function's
+    // own ".global @_NAME" as its args_num/variables descriptor. Without
+    // this ".var" line, that encoder silently reads whatever unrelated
+    // header line happens to come next instead (the next function's own
+    // ".global", an external's own reservation label, ...), corrupting
+    // both fields: args_num always decodes to 0 (sscanf() finds no
+    // leading digit in that text and silently leaves it at its
+    // zero-initialized default) and variables holds a stray copy of that
+    // neighboring line's own name text. Re-enabled on its own, still
+    // disabled below, since it doesn't emit any of the wrapper's actual
+    // marshaling code, entry/call8/retw.n included. Restoring this made
+    // every record's own `variables` field digit-led again (its real "N
+    // size..." descriptor), which is exactly what asm_execute.cpp's
+    // isWrapperRecord() used to read as "this is a wrapper record" --
+    // see its own comment for why it's now hardcoded to always return
+    // false instead, alongside this change.
     if (!isStructFunction)
     {
         char *variables = NULL;
         for (int i = 0; i < nd->getChildPtr(1)->children_size(); i++)
         {
- 
+
            variables = str_concat("%s %d", variables, nd->getChildPtr(1)->getChildPtr(i)->getVarTypeObj()->total_size);
         }
         if (variables == NULL)
@@ -1064,6 +1081,8 @@ void _visitdefFunctionNode(NodeToken *nd)
     free(variables);
 
     }
+
+    /*
     if (nd->getChildPtr(1)->children_size() > -1)
     {
         header.addAfter(string_format("@_stack__%s:", nd->getText()));

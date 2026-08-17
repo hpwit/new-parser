@@ -343,18 +343,28 @@ static void cleanFunctionName(const char *label, char *out, size_t outSize)
     out[len] = 0;
 }
 
-// A function declared with N>0 parameters gets a *wrapper* record whose
-// `variables` field is "N size1 size2 ..." (createBinaryHeader reads it
-// from the ".var N size..." line) and a *plain* record -- the real
-// function body's own address -- whose `variables` field is, due to an
-// upstream quirk (see asm_execute.h's callFunction doc comment), just
-// the other record's raw label text, which always starts with '@'. A
-// 0-argument function has no wrapper at all -- both header records
-// alias the same address, so "is this a wrapper" is moot for it, and
-// this correctly falls through to treating it as the plain record too.
+// A function declared with N>0 parameters used to get a *wrapper* record
+// (variables field "N size1 size2 ...", digit-led) alongside its *plain*
+// record (variables field just the wrapper's own raw label text, '@'-led
+// -- an upstream quirk, see asm_execute.h's callFunction doc comment),
+// distinguished by that leading-digit check. visitnode.cpp's
+// _visitdefFunctionNode() no longer emits the wrapper's own ".global
+// @__NAME" declaration or its marshaling body at all (see its git
+// history), so every function -- argument-taking or not -- now gets
+// exactly one record, always the real, callable one: there is currently
+// no code path that can produce a genuine wrapper record for this to
+// distinguish. Always false rather than actually inspecting `variables`
+// so a record's own real argument-size descriptor (restored so
+// args_num/variables decode correctly again -- see
+// _visitdefFunctionNode()'s own ".var" comment) can't be misread as "this
+// is a wrapper" and cause the one real record to be skipped/never found.
+// If the wrapper mechanism is ever restored, this needs restoring (or
+// replacing with something that doesn't infer wrapper-vs-plain from
+// `variables`' own content) alongside it.
 static bool isWrapperRecord(globalcall *gc)
 {
-    return gc->variables != NULL && gc->variables[0] >= '0' && gc->variables[0] <= '9';
+    (void)gc;
+    return false;
 }
 
 void printExecutableFunctions(executable *ex)
