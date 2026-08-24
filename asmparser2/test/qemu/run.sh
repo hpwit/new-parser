@@ -30,6 +30,7 @@ g++ -std=c++17 -g -O0 -I"$SRC_DIR" -o "$BUILD_DIR/gen_fib_timing" "$SCRIPT_DIR/g
 g++ -std=c++17 -g -O0 -I"$SRC_DIR" -o "$BUILD_DIR/gen_arr_index" "$SCRIPT_DIR/gen_arr_index.cpp" "$SRC_DIR"/*.cpp
 g++ -std=c++17 -g -O0 -I"$SRC_DIR" -o "$BUILD_DIR/gen_footer_check" "$SCRIPT_DIR/gen_footer_check.cpp" "$SRC_DIR"/*.cpp
 g++ -std=c++17 -g -O0 -I"$SRC_DIR" -o "$BUILD_DIR/gen_branch_immediate" "$SCRIPT_DIR/gen_branch_immediate.cpp" "$SRC_DIR"/*.cpp
+g++ -std=c++17 -g -O0 -I"$SRC_DIR" -o "$BUILD_DIR/gen_ball_stress" "$SCRIPT_DIR/gen_ball_stress.cpp" "$SRC_DIR"/*.cpp
 
 run_case() {
     name="$1"
@@ -85,5 +86,6 @@ run_case "fib_timing" "gen_fib_timing" "runner_fib_timing.c" 30
 run_case "arr_index" "gen_arr_index" "runner_arr_index.c"
 run_case "footer_check" "gen_footer_check" "runner_footer_check.c"
 run_case "branch_immediate" "gen_branch_immediate" "runner_branch_immediate.c"
+run_case "ball_stress" "gen_ball_stress" "runner_ball_stress.c" 15
 
 echo "All QEMU execution checks passed."

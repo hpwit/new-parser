@@ -145,6 +145,35 @@ mathematically correct result:
     global variable, and so the second to need the same by-hand
     relocation-record patching `runner_arr_index.c` does -- see case 9's
     writeup for the full explanation.
+11. A real-world, multi-function, struct-heavy, float-heavy script
+    (`gen_ball_stress.cpp`/`runner_ball_stress.c`) -- the exact one that
+    crashed on real ESP32 hardware (Guru Meditation Error:
+    IllegalInstruction) and was worked through in conversation: a
+    `struct ball` with 5 float fields, a constructor doing 5 float
+    divisions via `rand()` plus a `printfln()` + external float-arg
+    call, and two methods (`updateBall()`/`drawBall()`, the latter with
+    nested `for` loops and float comparisons for its bounding-box scan).
+    Constructs a 200-element global array of them (`@__footer`, matching
+    case 10's mechanism), then runs `main()`'s own bounded
+    `while (h<200)` loop -- 200 iterations of a 128x96 `hsv()`-returning-
+    CRGB pixel fill (2,457,600 external calls) plus 20 `updateBall()`
+    calls each -- to completion. `leds[]`'s backing storage is guard-
+    padded on both sides with a canary byte pattern, checked intact
+    after `main()` returns, so an out-of-bounds write would be caught
+    here instead of silently corrupting adjacent memory. This is the
+    exact script a real Pass 4 register-copy-propagation bug (see
+    `optimize.cpp`'s movi/l32r/movExt/extui/rfr branch, fixed on the
+    `optimize-liveness-pass` branch as of this writing, not yet ported
+    to `main`) was found and fixed against: printfln()'s format-string
+    argument was silently replaced with an unrelated `int` value by a
+    stale tracked fact that survived an `l32r` overwriting the register
+    it claimed to still alias. This case's `printfln()` call passing
+    (not crashing) exercises exactly the instruction sequence that bug
+    corrupted -- on a branch without that fix, a passing result here
+    reflects Pass 3's own folding happening to eliminate the vulnerable
+    instruction first (see that fix's own commit message), not an
+    absence of the underlying bug. Passed in full: all 200 constructor
+    calls, the entire 200-iteration main loop, and the guard-byte check.
 
 This exercise also found and fixed a real bug: `addInstr()` was silently
 dropping `.bytes` reservation lines instead of reserving 4 bytes of
@@ -155,22 +184,25 @@ and every `l32r`/`callExt` pointed at the wrong address. See
 function call" test for the host-side regression test.
 
 **Not verified**: actual physical ESP32 hardware (no device available in
-this environment), scripts using structs or more than two functions at
-once, and -- found while trying to add a case for arguments.h's
-Arguments class (mixed int/float arguments) -- anything involving a
-*float* arithmetic or comparison instruction (e.g. `olt.s`, which `if (b
-> 1.5)` compiles to). A runner executing so much as a single float
-comparison hangs under this QEMU fork with no output at all, even after
-explicitly enabling the FP coprocessor via `wsr.cpenable` (which real
-ESP-IDF startup code does during boot, and this runner otherwise never
-reaches, being bare-metal); the identical int-only comparison in an
-otherwise-identical runner works correctly. Not root-caused further --
-possibly the FP coprocessor isn't emulated by this QEMU fork at all, or
-needs more than CPENABLE. This means neither float-argument-passing nor
-any script using float comparisons (e.g. examples/BouncingBalls.ino,
-separately blocked by the `__div` stdlib-injection gap noted there) can
-currently be QEMU-verified -- only host-structurally-verified, same as
-structs/multi-function scripts above.
+this environment) for anything *except* case 11, which was specifically
+written to chase a real hardware crash report and has since been
+followed up with real-hardware retesting outside this directory.
+
+The rest of this section is historical, from earlier in this project
+when it was written: structs, more than two functions at once, and
+float arithmetic/comparisons were all believed to be unverifiable under
+this QEMU fork (a single float comparison instruction was observed to
+hang the runner with no output, even after explicitly enabling the FP
+coprocessor via `wsr.cpenable`). Case 11 -- five struct methods, float
+division/arithmetic/comparisons throughout, 2.4M+ calls across five
+script functions plus four external bindings -- runs to completion
+under the exact same QEMU fork with no such hang, so whatever the
+original cause was (a different runner setup, a QEMU version difference,
+or something specific to the narrower case that was being added at the
+time) it does not reproduce here. Left the historical account below for
+context, but treat the blanket "not verified" claims about
+structs/multi-function/float scripts as superseded by case 11, not
+current.
 
 Case 7 above is a narrower verification than it might look like: it does
 *not* mean `multi_effect_controller.sc` runs correctly end to end under
