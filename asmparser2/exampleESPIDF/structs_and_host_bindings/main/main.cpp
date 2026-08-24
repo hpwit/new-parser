@@ -35,7 +35,7 @@ struct pixel
       g = g * brightness / 100;
       b = b * brightness / 100;
    }
-}
+};
 
 pixel px;
 

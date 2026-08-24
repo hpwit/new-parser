@@ -20,6 +20,7 @@
 //
 // Same fork-per-test crash isolation as test_parser.cpp, for the same
 // reason: one script's crash must not hide the other 20 results.
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -123,6 +124,61 @@ static std::string stripImportRand(const std::string &in)
     return out;
 }
 
+// 3. `struct NAME {...}` with no trailing ';' (balls.sc/ballsbw.sc/
+//    ballscardputer.sc's `struct ball {...}`) is v1-valid -- v1 never
+//    required one. v2's parser now does (a deliberate grammar change,
+//    matching ordinary C/C++ struct syntax -- see README.md's
+//    "Structures" section), so these otherwise-unmodified real-world
+//    scripts need the same text-level normalization as the two quirks
+//    above to keep verifying the rest of their syntax (struct arrays,
+//    ball physics, ...). Scans for a top-level `struct` keyword, tracks
+//    brace depth to find its own matching closing '}', and inserts a
+//    ';' right after it unless one is already there.
+static std::string fixMissingStructSemicolon(const std::string &in)
+{
+    std::string out;
+    out.reserve(in.size());
+    size_t i = 0;
+    while (i < in.size())
+    {
+        bool isStructKeyword =
+            in.compare(i, 6, "struct") == 0 &&
+            (i == 0 || !isalnum((unsigned char)in[i - 1])) &&
+            i + 6 < in.size() && !isalnum((unsigned char)in[i + 6]);
+        if (isStructKeyword)
+        {
+            size_t braceStart = in.find('{', i);
+            if (braceStart == std::string::npos)
+            {
+                out.append(in, i, in.size() - i);
+                break;
+            }
+            out.append(in, i, braceStart + 1 - i);
+            int depth = 1;
+            size_t j = braceStart + 1;
+            while (j < in.size() && depth > 0)
+            {
+                if (in[j] == '{')
+                    depth++;
+                else if (in[j] == '}')
+                    depth--;
+                out.push_back(in[j]);
+                j++;
+            }
+            size_t k = j;
+            while (k < in.size() && (in[k] == ' ' || in[k] == '\t'))
+                k++;
+            if (k >= in.size() || in[k] != ';')
+                out.push_back(';');
+            i = j;
+            continue;
+        }
+        out.push_back(in[i]);
+        i++;
+    }
+    return out;
+}
+
 // v1's real compile entrypoints (Parser::parseScript() et al. in
 // ESPLiveScript.h) always prepend this exact boilerplate -- a sync()
 // implementation plus `#define true 1` / `#define false 0` -- before the
@@ -155,7 +211,7 @@ static const char *kPrelude =
 
 static std::string preprocess(const std::string &raw)
 {
-    return kPrelude + fixBareDefine(stripImportRand(raw));
+    return kPrelude + fixMissingStructSemicolon(fixBareDefine(stripImportRand(raw)));
 }
 
 // A generous common host-binding set covering every external name used
@@ -400,9 +456,9 @@ int main()
             "bug in the original example script, not a v2 regression.",
             false,
         },
-        {"balls.sc", "balls.sc", ExpectPass, "`import rand` stripped/rebound by this harness (see preprocess()).", false},
-        {"ballscardputer.sc", "ballscardputer.sc", ExpectPass, "`import rand` stripped/rebound by this harness.", false},
-        {"ballsbw.sc", "ballsbw.sc", ExpectPass, "`import rand` stripped/rebound by this harness.", false},
+        {"balls.sc", "balls.sc", ExpectPass, "`import rand` stripped/rebound and `struct ball {...}`'s missing trailing ';' inserted by this harness (see preprocess()).", false},
+        {"ballscardputer.sc", "ballscardputer.sc", ExpectPass, "`import rand` stripped/rebound and `struct ball {...}`'s missing trailing ';' inserted by this harness.", false},
+        {"ballsbw.sc", "ballsbw.sc", ExpectPass, "`import rand` stripped/rebound and `struct ball {...}`'s missing trailing ';' inserted by this harness.", false},
         {"animwle.sc", "animwle.sc", ExpectPass, NULL, false},
         {"squaresani.sc", "squaresani.sc", ExpectPass, "Uses bare `define` throughout -- normalized by this harness.", false},
         {
@@ -422,14 +478,12 @@ int main()
             "psion32/snake.sc",
             ExpectFail,
             "SDL2 C code (SDL_Renderer*, switch/case, char *argv[]), not "
-            "this DSL at all -- fails cleanly in v1. Its own first parse "
-            "error is a real v2 crash this session fixed: `struct Segment "
-            "{...};` (trailing ';', a natural C habit v1 also rejects, "
-            "just without crashing) followed by a global `Segment "
-            "snake[MAX_SNAKE];` used to segfault in nodetoken.cpp's "
-            "copyPrty() (NULL from getVarTypeObj()) instead of reporting a "
-            "parse error -- see README.md. Now reports a clean error, same "
-            "as v1.",
+            "this DSL at all -- fails cleanly in v1. Its `struct Segment "
+            "{...};` (trailing ';', once rejected by both v1 and v2 -- see "
+            "README.md's struct-array bugfix history) parses cleanly now "
+            "that v2 requires that trailing ';', so the script gets "
+            "further before hitting its first real (and expected) parse "
+            "error, on the SDL2 syntax itself.",
             false,
         },
         {

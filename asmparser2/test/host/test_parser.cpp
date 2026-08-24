@@ -215,7 +215,7 @@ struct ball
       yc = height / 2 * (rand(280) / 255 + 0.3) + 15;
       color = rand(255);
    }
-}
+};
 
 ball Balls[max_nb_balls];
 
@@ -718,7 +718,7 @@ static void runStructArrayFieldStrideTest()
 
         Script s;
         char *buf = strdup(
-            "struct Foo{int a,b; Foo(){a=0;b=0;}}"
+            "struct Foo{int a,b; Foo(){a=0;b=0;}};"
             "Foo arr[3];"
             "int readB(int i){return arr[i].b;}"
             "void main(){}");
@@ -855,7 +855,7 @@ static void runStructArrayMethodSelfPointerTest()
 
         Script s;
         char *buf = strdup(
-            "struct Foo{int a,b; Foo(){a=0;b=0;} void bump(){a=a+1;}}"
+            "struct Foo{int a,b; Foo(){a=0;b=0;} void bump(){a=a+1;}};"
             "Foo arr[3];"
             "void callBump(int i){arr[i].bump();}"
             "void main(){}");
@@ -1055,24 +1055,22 @@ static void runLoadAndRelocateTest()
     }
 }
 
-// A function declared with parameters actually gets *two* header records
-// (see asm_parser.cpp's createBinaryHeader and asm_execute.h's
-// runExecutableWithArgs doc comment): a plain one at the real function's
-// address reporting args_num=0 (an upstream quirk), and a wrapper one
-// with the correct args_num and a valid variableaddress, generated only
-// because there's a parameter to marshal. This checks
-// createExecutableFromBinary() decodes both records and that
-// runExecutableWithArgs(ex, args, 1) actually finds the wrapper (args_num
-// == 1) rather than defaulting to whichever came first. Doesn't call
-// into the generated code -- MiniXtensa can't interpret this script (it
-// involves a call8, which it explicitly refuses -- see mini_xtensa.h),
-// and calling on a host CPU would crash immediately regardless. Real
-// execution is QEMU-verified: test/qemu/gen_fibonacci_arg.cpp runs this
-// exact script with n=10 and confirms fib(10)==55 on a real Xtensa CPU
-// emulation.
+// A function declared with parameters gets exactly *one* header record
+// (see asm_parser.cpp's createBinaryHeader and asm_execute.cpp's
+// isWrapperRecord() comment for the argument-marshaling wrapper this
+// project used to also generate, and why it doesn't anymore): the real
+// function's own address, with the correct args_num and a valid
+// variableaddress. This checks createExecutableFromBinary() decodes that
+// one record correctly and that runExecutableWithArgs(ex, args, 1) can
+// find it by args_num == 1. Doesn't call into the generated code --
+// MiniXtensa can't interpret this script (it involves a call8, which it
+// explicitly refuses -- see mini_xtensa.h), and calling on a host CPU
+// would crash immediately regardless. Real execution is QEMU-verified:
+// test/qemu/gen_fibonacci_arg.cpp runs this exact script with n=10 and
+// confirms fib(10)==55 on a real Xtensa CPU emulation.
 static void runArgumentPassingLoadTest()
 {
-    const char *name = "load a with-argument function and select the correct wrapper record (execution itself is QEMU-verified, see test/qemu/)";
+    const char *name = "load a with-argument function and find its one function record (execution itself is QEMU-verified, see test/qemu/)";
     printf("RUNNING: %s\n", name);
     fflush(stdout);
 
@@ -1116,38 +1114,22 @@ static void runArgumentPassingLoadTest()
             printf("       loader error: %s\n", exe.error.error_message ? exe.error.error_message : "?");
             ok = false;
         }
-        else if (exe.functions.size() != 2)
+        else if (exe.functions.size() != 1)
         {
-            printf("       expected 2 function records (plain + wrapper), got %d\n", exe.functions.size());
+            printf("       expected 1 function record, got %d\n", exe.functions.size());
             ok = false;
         }
         else
         {
-            globalcall *wrapper = NULL;
-            int zeroArgCount = 0;
-            for (int i = 0; i < exe.functions.size(); i++)
+            globalcall *fn = exe.functions.getptr(0);
+            if (fn->args_num != 1)
             {
-                globalcall *gc = exe.functions.getptr(i);
-                if (gc->args_num == 1)
-                    wrapper = gc;
-                else
-                    zeroArgCount++;
-            }
-            if (wrapper == NULL || zeroArgCount != 1)
-            {
-                printf("       expected exactly one args_num==1 record and one args_num==0 record\n");
-                ok = false;
-            }
-            else if (wrapper->variableaddress >= exe.data_size)
-            {
-                printf("       wrapper's variableaddress (%u) is out of range for the data buffer (%u bytes)\n",
-                       wrapper->variableaddress, exe.data_size);
+                printf("       expected args_num==1, got %d\n", fn->args_num);
                 ok = false;
             }
             else
             {
-                printf("       found wrapper: address=%u variableaddress=%u (data_size=%u)\n",
-                       wrapper->address, wrapper->variableaddress, exe.data_size);
+                printf("       found main(int): address=%u\n", fn->address);
             }
         }
 
@@ -1176,16 +1158,17 @@ static void runArgumentPassingLoadTest()
 }
 
 // callFunction() (src/asm_execute.cpp) calls a *named*, non-main function
-// directly (bypassing the argument-marshaling wrapper -- see its doc
-// comment in asm_execute.h for why) and reads its return value back from
-// a10. Checks the loader produces a plain (non-wrapper) record named
-// "fib" distinguishable from its wrapper -- the actual register-passing
-// call is QEMU-verified: test/qemu/gen_named_function.cpp calls this
-// exact script's fib(10) this way and confirms it returns 55 on a real
-// Xtensa CPU emulation.
+// directly and reads its return value back from a10. Checks the loader
+// produces exactly one record named "fib", at its real address (see
+// asm_execute.cpp's isWrapperRecord() comment: a parameterized function
+// used to also get a second, argument-marshaling wrapper record, which
+// this project no longer generates) -- the actual register-passing call
+// is QEMU-verified: test/qemu/gen_named_function.cpp calls this exact
+// script's fib(10) this way and confirms it returns 55 on a real Xtensa
+// CPU emulation.
 static void runNamedFunctionLoadTest()
 {
-    const char *name = "load a script with a named, non-main function and find its plain (callable) record (execution itself is QEMU-verified, see test/qemu/)";
+    const char *name = "load a script with a named, non-main function and find its callable record (execution itself is QEMU-verified, see test/qemu/)";
     printf("RUNNING: %s\n", name);
     fflush(stdout);
 
@@ -1232,8 +1215,8 @@ static void runNamedFunctionLoadTest()
         }
         else
         {
-            globalcall *fibPlain = NULL;
-            globalcall *fibWrapper = NULL;
+            globalcall *fib = NULL;
+            int fibCount = 0;
             for (int i = 0; i < exe.functions.size(); i++)
             {
                 globalcall *gc = exe.functions.getptr(i);
@@ -1242,26 +1225,17 @@ static void runNamedFunctionLoadTest()
                              (strncmp(label + 2, "fib", 3) == 0 || strncmp(label + 3, "fib", 3) == 0);
                 if (!isFib)
                     continue;
-                bool isWrapper = gc->variables != NULL && gc->variables[0] >= '0' && gc->variables[0] <= '9';
-                if (isWrapper)
-                    fibWrapper = gc;
-                else
-                    fibPlain = gc;
+                fib = gc;
+                fibCount++;
             }
-            if (fibPlain == NULL || fibWrapper == NULL)
+            if (fib == NULL || fibCount != 1)
             {
-                printf("       expected both a plain and a wrapper record named fib, found plain=%p wrapper=%p\n",
-                       (void *)fibPlain, (void *)fibWrapper);
-                ok = false;
-            }
-            else if (fibPlain->address == fibWrapper->address)
-            {
-                printf("       plain and wrapper records should be at different addresses\n");
+                printf("       expected exactly one record named fib, found %d\n", fibCount);
                 ok = false;
             }
             else
             {
-                printf("       plain fib at offset %u, wrapper at offset %u\n", fibPlain->address, fibWrapper->address);
+                printf("       fib at offset %u\n", fib->address);
             }
         }
 
@@ -2134,28 +2108,18 @@ int main()
         },
         {
             "struct definition and use",
-            "struct point {int x; int y;} point p; void main(){p.x = 1; p.y = 2;}",
+            "struct point {int x; int y;}; point p; void main(){p.x = 1; p.y = 2;}",
             noError, NULL, false,
         },
-        // Regression test found via the sc_examples corpus (see
-        // test/sc_examples/README.md's psion32/snake.sc entry): a
-        // trailing ';' after a struct definition -- `struct point
-        // {...};`, a natural C habit, invalid in this language in both
-        // v1 and v2 -- followed by a global declaration of that struct
-        // type used to leave the declared variable's type unresolved
-        // (_vartype stuck at EOF_VARTYPE) instead of erroring out
-        // immediately. copyPrty() (nodetoken.cpp) then dereferenced
-        // getVarTypeObj()'s NULL return and segfaulted. v1 handles the
-        // same input cleanly (its own "expected identifier" error); fixed
-        // by having copyPrty() report impossibletofindvariabledeclaration
-        // instead of crashing when the source type doesn't resolve --
-        // some other check downstream (here, the missing-semicolon check
-        // right after the struct body) ends up reporting first, which is
-        // fine: the goal is "doesn't crash and reports *some* real parse
-        // error", not a specific error code.
+        // A trailing ';' after a struct definition -- `struct point
+        // {...};`, the natural C habit -- is now *required* (matching v1's
+        // sibling projects and ordinary C/C++ struct syntax), not merely
+        // tolerated. Omitting it must be caught as an ordinary missing-
+        // semicolon parse error, the same way `int a; a = 1}` is caught
+        // below, rather than silently accepted or misparsed.
         {
-            "struct definition with stray trailing ';' then a global of that type (must not crash)",
-            "struct point {int x; int y;}; point p; void main(){}",
+            "struct definition missing its required trailing ';' is a parse error",
+            "struct point {int x; int y;} point p; void main(){p.x = 1; p.y = 2;}",
             expectingSemicolon, NULL, false,
         },
         {

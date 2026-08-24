@@ -64,7 +64,7 @@ int main()
         "      yc = height / 2 * (rand(280) / 255 + 0.3) + 15;\n"
         "      color = rand(255);\n"
         "   }\n"
-        "}\n"
+        "};\n"
         "ball Balls[max_nb_balls];\n"
         "void diag()\n"
         "{\n"

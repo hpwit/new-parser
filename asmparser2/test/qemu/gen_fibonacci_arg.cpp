@@ -1,17 +1,30 @@
-// Dumps the compiled machine code for an iterative Fibonacci script that
-// takes n as a real function argument (not baked into the script text),
-// plus the offsets run.sh's runner needs to replicate what
-// asm_execute.cpp's loader does: patch the jump-table slot for the
-// argument-storage reservation with a pointer into a scratch data buffer,
-// write the argument value there, then call the *wrapper* entry point
-// (see asm_execute.h's runExecutableWithArgs doc comment for why it's the
-// wrapper and not the plain function address).
+// Dumps the compiled machine code for a script whose main() takes a real
+// function argument (iterative Fibonacci, `void main(int n){...}`), plus
+// the offsets run.sh's runner needs to call it with a register-passed
+// argument and read the result back through a getter function.
+//
+// main(int n) used to be called through a second, argument-marshaling
+// *wrapper* record (see asm_execute.cpp's isWrapperRecord() comment for
+// the full history) that copied its argument out of a reserved
+// stack-storage area into a2 before call8-ing the real body --
+// asm_execute.cpp's runExecutableWithArgs() used that wrapper the same
+// way. That wrapper is gone: a parameterized function's one remaining
+// record reads its arguments straight out of a2.. (visitnode.cpp's
+// _visitdefInputArgumentsNode), the same registers callXtensaDirect()
+// (asm_execute.cpp) -- and now runExecutableWithArgs() too -- populate
+// via a10..a15's call8 window rotation. This verifies that calling
+// convention on real Xtensa hardware semantics: n goes straight into
+// a10, no wrapper or reserved stack area involved.
+//
+// The result is read back through a getFib() getter (`int fib;` a real
+// internal global, `int getFib(){return fib;}`) rather than reconstructed
+// from a guessed offset into main()'s own stack frame, the way this file
+// used to when it still had a wrapper frame to account for -- same
+// pattern (and same reloc-slot patching, needed for the same reason) as
+// gen_footer_check.cpp/gen_arr_index.cpp.
 //
 // IMPORTANT: createExecutableFromBinary() mutates bin.binary_data in
-// place (it patches the jump table directly into the source buffer
-// before copying it to the final executable memory) -- so the code bytes
-// must be captured *before* calling it, and the offsets extracted
-// afterward from a throwaway load.
+// place, so the code bytes must be captured before calling it.
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -20,14 +33,36 @@
 #include "asm_parser.h"
 #include "asm_execute.h"
 
+static globalcall *findPlainFunction(executable *exe, const char *fname)
+{
+    size_t flen = strlen(fname);
+    for (int i = 0; i < exe->functions.size(); i++)
+    {
+        globalcall *gc = exe->functions.getptr(i);
+        const char *label = gc->name;
+        if (!(label[0] == '@' && label[1] == '_'))
+            continue;
+        const char *p = label + 2;
+        if (p[0] == '_')
+            p++;
+        if (strncmp(p, fname, flen) == 0 && (p[flen] == '(' || p[flen] == 0))
+            return gc;
+    }
+    return NULL;
+}
+
+#define MAX_TYPE0_RECORDS 64
+
 int main()
 {
     Parser p;
     p.clean();
     Script s;
     char *buf = strdup(
+        "int fib;"
         "void main(int n){int a; a=0; int b; b=1; int i; "
-        "for (i=0;i<n;i++) { int t; t=a+b; a=b; b=t; } int fib; fib=a;}");
+        "for (i=0;i<n;i++) { int t; t=a+b; a=b; b=t; } fib=a;}"
+        "int getFib(){return fib;}");
     s.addContent(buf);
     s.init();
     p.parse(&s, &__allTokens);
@@ -44,23 +79,84 @@ int main()
         return 1;
     }
 
-    // Capture the clean, unrelocated bytes before createExecutableFromBinary
-    // mutates bin.binary_data's jump table in place.
+    // Walk the relocation header ourselves (before createExecutableFromBinary
+    // consumes it) to find *every* type-0 (internal global/reserved-slot
+    // indirection) record -- see gen_arr_index.cpp's header comment for
+    // why all of them, not just fib's own, need patching.
+    uint32_t slotOffsets[MAX_TYPE0_RECORDS];
+    uint32_t slotBincodes[MAX_TYPE0_RECORDS];
+    int numSlots = 0;
+    {
+        uint8_t *hdr = bin.function_data;
+        uint16_t nb_objects;
+        memcpy(&nb_objects, hdr, 2);
+        hdr += 2;
+        for (int i = 0; i < nb_objects; i++)
+        {
+            uint8_t type = *hdr;
+            hdr += 1;
+            if (type == 0)
+            {
+                uint32_t bincode;
+                uint16_t nb_data;
+                memcpy(&bincode, hdr, 4);
+                hdr += 4;
+                memcpy(&nb_data, hdr, 2);
+                hdr += 2;
+                if (numSlots < MAX_TYPE0_RECORDS)
+                {
+                    slotOffsets[numSlots] = nb_data * 4;
+                    slotBincodes[numSlots] = bincode;
+                    numSlots++;
+                }
+            }
+            else if (type == 1)
+            {
+                uint16_t text_size;
+                memcpy(&text_size, hdr, 2);
+                hdr += 2;
+                hdr += text_size;
+                hdr += 2;
+            }
+            else if (type == 2)
+            {
+                uint16_t text_size;
+                memcpy(&text_size, hdr, 2);
+                hdr += 2;
+                hdr += text_size;
+                hdr += 2;
+            }
+            else if (type == 3)
+            {
+                uint16_t size;
+                hdr += 4 + 2;
+                memcpy(&size, hdr, 2);
+                hdr += 2;
+            }
+            else if (type == 4)
+            {
+                for (int f = 0; f < 2; f++)
+                {
+                    uint16_t text_size;
+                    memcpy(&text_size, hdr, 2);
+                    hdr += 2;
+                    hdr += text_size;
+                }
+                hdr += 2 + 4 + 4;
+            }
+        }
+    }
+    if (numSlots == 0)
+    {
+        fprintf(stderr, "found no type-0 (internal global/reserved-slot) relocation records\n");
+        return 1;
+    }
+
     unsigned char *codeCopy = (unsigned char *)malloc(bin.instruction_size);
     memcpy(codeCopy, bin.binary_data, bin.instruction_size);
     int instrSize = bin.instruction_size;
+    uint32_t dataSize = bin.data_size;
 
-    // entry a1,N always encodes as a fixed 0x36 opcode byte (bin_entry(),
-    // asm_encoders.h) with N/8 packed into bits [12:19] of the 3-byte
-    // instruction -- true for *every* entry instruction, wrapper and
-    // real body alike. Decoding "the first 0x36 anywhere in the stream"
-    // (the old approach here) finds the *wrapper's* entry, since it's
-    // textually first -- mislabeled as "realFnFrameSize" below, but
-    // harmless as long as the wrapper's own entry a1,N literally reused
-    // the real function's frame size (true before the entry-size fix
-    // that made the wrapper use a small fixed frame instead -- see
-    // visitnode.cpp's _visitdefFunctionNode). Decode each function's own
-    // entry directly at its own known address instead of guessing.
     executable exe = createExecutableFromBinary(&bin);
     if (exe.error.error)
     {
@@ -68,32 +164,14 @@ int main()
         return 1;
     }
 
-    globalcall *wrapper = NULL;  // args_num == 1: loads the arg, call8's the real fn
-    globalcall *realFn = NULL;   // args_num == 0: the actual function body
-    for (int i = 0; i < exe.functions.size(); i++)
+    globalcall *mainFn = findPlainFunction(&exe, "main");
+    globalcall *getFibFn = findPlainFunction(&exe, "getFib");
+    if (!mainFn || !getFibFn)
     {
-        globalcall *gc = exe.functions.getptr(i);
-        if (gc->args_num == 1)
-            wrapper = gc;
-        else
-            realFn = gc;
-    }
-    if (wrapper == NULL || realFn == NULL)
-    {
-        fprintf(stderr, "expected one 1-arg wrapper and one 0-arg function record\n");
+        fprintf(stderr, "could not find main/getFib's record (main=%p getFib=%p)\n",
+                (void *)mainFn, (void *)getFibFn);
         return 1;
     }
-
-    // Each function's own entry point address is exactly where its own
-    // "entry a1,N" instruction starts (always the first instruction of
-    // any function/wrapper body) -- decode the immediate directly there
-    // instead of assuming wrapper and real-body frames match.
-    auto decodeEntryFrameSize = [&](uint32_t addr) -> int {
-        uint32_t w = codeCopy[addr] | (codeCopy[addr + 1] << 8) | (codeCopy[addr + 2] << 16);
-        return (int)(((w & 0xFF000) >> 12) * 8);
-    };
-    int wrapperFrameSize = decodeEntryFrameSize(wrapper->address);
-    int realFnFrameSize = decodeEntryFrameSize(realFn->address);
 
     printf("static unsigned char script_code[%d] __attribute__((section(\".text.script_code\"), aligned(4))) = {\n",
            instrSize);
@@ -105,20 +183,18 @@ int main()
     }
     printf("\n};\n");
     printf("#define SCRIPT_CODE_SIZE %d\n", instrSize);
-    printf("#define WRAPPER_ENTRY_OFFSET %u\n", wrapper->address);
-    printf("#define REAL_FN_ENTRY_OFFSET %u\n", realFn->address);
-    printf("#define WRAPPER_FRAME_SIZE %d\n", wrapperFrameSize);
-    printf("#define REAL_FN_FRAME_SIZE %d\n", realFnFrameSize);
-    printf("#define ARG_SLOT_DATA_OFFSET %u\n", wrapper->variableaddress);
-    // The jump-table slot the wrapper's "l32r a9,@_stack__main(d)" reads
-    // its argument-storage pointer from: reservations are always ordered
-    // handle(0)/execaddr(1)/sync(2)/[one per external]/[one per declared
-    // function's own stack area], and this script has no external calls,
-    // so the function's own stack-area reservation is always word index
-    // 3 -> byte offset 12. Verified against the disassembly during
-    // development.
-    printf("#define ARG_SLOT_TABLE_OFFSET 12\n");
-    printf("#define A_STACK_OFFSET 56\n");
+    printf("#define MAIN_ENTRY_OFFSET %u\n", mainFn->address);
+    printf("#define GETFIB_ENTRY_OFFSET %u\n", getFibFn->address);
+    printf("#define FIB_DATA_SIZE %u\n", dataSize);
+    printf("#define NUM_RELOC_SLOTS %d\n", numSlots);
+    printf("static const unsigned int reloc_slot_offset[%d] = {", numSlots);
+    for (int i = 0; i < numSlots; i++)
+        printf("%u%s", slotOffsets[i], i + 1 < numSlots ? "," : "");
+    printf("};\n");
+    printf("static const unsigned int reloc_slot_bincode[%d] = {", numSlots);
+    for (int i = 0; i < numSlots; i++)
+        printf("%u%s", slotBincodes[i], i + 1 < numSlots ? "," : "");
+    printf("};\n");
     printf("#define FIB_N 10\n");
     printf("#define EXPECTED_FIB 55\n");
 

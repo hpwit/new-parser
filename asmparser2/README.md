@@ -501,7 +501,7 @@ struct new_type
 {
    float k;
    int l;
-}
+};
 ```
 
 Structures can have methods:
@@ -515,7 +515,7 @@ struct new_type
    {
       printfln("l:%d", l);
    }
-}
+};
 ```
 
 And constructors (same name as the struct):
@@ -531,7 +531,7 @@ struct ball
       vx = rand(300) / 255.0;
       ...
    }
-}
+};
 
 ball Balls[max_nb_balls];
 ...
@@ -543,6 +543,8 @@ Balls[i].updateBall();
 **NB 1: you can have arrays of structs -- `new_type arr[10];`.**
 
 **NB 2: a function has to be declared before it's called, same as v1 -- no forward references (yet).**
+
+**NB 3: the closing `}` of a struct definition needs a trailing `;`, same as C/C++ -- `struct new_type {...};`, not `struct new_type {...}`.**
 
 **NB 3: fields inside a struct still need to go from largest to smallest (`float`/`uint32_t`/`int`, then `s_int`/`uint16_t`, then `uint8_t`/`CRGB`/`CRGBW`) -- same memory-alignment reason as v1. `examples/BouncingBalls`'s own `ball` struct above is written in exactly this order for that reason.**
 

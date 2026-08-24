@@ -132,15 +132,15 @@ int main()
         return 1;
     }
 
-    // The plain (non-wrapper) record for "keyboard" -- same distinction
-    // as gen_named_function.cpp / asm_execute.cpp's isWrapperRecord.
+    // "keyboard"'s one record, at its real address -- see
+    // asm_execute.cpp's isWrapperRecord() comment: there's no separate
+    // wrapper record to distinguish from anymore.
     globalcall *kbPlain = NULL;
     for (int i = 0; i < exe.functions.size(); i++)
     {
         globalcall *gc = exe.functions.getptr(i);
         const char *label = gc->name;
-        bool isWrapper = gc->variables != NULL && gc->variables[0] >= '0' && gc->variables[0] <= '9';
-        if (isWrapper || !(label[0] == '@' && label[1] == '_'))
+        if (!(label[0] == '@' && label[1] == '_'))
             continue;
         const char *p = label + 2;
         if (p[0] == '_')

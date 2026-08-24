@@ -49,7 +49,7 @@ int main()
         "   {\n"
         "      printfln(\"test\");\n"
         "   }\n"
-        "}\n"
+        "};\n"
         "ball Balls[max_nb_balls];\n"
         "void diag()\n"
         "{\n"

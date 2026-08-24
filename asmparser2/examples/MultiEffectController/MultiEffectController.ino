@@ -304,7 +304,7 @@ struct Particle
    {
       reset();
    }
-}
+};
 
 // ==================== twinkling stars ====================
 
@@ -357,7 +357,7 @@ struct Star
    {
       reset();
    }
-}
+};
 
 // ==================== expanding ripples ====================
 
@@ -417,7 +417,7 @@ struct Ripple
    {
       reset();
    }
-}
+};
 
 // ==================== edge-to-edge comets ====================
 
@@ -484,7 +484,7 @@ struct Comet
    {
       reset();
    }
-}
+};
 
 Particle particles[NUM_PARTICLES];
 Star stars[NUM_STARS];

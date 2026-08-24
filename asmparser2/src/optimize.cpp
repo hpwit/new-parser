@@ -205,7 +205,30 @@ void optimize(Text *text)
             {
                 SplitResult p(d.get(1), ",");
                 SplitResult p2(d2.get(1), ",");
-                if (p.size() > 0 && p2.size() > 1 && strcmp(p.get(0), p2.get(1)) == 0)
+                // a2 is this function's own implicit return-value register
+                // (retw.n has no textual operand naming it -- the ABI just
+                // reads whatever's in a2 -- so this pass, which only ever
+                // looks at what the *visible* instruction stream reads
+                // again, has no way to see that use). Folding a write into
+                // a2 forward into some other destination -- e.g. an
+                // outgoing call-argument register (a8..a15) right before a
+                // call8/callExt that will clobber it -- would silently
+                // lose the return value once optimize() runs a second time
+                // over the now-compacted output (removeBlankLines() can
+                // make lines adjacent that weren't when this fold first
+                // had a chance to run, re-triggering it on the same value
+                // a second time): a real, QEMU-confirmed bug for any
+                // function that computes its return value, passes that
+                // same value to an external call, and returns it
+                // afterward (e.g. `int f(){int c; c=...; report(c); return
+                // c;}`). Keeping the extra `mov aY,a2` intact is always
+                // correct, just one instruction short of maximally
+                // optimal.
+                if (strcmp(p.get(0), "a2") == 0 && strcmp(p2.get(0), "a2") != 0)
+                {
+                    // fall through without folding
+                }
+                else if (p.size() > 0 && p2.size() > 1 && strcmp(p.get(0), p2.get(1)) == 0)
                 {
                     text->replaceText(indexbefore, " ");
                     char *newstr = string_format("%s %s", d.get(0), p2.get(0));

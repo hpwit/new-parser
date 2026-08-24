@@ -283,7 +283,10 @@ void Parser::parseProgram()
                 usded.total_size = _start;
                 usded._varSize = _start;
                 _userDefinedTypes.push_back(usded);
-                next();
+                next(); // }
+                if (!Match(TokenSemicolon))
+                    RETURN_ERROR(expectingSemicolon)
+                next(); // ;
             }
             // if (!oneFunction)
             //{

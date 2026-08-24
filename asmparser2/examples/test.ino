@@ -13,7 +13,7 @@ char  script[]=R"EOF(
     {
 
     }
-  }
+  };
 yves balls;
 
 void main()
@@ -108,9 +108,9 @@ struct ball
       xc = width / 2 * (rand(280) / 255 + 0.3) + 15;
       yc = height / 2 * (rand(280) / 255 + 0.3) + 15;
       color = rand(255);
-      
+
    }
-}
+};
 ball dds;
 ball BALLs[200];
 

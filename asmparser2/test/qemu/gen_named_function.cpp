@@ -2,11 +2,11 @@
 // non-main function with a return value (`int fib(int n) {... return
 // a;}`), plus the offsets run.sh's runner needs to call it directly by
 // name (not through main()) via the same scheme asm_execute.cpp's
-// callFunction() uses: find the wrapper record for "fib" with args_num
-// matching, marshal the argument through its variableaddress, call it,
-// and read the return value from a2 (the Xtensa C ABI's return register,
-// which is also where the script's `return a;` leaves its value -- see
-// visitnode.cpp).
+// callFunction() uses: find fib's one record, place its argument
+// directly in a10 (the callee sees it as its own a2, per the windowed
+// call8 ABI), call it, and read the return value back from a10 -- the
+// standard Xtensa windowed-ABI return register, which is also where the
+// script's `return a;` leaves its value (see visitnode.cpp).
 //
 // IMPORTANT: createExecutableFromBinary() mutates bin.binary_data in
 // place, so the code bytes must be captured before calling it (see
@@ -55,20 +55,17 @@ int main()
         return 1;
     }
 
-    // The *plain* record (fib's real address) rather than the wrapper --
-    // see asm_execute.h's callFunction doc comment for why: the wrapper
-    // never copies its call8's result into a10 before its own retw.n, so
-    // calling it wouldn't give back a real return value. The plain
-    // record's `variables` field holds the wrapper's raw label text
-    // (starts with '@'); the wrapper's own holds "1 4" (starts with a
-    // digit) -- same distinction asm_execute.cpp's isWrapperRecord uses.
+    // fib's one record, at its real, directly-callable address --
+    // _visitdefFunctionNode() no longer emits a second, argument-
+    // marshaling wrapper record for parameterized functions (see
+    // asm_execute.cpp's isWrapperRecord() comment for the full history),
+    // so there's no plain-vs-wrapper distinction left to make here.
     globalcall *fibPlain = NULL;
     for (int i = 0; i < exe.functions.size(); i++)
     {
         globalcall *gc = exe.functions.getptr(i);
         const char *label = gc->name;
-        bool isWrapper = gc->variables != NULL && gc->variables[0] >= '0' && gc->variables[0] <= '9';
-        if (isWrapper || !(label[0] == '@' && label[1] == '_'))
+        if (!(label[0] == '@' && label[1] == '_'))
             continue;
         const char *p = label + 2;
         if (p[0] == '_')
@@ -81,7 +78,7 @@ int main()
     }
     if (fibPlain == NULL)
     {
-        fprintf(stderr, "could not find fib's plain (non-wrapper) record\n");
+        fprintf(stderr, "could not find fib's record\n");
         return 1;
     }
 

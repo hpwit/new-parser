@@ -56,8 +56,7 @@ int main()
     {
         globalcall *gc = exe.functions.getptr(i);
         const char *label = gc->name;
-        bool isWrapper = gc->variables != NULL && gc->variables[0] >= '0' && gc->variables[0] <= '9';
-        if (isWrapper || !(label[0] == '@' && label[1] == '_'))
+        if (!(label[0] == '@' && label[1] == '_'))
             continue;
         const char *p = label + 2;
         if (p[0] == '_')

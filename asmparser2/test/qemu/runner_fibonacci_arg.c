@@ -2,33 +2,34 @@
 #include <stdint.h>
 #include "script_bytes.h"
 
-/* Scratch data region -- what asm_execute.cpp's separate exe.data
-   allocation stands in for here. */
-static uint8_t data_buffer[64];
+static int32_t callInt(void *entry, int32_t arg)
+{
+    register int32_t r10 __asm__("a10") = arg;
+    register void *r8 __asm__("a8") = entry;
+    __asm__ volatile("callx8 a8\n\t" : "+r"(r10) : "r"(r8) : "memory");
+    return r10;
+}
+
+/* Real backing storage for this script's data region (fib's own 4 bytes,
+   plus every other header reservation sharing it -- see
+   gen_arr_index.cpp's header comment for why all of them need
+   patching). */
+static uint8_t dataRegion[FIB_DATA_SIZE];
 
 int main()
 {
-    /* Replicates decodeBinaryHeader's case-0 handling for the function's
-       own argument-storage reservation: patch the jump table slot with a
-       pointer into the data buffer. */
-    uint32_t arg_area_addr = (uint32_t)(data_buffer + ARG_SLOT_DATA_OFFSET);
-    *(uint32_t *)(script_code + ARG_SLOT_TABLE_OFFSET) = arg_area_addr;
+    for (int i = 0; i < NUM_RELOC_SLOTS; i++)
+    {
+        uint32_t content = (uint32_t)dataRegion + reloc_slot_bincode[i];
+        *(uint32_t *)(script_code + reloc_slot_offset[i]) = content;
+    }
 
-    /* Replicates runExecutableWithArgs: write the argument value where
-       the wrapper's l32r/l32i pair will find it. */
-    *(int32_t *)(data_buffer + ARG_SLOT_DATA_OFFSET) = FIB_N;
-
-    uint32_t caller_a1;
-    __asm__ volatile("mov %0, a1" : "=r"(caller_a1));
-
-    void (*fn)() = (void (*)())(script_code + WRAPPER_ENTRY_OFFSET);
-    fn();
-
-    /* The wrapper's own entry a1,WRAPPER_FRAME_SIZE runs before it
-       call8's the real function, which allocates its own frame on top --
-       "a" lives inside the *real* function's frame. */
-    uint32_t real_fn_frame_base = caller_a1 - WRAPPER_FRAME_SIZE - REAL_FN_FRAME_SIZE;
-    int32_t fib = *(volatile int32_t *)(real_fn_frame_base + A_STACK_OFFSET);
+    /* Same convention as asm_execute.cpp's runExecutableWithArgs()/
+       callFunction(): the argument goes directly in a10 (the callee sees
+       it as its own a2, per the windowed call8 ABI), no wrapper or
+       reserved stack area involved. */
+    callInt(script_code + MAIN_ENTRY_OFFSET, FIB_N);
+    int32_t fib = callInt(script_code + GETFIB_ENTRY_OFFSET, 0);
 
     printf("RESULT fib(%d)=%d expected=%d %s\n", FIB_N, fib, EXPECTED_FIB,
            fib == EXPECTED_FIB ? "PASS" : "FAIL");

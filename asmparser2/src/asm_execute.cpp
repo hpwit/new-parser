@@ -554,11 +554,20 @@ bool runExecutableWithArgs(executable *ex, Arguments *args)
 
 bool runExecutableWithArgs(executable *ex, const int32_t *args, int nargs)
 {
-    // main() is always called through its wrapper (matching upstream's
-    // own execute_asm.h convention for the program's entry point), not
-    // callFunction()'s direct-register path -- arguments are marshaled
-    // through the reserved stack-storage area the wrapper reads from,
-    // same as before.
+    // main() is called exactly like any other function now -- direct
+    // register passing via callXtensaDirect(), same as callFunction().
+    // This used to marshal arguments through a wrapper's reserved
+    // stack-storage area (matching upstream's own execute_asm.h
+    // convention), but _visitdefFunctionNode() no longer emits that
+    // wrapper (see asm_execute.cpp's isWrapperRecord() comment for the
+    // full history): a parameterized function's single remaining record
+    // is the real function body, which reads its incoming arguments
+    // straight out of a2.. (see visitnode.cpp's _visitdefInputArgumentsNode),
+    // the same registers callXtensaDirect() populates via a10..a15's
+    // call8 window rotation. Marshaling through target->variableaddress
+    // and then calling with zero actual registers set, as this used to
+    // do, silently called main() with all-zero arguments regardless of
+    // what the caller passed.
     if (ex->functions.size() == 0 || ex->start_program == NULL)
         return false;
 
@@ -577,13 +586,8 @@ bool runExecutableWithArgs(executable *ex, const int32_t *args, int nargs)
 
     fillHandleWord(ex);
 
-    if (nargs > 0 && args != NULL && ex->data != NULL)
-        memcpy(ex->data + target->variableaddress, args, (size_t)nargs * 4);
-
     uint8_t *entry = (uint8_t *)ex->start_program + target->address;
-    void (*fn)() = (void (*)())(void *)entry;
-    printf("runExecutableWithArgs: calling entry=%p\n", (void *)entry);
-    fn();
+    callXtensaDirect(entry, args, nargs);
     return true;
 }
 

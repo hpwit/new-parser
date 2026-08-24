@@ -55,8 +55,7 @@ static globalcall *findPlainFunction(executable *exe, const char *fname)
     {
         globalcall *gc = exe->functions.getptr(i);
         const char *label = gc->name;
-        bool isWrapper = gc->variables != NULL && gc->variables[0] >= '0' && gc->variables[0] <= '9';
-        if (isWrapper || !(label[0] == '@' && label[1] == '_'))
+        if (!(label[0] == '@' && label[1] == '_'))
             continue;
         const char *p = label + 2;
         if (p[0] == '_')
@@ -75,7 +74,7 @@ int main()
     p.clean();
     Script s;
     char *buf = strdup(
-        "struct Foo{int count; Foo(){count=99;}}"
+        "struct Foo{int count; Foo(){count=99;}};"
         "Foo g;"
         "void poison(){g.count=-1;}"
         "int getCount(){return g.count;}"

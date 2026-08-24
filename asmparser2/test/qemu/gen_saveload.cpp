@@ -58,10 +58,10 @@ int main()
 
     // Walk the header the same way createExecutableFromBinary()'s
     // decodeBinaryHeader() does, to find the offsets the runner needs --
-    // key_char's and report's jump table slots, and keyboard's plain
-    // (non-wrapper) entry address -- inlined here in C++ so run.sh's
-    // runner can stay a small standalone C file with no dependency on
-    // this project's C++ sources under the Xtensa toolchain.
+    // key_char's and report's jump table slots, and keyboard's entry
+    // address -- inlined here in C++ so run.sh's runner can stay a small
+    // standalone C file with no dependency on this project's C++ sources
+    // under the Xtensa toolchain.
     int keySlotOffset = -1, reportSlotOffset = -1;
     uint32_t keyboardEntry = 0;
     {
@@ -117,11 +117,11 @@ int main()
                 uint32_t addr;
                 memcpy(&addr, hdr, 4);
                 hdr += 4 + 4;
-                bool isWrapper = varptr[0] >= '0' && varptr[0] <= '9';
+                (void)varptr;
                 const char *p2 = nameptr + 2;
                 if (p2[0] == '_')
                     p2++;
-                if (!isWrapper && strncmp(p2, "keyboard", 8) == 0 && (p2[8] == '(' || p2[8] == 0))
+                if (strncmp(p2, "keyboard", 8) == 0 && (p2[8] == '(' || p2[8] == 0))
                     keyboardEntry = addr;
             }
         }
