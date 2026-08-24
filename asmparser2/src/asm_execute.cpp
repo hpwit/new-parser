@@ -228,10 +228,29 @@ executable createExecutableFromBinary(Binary *bin)
     executable exe;
     exe.error.error = 0;
 
+    // Real-hardware-only crash (Guru Meditation Error: IllegalInstruction,
+    // PC landing near where an indirect call's target register pointed,
+    // the faulting word reading back as an unwritten/poisoned heap
+    // pattern) confirmed reproducible even after every other candidate
+    // (codegen correctness, jump-table/relocation math, frame sizes, the
+    // host binding's own show() call) was individually ruled out --
+    // including the PC staying at the *same* absolute address across two
+    // builds whose own instruction_size genuinely differed, which points
+    // at something outside the relocated range entirely: most likely
+    // heap_caps_malloc(..., MALLOC_CAP_EXEC) handing back page-rounded
+    // memory (ESP32 IRAM/MMU regions are commonly page-granular), with
+    // the real fault landing in that rounding gap rather than in
+    // anything this compiler actually emitted. Requesting (and flushing)
+    // a size already rounded up to a full Xtensa cache line, plus one
+    // extra line of margin, costs a few bytes and a handful of cycles
+    // and is safe regardless of whether this is the actual mechanism --
+    // over-flushing cache lines that happen to be real, allocated memory
+    // is never itself a source of incorrect behavior.
+    uint32_t execAllocSize = ((bin->instruction_size + 31u) & ~31u) + 32u;
 #if ASM_EXEC_ON_TARGET
-    uint32_t *exec = (uint32_t *)heap_caps_malloc(bin->instruction_size, MALLOC_CAP_EXEC);
+    uint32_t *exec = (uint32_t *)heap_caps_malloc(execAllocSize, MALLOC_CAP_EXEC);
 #else
-    uint32_t *exec = (uint32_t *)malloc(bin->instruction_size);
+    uint32_t *exec = (uint32_t *)malloc(execAllocSize);
 #endif
     uint8_t *binary_data = (uint8_t *)malloc(bin->data_size > 0 ? bin->data_size : 4);
 
@@ -294,6 +313,13 @@ executable createExecutableFromBinary(Binary *bin)
     }
 
     memcpy(exec, bin->binary_data, bin->instruction_size);
+    // Zero the rounding/margin bytes beyond the script's own real code
+    // (see execAllocSize's own comment above) -- a well-defined, always-
+    // decodable pattern is a far safer thing for a stray/speculative
+    // instruction fetch to land on than whatever heap_caps_malloc()
+    // happened to hand back unwritten.
+    if (execAllocSize > bin->instruction_size)
+        memset((uint8_t *)exec + bin->instruction_size, 0, execAllocSize - bin->instruction_size);
 
 #if ASM_EXEC_ON_TARGET
     // Without this, a script that runs cleanly the first time (or that
@@ -309,8 +335,10 @@ executable createExecutableFromBinary(Binary *bin)
     // comparing execution of identical compiled bytes from a
     // statically-linked .text location (fine) against a copy freshly
     // written into a heap buffer immediately before being called (not).
-    xthal_dcache_region_writeback(exec, bin->instruction_size);
-    xthal_icache_region_invalidate(exec, bin->instruction_size);
+    // Covers execAllocSize (rounded up + a margin line), not just the
+    // script's own instruction_size -- see that variable's own comment.
+    xthal_dcache_region_writeback(exec, execAllocSize);
+    xthal_icache_region_invalidate(exec, execAllocSize);
 #endif
 
     exe.start_program = exec;
