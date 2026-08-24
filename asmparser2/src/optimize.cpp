@@ -757,9 +757,23 @@ void optimize(Text *text)
                 trackRemoveAt(from, to, index, ind);
         }
         else if ((strcmp(op, "movi") == 0 || strcmp(op, "rsr") == 0 || strcmp(op, "wsr") == 0 ||
-                  strcmp(op, "ssl") == 0) &&
+                  strcmp(op, "ssl") == 0 || strcmp(op, "l32r") == 0 || strcmp(op, "movExt") == 0 ||
+                  strcmp(op, "extui") == 0 || strcmp(op, "rfr") == 0) &&
                  d.size() > 1)
         {
+            // l32r/movExt/extui/rfr all write a fresh, unrelated value
+            // into their first operand -- same as movi -- but were
+            // missing from this branch entirely, so nothing ever
+            // invalidated a stale "aY is a copy of aX" fact once aX got
+            // overwritten this way: a later read of aY could still be
+            // rewritten to aX, silently picking up whatever aX held
+            // *before* this line instead of after. Real, QEMU-confirmed
+            // bug: `movr a15,a2 / mov a11,a15` (correctly folds to `mov
+            // a11,a2`, but the "a15 == a2" fact isn't cleared) followed
+            // by `l32r a15,@_some_string` then `mov a10,a15` rewrote the
+            // second mov to `mov a10,a2` -- printfln()'s format-string
+            // argument silently became an unrelated int value instead of
+            // the string's address.
             SplitResult d2(d.get(1), ",");
             bool found = false;
             int ind = -1;
@@ -778,31 +792,47 @@ void optimize(Text *text)
         {
             SplitResult d2(d.get(1), ",");
             char *newstr = string_format("%s %s,", op, d2.get(0));
-            bool found = false;
-            int ind = -1;
+            bool foundSrc = false;
+            int indSrc = -1;
             char *finalSrc = d2.get(1);
             for (int mp = 0; mp < index.size(); mp++)
                 if (strcmp(d2.get(1), from.get(mp)) == 0)
                 {
-                    finalSrc = to.get(mp);
+                    // Copy, not alias: to.get(mp)'s storage is about to
+                    // be free()'d by trackRemoveAt() below, but finalSrc
+                    // still needs to be valid for this whole branch's
+                    // remaining uses -- most notably the trackAdd() at
+                    // its tail, past that removal.
+                    finalSrc = ownedCopy(to.get(mp));
                     newstr = str_concat("%s%s", newstr, to.get(mp));
                     text->replaceText(index.get(mp), " ");
-                    found = true;
-                    ind = mp;
+                    foundSrc = true;
+                    indSrc = mp;
                 }
-            if (!found)
+            if (!foundSrc)
                 newstr = str_concat("%s%s", newstr, d2.get(1));
             text->replaceText(i, newstr);
+            // The fact just consumed above (its own movr/mov line already
+            // blanked) has to be dropped from tracking now too, not just
+            // textually blanked -- otherwise it lingers as a stale, no-
+            // longer-true "aY is a copy of aX" claim that nothing but a
+            // write *Pass 4 itself recognizes* would ever clear (see the
+            // movi/l32r/movExt/extui/rfr branch's own comment for the
+            // real bug this caused once combined with l32r's own missing
+            // invalidation).
+            if (foundSrc)
+                trackRemoveAt(from, to, index, indSrc);
 
-            found = false;
+            bool foundDst = false;
+            int indDst = -1;
             for (int mp = 0; mp < index.size(); mp++)
                 if (strcmp(d2.get(0), from.get(mp)) == 0)
                 {
-                    found = true;
-                    ind = mp;
+                    foundDst = true;
+                    indDst = mp;
                 }
-            if (found)
-                trackRemoveAt(from, to, index, ind);
+            if (foundDst)
+                trackRemoveAt(from, to, index, indDst);
 
             // A plain "mov aY,aX" (unlike neg/abs/sll/srl, which compute
             // something rather than copy verbatim) is itself a fresh,
