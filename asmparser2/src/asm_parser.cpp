@@ -858,6 +858,21 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
 
     int nb_align_label = 0;
     int nb_not_aligned_label = 0;
+    // A "callExt ..." line in _content/_footer is a single line of text but
+    // expands to *two* real instructions once assembled (see this file's
+    // own "callExt" parseline() branch: an l32r loading the target address,
+    // then a callx8) -- 6 bytes, not the 3 the per-line estimate below
+    // assumes. Undercounting this was silent for scripts with few external
+    // calls (the `(_content->size()+...)*3` estimate has enough slack from
+    // other sources -- blanked/no-op lines still counted at their full 3
+    // bytes despite emitting none, alignment padding, etc.), but a
+    // short, external-call-heavy script (confirmed against a real one: 6
+    // callExt lines in ~50 total, an 18-byte shortfall) can undershoot the
+    // true byte count enough that createExecutableFromBinary()/callers
+    // copying exactly `instruction_size` bytes silently truncate the
+    // function's tail -- up to and including its own retw.n, so execution
+    // runs off the end of the copied buffer into whatever memory follows.
+    int nb_callExt = 0;
     for (int pass = 0; pass < 2; pass++)
     {
         Text *t = pass == 0 ? _content : _footer;
@@ -868,6 +883,8 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
                 nb_align_label++;
             else if (strchr(str, ':') != NULL)
                 nb_not_aligned_label++;
+            else if (strncmp(str, "callExt", 7) == 0)
+                nb_callExt++;
         }
     }
 
@@ -908,7 +925,7 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
 
     _instr_size = (uint16_t)((nb_align_label + 1) * ALIGN_INSTR +
                               (_content->size() + _footer->size() - nb_not_aligned_label) * 3 +
-                              header_reservations * 4);
+                              header_reservations * 4 + nb_callExt * 3);
     _instr_size = (_instr_size / 8) * 8 + 8;
     tmp_instr_size = (uint16_t)(_instr_size + (tmp_data_size / 4) * 4 + 4);
 

@@ -1808,6 +1808,20 @@ void Parser::parseStatement()
             _is_variable_as_register.set(false);
             _for_num++;
 
+            // Saved so the unconditional _for_depth_reg.decrease() below can
+            // restore exactly this value instead of blindly assuming this
+            // loop's own init clause incremented it by exactly one. It only
+            // does when the init clause is itself a fresh declaration (e.g.
+            // `for (int i=0;...)`); `for (i=0;...)` reusing an `i` already
+            // declared before the loop doesn't touch _for_depth_reg at all,
+            // so the old unconditional decrease() would instead free the
+            // *previous* variable's still-live register slot for reuse --
+            // confirmed against a real script where this stole back the
+            // register a `uint32_t b` declared just before the loop was
+            // still using, corrupting it once a later variable was handed
+            // that same slot.
+            int savedForDepthReg = _for_depth_reg.get();
+
             if (_for_depth_reg.get() <= _MAX_FOR_DEPTH_REG)
             {
                 _is_variable_as_register.set(true);
@@ -1873,7 +1887,7 @@ void Parser::parseStatement()
             current_cntx = current_cntx->parent;
             current_node = current_node->parent;
 
-            _for_depth_reg.decrease();
+            _for_depth_reg.set(savedForDepthReg);
             return;
         }
         else
