@@ -110,14 +110,20 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     PARSER_LOG("optimize")
     optimize(&content);
     removeBlankLines(&content);
-    // Re-run optimize() now that blanked-out lines from the first pass
-    // are physically gone -- its peephole passes look at nearby lines
-    // (e.g. Pass 1's "is the immediately preceding instruction a reload
-    // of this same register") to decide what to do, so a blank sitting
-    // between two lines that are only adjacent *after* compaction can
-    // hide an optimization the first pass had no way to see yet.
-    PARSER_LOG("optimize")
-    optimize(&content);
+    // A second optimize() invocation used to run here, on the theory that
+    // blanked-out lines from the first pass being physically gone could
+    // unlock further folds Pass 1's "is the immediately preceding
+    // instruction a reload of this same register"-style checks had no way
+    // to see yet. Dropped: Pass 4's register-copy-propagation running a
+    // second time, on this already-compacted buffer, is what let it blank
+    // a register's only defining line as soon as it folded one later read
+    // into a different instruction, without checking whether the
+    // register was read again further down (confirmed against a real
+    // script: alloc()'s return value stored in a2, silently dropped after
+    // printfln() folded the first of several later reads, corrupting
+    // every subsequent one). A single optimize() pass never reaches this
+    // state, at the cost of leaving a few extra peephole wins on the
+    // table that only the second pass could see.
     PARSER_LOG("optimize speed")
     optimizeSpeed(&content);
     removeBlankLines(&content);
@@ -435,7 +441,27 @@ void Parser::parseProgram()
                 }
                
                //PARSER_LOG("gert %s %s",nd.getText(),_t.getText());
+                // A bare pointer declaration ("TYPE *name;", no brackets)
+                // needs 4 bytes of storage (an address, on this 32-bit
+                // target) regardless of the pointee type's own size --
+                // copyPrty() instead computes pointee-size*1 for this case
+                // (right for "TYPE name[N];", which arrives with its real
+                // dimension already in nd._total_size, wrong for a bare
+                // pointer, which is always left at the untouched default
+                // of 1). Checked here, not inside copyPrty() itself, since
+                // that function is also used to resolve references to an
+                // *existing* pointer/array (createNodeVariable()'s
+                // `copyPrty(search_result, &v)`), where the destination
+                // node legitimately starts at the same (isPointer=true,
+                // _total_size==1) state for a *stride* computation that
+                // must not be overridden this way -- confirmed against a
+                // struct-array field read (`arr[i].b`) regressing to the
+                // wrong stride when this override lived in copyPrty()
+                // instead.
+                bool wasBarePointerDecl = _t.isPointer && nd._total_size == 1;
                 copyPrty(&_t, &nd);
+                if (wasBarePointerDecl)
+                    nd._total_size = 4;
                 _t.clear();
              // PARSER_LOG("gert %s %s",nd.getText(),_t.getText());
 
@@ -468,7 +494,15 @@ void Parser::parseProgram()
                         {
                             nd._nodetype = (int)defGlobalVariableNode;
                         }
-                        copyPrty(&_t, &nd);
+                        // See the first declarator's identical guard above
+                        // for why this is needed and why it's checked here
+                        // rather than inside copyPrty() itself.
+                        {
+                            bool wasBarePointerDecl = _t.isPointer && nd._total_size == 1;
+                            copyPrty(&_t, &nd);
+                            if (wasBarePointerDecl)
+                                nd._total_size = 4;
+                        }
 
                         current_node = program.addChild(nd);
                         tmp_sav = current_node;

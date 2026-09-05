@@ -56,41 +56,6 @@ static void trackAdd(vect<char *> &from, vect<char *> &to, vect<int> &index, cha
     index.push_back(idx);
 }
 
-// True if `reg` is read as an operand anywhere strictly after `afterIdx`.
-// Guards every "consume a tracked from->to fact, blank the line that
-// established it" site in Pass 4 below: that blanking is only safe when
-// this consumption is the fact's *only* remaining use -- e.g. a
-// `mov aY,aX` the code generator emitted purely to relay a just-returned
-// value into a short-lived scratch register, per Pass 4's own header
-// comment. When aX (here, `reg`) is a longer-lived value with further
-// reads later in the same function -- e.g. a script variable that
-// happens to keep living in the register a call result first landed in
-// -- blanking on the first fold destroys the only place that value was
-// ever materialized, leaving every later read of aX pulling whatever is
-// there instead. Confirmed against a real script (alloc()'s return value
-// stored in a2, read again by three later external calls after an
-// intervening printfln() call folded the first of those reads): the
-// blank fired on the printfln fold, leaving the later writeInt()/
-// readInt()/free() calls reading an a2 nothing had set, corrupting the
-// pointer they were passed and crashing with an invalid read/write.
-static bool regReadAfter(Text *text, const char *reg, int afterIdx)
-{
-    for (int j = afterIdx + 1; j < text->size(); j++)
-    {
-        char *tmp = *text->getChildAtPos(j);
-        if (tmp == NULL || strcmp(tmp, " ") == 0 || strcmp(tmp, "") == 0)
-            continue;
-        SplitResult d(tmp, " ");
-        if (d.size() < 2)
-            continue;
-        SplitResult d2(d.get(1), ",");
-        for (int k = 0; k < d2.size(); k++)
-            if (strcmp(d2.get(k), reg) == 0)
-                return true;
-    }
-    return false;
-}
-
 void optimize(Text *text)
 {
     // Pass 1: for each register a3..a10, walk the buffer and blank out an
@@ -384,8 +349,7 @@ void optimize(Text *text)
                 if (strcmp(d2.get(0), from.get(mp)) == 0)
                 {
                     newstr = str_concat("%s%s,", newstr, to.get(mp));
-                    if (!regReadAfter(text, from.get(mp), i))
-                        text->replaceText(index.get(mp), " ");
+                    text->replaceText(index.get(mp), " ");
                     found = true;
                 }
             if (!found)
@@ -408,8 +372,7 @@ void optimize(Text *text)
                 if (strcmp(d2.get(0), from.get(mp)) == 0)
                 {
                     newstr = str_concat("%s%s,", newstr, to.get(mp));
-                    if (!regReadAfter(text, from.get(mp), i))
-                        text->replaceText(index.get(mp), " ");
+                    text->replaceText(index.get(mp), " ");
                     found = true;
                     ind = mp;
                 }
@@ -423,8 +386,7 @@ void optimize(Text *text)
                 if (strcmp(d2.get(1), from.get(mp)) == 0)
                 {
                     newstr = str_concat("%s%s,", newstr, to.get(mp));
-                    if (!regReadAfter(text, from.get(mp), i))
-                        text->replaceText(index.get(mp), " ");
+                    text->replaceText(index.get(mp), " ");
                     found = true;
                     ind = mp;
                 }
@@ -467,8 +429,7 @@ void optimize(Text *text)
                 {
                     finalSrc = to.get(mp);
                     newstr = str_concat("%s%s", newstr, to.get(mp));
-                    if (!regReadAfter(text, from.get(mp), i))
-                        text->replaceText(index.get(mp), " ");
+                    text->replaceText(index.get(mp), " ");
                     found = true;
                     ind = mp;
                 }
@@ -530,8 +491,7 @@ void optimize(Text *text)
                 if (strcmp(d2.get(1), from.get(mp)) == 0)
                 {
                     newstr = str_concat("%s%s,", newstr, to.get(mp));
-                    if (!regReadAfter(text, from.get(mp), i))
-                        text->replaceText(index.get(mp), " ");
+                    text->replaceText(index.get(mp), " ");
                     found = true;
                     ind = mp;
                 }
@@ -565,8 +525,7 @@ void optimize(Text *text)
                 if (strcmp(d2.get(1), from.get(mp)) == 0)
                 {
                     newstr = str_concat("%s%s,", newstr, to.get(mp));
-                    if (!regReadAfter(text, from.get(mp), i))
-                        text->replaceText(index.get(mp), " ");
+                    text->replaceText(index.get(mp), " ");
                     found = true;
                     ind = mp;
                 }
@@ -580,8 +539,7 @@ void optimize(Text *text)
                     newstr = str_concat("%s%s", newstr, to.get(mp));
                     found = true;
                     ind = mp;
-                    if (!regReadAfter(text, from.get(mp), i))
-                        text->replaceText(index.get(mp), " ");
+                    text->replaceText(index.get(mp), " ");
                 }
             if (!found)
                 newstr = str_concat("%s%s", newstr, d2.get(2));
