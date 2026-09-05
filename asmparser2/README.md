@@ -140,7 +140,7 @@ i: 2 3*i: 6
 i:19 3*i:57
 ```
 
-`printf`/`printfln` need no setup at all -- they're built into the compiler, not something you bind (see [Talking to your own code](#interaction-with-pre-compiled-functions) for functions that do need binding).
+`printf`/`printfln` need no setup at all -- they're built into the compiler, not something you bind (see [Talking to your own code](#interaction-with-pre-compiled-functions) for functions that do need binding). The same is true of `alloc`/`free`/`writeInt`/`readInt`, a simple dynamic-memory design covering this DSL's lack of pointer-dereference syntax -- see [MemoryAllocator](examples/MemoryAllocator) and the built-ins list below.
 
 **NB: `execute()` doesn't only work on `main` -- any function declared in the script can be called by name, and (unlike v1) it hands you back its real return value if you ask for one. See [the next section](#the-function-you-call-can-have-input-parameters).**
 
@@ -606,6 +606,7 @@ Like any normal language:
 - explicit casts: `(int)(expr)`, `(float)(expr)` -- the parens around `expr` are required, `(int)x` alone is a parse error. int<->float conversion elsewhere is automatic.
 - `&&`/`||`, and the `and`/`or` keyword spellings of the same thing
 - built-ins: `printf`, `printfln` (real varargs, always available, no binding needed)
+- built-ins for dynamic memory: `alloc(int size) -> uint32_t`, `free(uint32_t p)`, `writeInt(uint32_t p, int offset, int value)`, `readInt(uint32_t p, int offset) -> int` -- also always available, no binding needed. The DSL has no pointer-dereference syntax of its own, so a script-held `uint32_t` returned by `alloc()` is just a real heap address, read/written through these four accessors rather than `*(int*)(buf+offset)`. See [MemoryAllocator](examples/MemoryAllocator).
 
 ## Use of define
 
@@ -706,6 +707,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `PrintFibonacciAssembly` | Printing the generated Xtensa assembly for a recursive `fib()` before assembling/loading it, then running `fib(10)`. |
 | `MultiEffectController` | A real, several-hundred-line multi-effect script actually compiled and run, every host binding real. |
 | `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently. ESP32-only. |
+| `MemoryAllocator` | `alloc()`/`free()`/`writeInt()`/`readInt()`, the built-in dynamic-memory design covering this DSL's lack of pointer-dereference syntax. |
 
 # Known limitations
 
