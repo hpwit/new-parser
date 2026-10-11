@@ -1,0 +1,23 @@
+{
+    "files.associations": {
+        "__hash_table": "cpp",
+        "__split_buffer": "cpp",
+        "array": "cpp",
+        "bitset": "cpp",
+        "deque": "cpp",
+        "initializer_list": "cpp",
+        "queue": "cpp",
+        "stack": "cpp",
+        "string": "cpp",
+        "string_view": "cpp",
+        "unordered_map": "cpp",
+        "vector": "cpp",
+        "sstream": "cpp",
+        "ios": "cpp",
+        "__node_handle": "cpp",
+        "__locale": "cpp",
+        "locale": "cpp",
+        "__config": "cpp"
+    },
+    "cmake.sourceDirectory": "/Users/yvesbazin/Documents/Arduino/libraries/asmparser2/exampleESPIDF/call_script_function"
+}
