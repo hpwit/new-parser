@@ -1293,6 +1293,39 @@ void _visitassignementNode(NodeToken *nd)
         bufferText->sp.pop();
         bufferText->sp.push(bufferText->get());
 
+        // An indexed destination (`arr[i] = ...`) gets its address
+        // computed into a6/a7 by code the store visitor inserts at the
+        // position found underneath the value's own position(s) -- one
+        // per stored component (3 for a CRGB). For a plain right-hand
+        // side that is the statement's start, saved first thing above.
+        // But every array read in the right-hand side leaves a position
+        // of its own in between (just before its load instruction), and
+        // the address code then lands there, in the middle of the
+        // expression, using a15 downward as scratch like any other
+        // statement would: in `q[i] = (9 + wave[k] / 40) * 127;` it
+        // overwrote the 9 waiting in a15. Drop whatever sits between the
+        // statement's start and the value's positions so the address is
+        // always computed first, before any temporary is live.
+        NodeToken *dest = nd->getChildPtr(0);
+        if (dest->children_size() > 0 && dest->getVarTypeObj() != NULL)
+        {
+            int components = dest->getVarTypeObj()->size;
+            if (components < 1)
+                components = 1;
+            int depth = bufferText->sp._stack.size();
+            if (depth > components + 1)
+            {
+                int statementStart = bufferText->sp.front();
+                vect<int> keep;
+                for (int k = depth - components; k < depth; k++)
+                    keep.push_back(bufferText->sp._stack[k]);
+                bufferText->sp.clear();
+                bufferText->sp.push(statementStart);
+                for (int k = 0; k < keep.size(); k++)
+                    bufferText->sp.push(keep[k]);
+            }
+        }
+
         point_regnum++;
     }
     register_numl.duplicate();
