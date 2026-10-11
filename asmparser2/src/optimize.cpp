@@ -56,6 +56,46 @@ static void trackAdd(vect<char *> &from, vect<char *> &to, vect<int> &index, cha
     index.push_back(idx);
 }
 
+// Base register of a register-indirect load ("l8ui a14,a5,0" -> "a5"),
+// written into `base` (empty if the line isn't one). Returns false only
+// for a load that overwrites its own base -- "l32i a5,a5,0" -- which must
+// not be tracked at all: an identical repeat is a second dereference,
+// never a redundant reload. Pass 1 and
+// optimizeSpeed() use it to forget a tracked load as soon as its base is
+// rewritten: two textually identical loads only read the same address if
+// the base still holds the same value. Confirmed load-bearing against
+// examples/GameOfLife: `line1[i + 1] + line1[i]` compiles to the same
+// `l8ui a14,a5,0` twice with `l32r a5,@_line1; add a5,a5,a4` re-deriving
+// a5 in between, and the second load used to be blanked.
+static bool indirectLoadBase(const char *op, const char *operands, char *base, size_t n)
+{
+    base[0] = 0;
+    if (strcmp(op, "l32i") != 0 && strcmp(op, "l16i") != 0 &&
+        strcmp(op, "l16ui") != 0 && strcmp(op, "l8ui") != 0)
+        return true;
+    const char *b = strchr(operands, ',');
+    if (b == NULL)
+        return true;
+    b++;
+    size_t len = strcspn(b, ",");
+    if (len == 0 || len >= n)
+        return true;
+    if (strcspn(operands, ",") == len && strncmp(operands, b, len) == 0)
+        return false;
+    memcpy(base, b, len);
+    base[len] = 0;
+    return true;
+}
+
+// True if `operands`' first operand is exactly `reg` -- i.e. the line may
+// write it. Stores and branches also name a register first without
+// writing it; treating those as writes only costs a missed fold.
+static bool firstOperandIs(const char *operands, const char *reg)
+{
+    size_t len = strcspn(operands, ",");
+    return reg[0] != 0 && strlen(reg) == len && strncmp(operands, reg, len) == 0;
+}
+
 void optimize(Text *text)
 {
     // Pass 1: for each register a3..a10, walk the buffer and blank out an
@@ -67,6 +107,7 @@ void optimize(Text *text)
     {
         char *registername = string_format("a%d", regnum);
         char *str = ownedCopy("__");
+        char base[8] = "";
 
         for (int i = 0; i < text->size(); i++)
         {
@@ -81,13 +122,27 @@ void optimize(Text *text)
                 else
                 {
                     SplitResult d(tmp, " ");
-                    if (d.size() > 0 && strcmp(d.get(0), "call8") == 0 && regnum >= 8)
+                    if (d.size() > 0 && base[0] != 0 && atoi(base + 1) >= 8 &&
+                        (strcmp(d.get(0), "call8") == 0 || strcmp(d.get(0), "callExt") == 0))
+                    {
+                        // the tracked register survives the call, its base doesn't
+                        free(str);
+                        str = ownedCopy("__");
+                        base[0] = 0;
+                    }
+                    else if (d.size() > 0 && strcmp(d.get(0), "call8") == 0 && regnum >= 8)
                     {
                         free(str);
                         str = ownedCopy("_");
                     }
                     else if (d.size() > 1)
                     {
+                        if (firstOperandIs(d.get(1), base))
+                        {
+                            free(str);
+                            str = ownedCopy("__");
+                            base[0] = 0;
+                        }
                         // NOTE: this is a prefix match inherited from the
                         // original algorithm, so "a1" also matches "a10",
                         // "a11", etc. Preserved as-is rather than changed
@@ -108,6 +163,11 @@ void optimize(Text *text)
                                     str = ownedCopy(tmp);
                                 else
                                     str = ownedCopy("__");
+                                if (!indirectLoadBase(op, d.get(1), base, sizeof(base)))
+                                {
+                                    free(str);
+                                    str = ownedCopy("__");
+                                }
                             }
                         }
                     }
@@ -645,6 +705,7 @@ void optimizeSpeed(Text *text)
     {
         char *registername = string_format("a%d", regnum);
         char *str = ownedCopy("__");
+        char base[8] = "";
 
         for (int i = 0; i < text->size(); i++)
         {
@@ -666,6 +727,12 @@ void optimizeSpeed(Text *text)
                     }
                     else if (d.size() > 1)
                     {
+                        if (firstOperandIs(d.get(1), base))
+                        {
+                            free(str);
+                            str = ownedCopy("__");
+                            base[0] = 0;
+                        }
                         // Same prefix-match caveat as Pass 1: "a1" also
                         // matches "a10".."a15". Not an issue here since
                         // registername is always exactly 3 characters
@@ -695,6 +762,11 @@ void optimizeSpeed(Text *text)
                                     str = ownedCopy(tmp);
                                 else
                                     str = ownedCopy("__");
+                                if (!indirectLoadBase(op, d.get(1), base, sizeof(base)))
+                                {
+                                    free(str);
+                                    str = ownedCopy("__");
+                                }
                             }
                         }
                     }

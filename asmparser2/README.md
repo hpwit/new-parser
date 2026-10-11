@@ -706,6 +706,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `PrintBinaryHex` | Hex-dumping a compiled script's instruction bytes and relocation header. |
 | `PrintFibonacciAssembly` | Printing the generated Xtensa assembly for a recursive `fib()` before assembling/loading it, then running `fib(10)`. |
 | `MultiEffectController` | A real, several-hundred-line multi-effect script actually compiled and run, every host binding real. |
+| `GameOfLife` | Conway's Game of Life on a 2D `external CRGB leds[h, w]` matrix -- `hsv()`-coloured generations, `CRGB(0,0,0)` for dead cells, a small self-contained automaton. |
 | `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently. ESP32-only. |
 | `MemoryAllocator` | `alloc()`/`free()`/`writeInt()`/`readInt()`, the built-in dynamic-memory design covering this DSL's lack of pointer-dereference syntax. |
 

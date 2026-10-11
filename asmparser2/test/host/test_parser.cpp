@@ -285,6 +285,46 @@ static void runOptimizeUnitTest()
                 ok = false;
             }
         }
+
+        // A reload is only redundant while its base register still holds
+        // the same address. Reduced from examples/GameOfLife's
+        // `line1[i + 1] + line1[i]`: both loads are the same text, but a5
+        // is re-derived in between. Checked for both reload passes
+        // (optimize() tracks a3..a10, optimizeSpeed() a11..a15).
+        Text r;
+        r.addAfter("l8ui a14,a5,0"); // 0: kept
+        r.addAfter("l8ui a14,a5,0"); // 1: same base value -> blanked
+        r.addAfter("add a5,a5,a4");  // 2: base rewritten
+        r.addAfter("l8ui a14,a5,0"); // 3: different address -> kept
+        r.addAfter("l8ui a6,a5,0");  // 4: kept
+        r.addAfter("addi a5,a5,1");  // 5: base rewritten
+        r.addAfter("l8ui a6,a5,0");  // 6: different address -> kept
+        r.addAfter("l32i a7,a7,0");  // 7: kept
+        r.addAfter("l32i a7,a7,0");  // 8: second dereference -> kept
+
+        optimize(&r);
+        optimizeSpeed(&r);
+
+        const char *expectedReload[] = {
+            "l8ui a14,a5,0",
+            " ",
+            "add a5,a5,a4",
+            "l8ui a14,a5,0",
+            "l8ui a6,a5,0",
+            "addi a5,a5,1",
+            "l8ui a6,a5,0",
+            "l32i a7,a7,0",
+            "l32i a7,a7,0",
+        };
+        for (int i = 0; i < 9; i++)
+        {
+            char *got = *r.getChildAtPos(i);
+            if (got == NULL || strcmp(got, expectedReload[i]) != 0)
+            {
+                printf("       reload line %d: expected \"%s\", got \"%s\"\n", i, expectedReload[i], got ? got : "(null)");
+                ok = false;
+            }
+        }
         _exit(ok ? 0 : 1);
     }
 

@@ -3253,7 +3253,26 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
     // (matching v1's identical, equally unconditional `if (!boolextern)`).
     if (!boolextern)
     {
-        bufferText->addAfter(string_format("movExt a%d,@_ext_%s",
+        // A bare assignment to the external pointer variable itself
+        // (`array = x;` -- no index, and not an element-of-pointer store,
+        // i.e. the same shape the `s32i` branch at the top of this
+        // function handles) only needs the binding slot's own address in
+        // point_regnum to store the new pointer value into. That must be
+        // a plain `l32r`, not `movExt`: optimize.cpp's Pass 1 treats
+        // `movExt` as a freely re-derivable pure load (it's grouped with
+        // l32i/l16ui/l8ui there) and will copy-propagate or fold it,
+        // which is unsound here because the register is a live store
+        // destination that may have to survive an intervening call or
+        // compute for the right-hand side. `l32r` is opaque to that
+        // pass, so the address stays put. Both assemble to the same
+        // relocated l32r (asm_parser.cpp marks any `@_ext_`-prefixed
+        // l32r target as an external_var_label too), so the emitted
+        // bytes and the load-time patch are identical -- only the
+        // optimizer's view differs.
+        bool barePointerAssign =
+            nd->isPointer && nd->children_size() == 0 && !nd->asPointer;
+        bufferText->addAfter(string_format("%s a%d,@_ext_%s",
+                                           barePointerAssign ? "l32r" : "movExt",
                                            point_regnum, nd->getText()));
     }
     else

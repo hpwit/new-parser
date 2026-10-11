@@ -538,6 +538,24 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         result_parse_line ps = parseOperandes(sp.operandes, 2, op_l32r, 3, bin_l32r);
         ps.op = opCodeType::jump_32aligned;
         ps.calculateOfssetJump = jump_l32r;
+        // An `l32r` whose target is an `@_ext_` label is a reference to a
+        // bound external variable's slot, exactly like `movExt` -- mark
+        // the label so createBinaryHeader() emits the type-1 relocation
+        // for it. visitnode emits this form (rather than `movExt`) for a
+        // bare `extPtr = x;` assignment so optimize.cpp's Pass 1 leaves
+        // the live store-destination register alone; without this marking
+        // a script that only assigns such a pointer (never indexes it,
+        // so no sibling `movExt` marks the label) would resolve the slot
+        // to zero.
+        if (strncmp(trim(ps.getText()), (char *)"@_ext_", 6) == 0)
+        {
+            int index = findLabel(ps.getText(), asm_parsed);
+            if (index > -1)
+            {
+                result_parse_line *ps1 = getInstrAtPos(index);
+                ps1->op = opCodeType::external_var_label;
+            }
+        }
         return ps;
     }
     if (strcmp(op, "call8") == 0)
@@ -1197,6 +1215,19 @@ Binary createBinary(Text *_footer, Text *_header, Text *_content, bool display)
             _asm_parsed.clear();
             asm_text.clear();
             return bin;
+        }
+
+        if (display)
+        {
+            for (int i = 0; i < _asm_parsed.size(); i++)
+            {
+                result_parse_line *line = _asm_parsed.getChildAtPos(i);
+                if (line->op == opCodeType::label)
+                    printf("%08x\t<%s>:\n", (unsigned int)line->address, line->getText());
+                else
+                    printf("%08x\t%08x\t%s\n", (unsigned int)line->address,
+                           (unsigned int)line->bincode, line->getText());
+            }
         }
 
         uint8_t *rr = createBinaryHeader(&_asm_parsed);
