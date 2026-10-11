@@ -1126,7 +1126,17 @@ void _visitdefFunctionNode(NodeToken *nd)
 
     bufferText->addAfter(string_format(arrobase_label, nd->getText()));
     // bufferText->addAfter(string_format(entry, ((nd->stack_pos) / 8 + 1) * 8 + 16 + _STACK_SIZE)); // ((nd->stack_pos) / 8 + 1) * 8+20)
-    bufferText->addAfter(string_format(entry, ((nd->stack_pos) / 8 + 1) * 8 + 16));
+    // 32 bytes above the locals, not 16: the windowed ABI's overflow
+    // handler stores the caller's a0..a3 in the frame's top 16 bytes and,
+    // since every call made from here is a call8, this frame's own a4..a7
+    // in the 16 below those. With only 16 reserved, the last locals
+    // shared that second area and were overwritten as soon as a call
+    // chain got deeper than the register window -- a recursive function
+    // keeping a value in a stack local across its own recursive call
+    // returned garbage past a depth of about six. Keep _FRAME_RESERVED in
+    // sync with _visitdefInputArgumentsNode()'s `stek` and with
+    // optimize.cpp's preserveAcrossCalls().
+    bufferText->addAfter(string_format(entry, ((nd->stack_pos) / 8 + 1) * 8 + _FRAME_RESERVED));
 #if _TRIGGER == 0
     int sav = 9;
     bufferText->addAfterNoDouble(string_format("l32r a%d,@_stack_%s", sav, nd->getText()));
@@ -2031,6 +2041,9 @@ void _visitcallFunctionNode(NodeToken *nd)
             bufferText->addAfter(string_format(mov, register_numl.get(), 10));
         }
         // bufferText->sp.push(bufferText->get());
+        // Replaces the template's own position, same as
+        // _visitextCallFunctionNode().
+        bufferText->sp.pop();
         bufferText->sp.push(bufferText->get());
         register_numl.decrease();
     }
@@ -2542,6 +2555,10 @@ void _visitextCallFunctionNode(NodeToken *nd)
 
     // NodeToken *t = nd;
     _visitCallFunctionTemplate(nd, 10, true);
+    // Every branch below pushes the position(s) of the instruction(s)
+    // that read the result out of a10; those replace the template's own
+    // "after the call" position rather than stacking on top of it.
+    bufferText->sp.pop();
     int start = nd->stack_pos;
     varType *v = nd->getChildPtr(0)->getVarTypeObj();
     if (v->_varType == __float__)
@@ -2625,7 +2642,7 @@ void _visitdefInputArgumentsNode(NodeToken *nd)
     {
         int reg_num = 2;
        // int stek = ((nd->parent->stack_pos) / 8 + 1) * 8 + 16 + _STACK_SIZE;
-int stek = ((nd->parent->stack_pos) / 8 + 1) * 8 + 16;
+int stek = ((nd->parent->stack_pos) / 8 + 1) * 8 + _FRAME_RESERVED;
         for (int i = 0; i < nd->children_size(); i++)
         {
             int start = nd->getChildPtr(i)->stack_pos;
@@ -3898,6 +3915,11 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
         // globalType.pop();
         return;
     }
+    // Every argument expression visited below pushes buffer positions of
+    // its own onto bufferText->sp and nothing pops them. Remember the
+    // depth here so they can be dropped once the call is emitted -- see
+    // the end of this function.
+    int spDepthAtEntry = bufferText->sp._stack.size();
     // printf(" %s %d %d\n",nd->_token->text.c_str(),  t->children_size(),t->getChildPtr(1)->children_size());
     // for (int i = 0; i < t->getChildPtr(1)->children_size(); i++)
 
@@ -4162,6 +4184,19 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
         // bufferText->addAfter(string_format("mov a10,a2"));
         bufferText->addAfter(string_format("call8 @_%s", nd->getText()));
     }
+    // A call has to leave bufferText->sp the way any other expression
+    // does: nothing but the position(s) of its own result on top of what
+    // was there before. The store visitors rely on that -- they pop one
+    // position per stored component, then insert an array element's
+    // address computation at the position underneath, which is meant to
+    // be the statement's start (ahead of the whole right-hand side).
+    // With the arguments' positions left in between, that was a position
+    // inside the call sequence instead: `arr[i, j] = 160 + f(x);` got
+    // its index code between the argument setup and the call (reusing
+    // the register holding 160), and `arr[i, j] = f(x);` right after the
+    // call (reusing a10 before the result was read out of it).
+    while (bufferText->sp._stack.size() > spDepthAtEntry)
+        bufferText->sp.pop();
     bufferText->sp.push(bufferText->get());
 
     return;

@@ -325,6 +325,68 @@ static void runOptimizeUnitTest()
                 ok = false;
             }
         }
+
+        // preserveAcrossCalls(): a15 holds a value across the first call
+        // (read by the `add` after it) and has to be saved around it;
+        // around the second call nothing is live (a15 is rewritten before
+        // being read, a10 is the return register). The slot goes where
+        // the frame's reserved top 32 bytes start (96 - 32 = 64) and the
+        // frame grows by 8 so that area stays intact. The read at offset
+        // 100 is past the old frame size (an argument in the caller's
+        // frame) and has to move with it.
+        Text c;
+        c.addAfter("@_f():");
+        c.addAfter("entry a1,96");
+        c.addAfter("l32i a14,a1,100");
+        c.addAfter("movi a15,20");
+        c.addAfter("movi a10,200");
+        c.addAfter("callExt a8,@_rand(num)");
+        c.addAfter("add a15,a15,a10");
+        c.addAfter("s32i a15,a1,56");
+        c.addAfter("callExt a8,@_show()");
+        c.addAfter("mov a15,a10");
+        c.addAfter("retw.n");
+        c.addAfter("@_g():");
+        c.addAfter("entry a1,80");
+        c.addAfter("callExt a8,@_show()");
+        c.addAfter("retw.n");
+
+        preserveAcrossCalls(&c);
+
+        const char *expectedCalls[] = {
+            "@_f():",
+            "entry a1,104",
+            "l32i a14,a1,108",
+            "movi a15,20",
+            "movi a10,200",
+            "s32i a15,a1,64",
+            "callExt a8,@_rand(num)",
+            "l32i a15,a1,64",
+            "add a15,a15,a10",
+            "s32i a15,a1,56",
+            "callExt a8,@_show()",
+            "mov a15,a10",
+            "retw.n",
+            "@_g():",
+            "entry a1,80",
+            "callExt a8,@_show()",
+            "retw.n",
+        };
+        if (c.size() != 17)
+        {
+            printf("       preserveAcrossCalls: expected 17 lines, got %d\n", c.size());
+            ok = false;
+        }
+        for (int i = 0; i < 17 && i < c.size(); i++)
+        {
+            char *got = *c.getChildAtPos(i);
+            if (got == NULL || strcmp(got, expectedCalls[i]) != 0)
+            {
+                printf("       call line %d: expected \"%s\", got \"%s\"\n", i, expectedCalls[i], got ? got : "(null)");
+                ok = false;
+            }
+        }
+        fflush(stdout);
         _exit(ok ? 0 : 1);
     }
 
@@ -2081,6 +2143,32 @@ int main()
         "void main(){int n; n=10; int a; a=0; int b; b=1; int i; "
         "for (i=0;i<n;i++) { int t; t=a+b; a=b; b=t; } int fib; fib=a;}";
     runCorrectnessTest("fibonacci: fib(10) == 55", fibonacciScript, 60, 55);
+
+    // `else if` chain, with and without braces, ending in a plain else:
+    // i=0 adds 1, i=1,2 add 10 each, i=3,4 add 100 each, i=5 adds 1000.
+    // The trailing else used to attach to the first `if` instead of the
+    // last `else if` (see the TokenKeywordElse branch of
+    // Parser::parseStatement()): the first branch then also ran the final
+    // else block and the "nothing matched" case ran nothing. r's slot is
+    // stack offset 60 (second declared local, same
+    // as `a` in the fibonacci script above).
+    static const char *elseIfChainScript =
+        "void main(){int i; int r; r=0; for(i=0;i<6;i++){ if(i<1) r=r+1; "
+        "else if(i<3) r=r+10; else if(i<5){ r=r+100; } else r=r+1000; } }";
+    runCorrectnessTest("else-if chain picks exactly one branch: r == 1221", elseIfChainScript, 60, 1221);
+    runEquivalenceTest("optimized/unoptimized equivalence: else-if chain", elseIfChainScript);
+
+    // A multiply by 2/3/5/9 folded into add/addx2/addx4/addx8 inside an
+    // `if` condition. The condition is generated after the if's body with
+    // the buffer iterator rewound in front of it, and Text::blankCurrent()
+    // (which the fold uses to drop the constant's movi) used to free the
+    // buffer's *last* line instead of the one at the iterator: here the
+    // inner if's `label_.._end:` and main()'s `entry`, so assembly failed
+    // with "label not found".
+    static const char *foldInConditionScript =
+        "void main(){int n; n=5; int k; k=10; if (n*3 == 15) { if (n*5 == 25) k=k+1; } "
+        "if (n*9 == 45) k=k+1; }";
+    runGenerateBinaryTest("generates executable binary: constant-multiply fold inside an if condition", foldInConditionScript);
     runEquivalenceTest("optimized/unoptimized equivalence: fibonacci", fibonacciScript);
     runGenerateBinaryTest("generates executable binary: fibonacci", fibonacciScript);
 

@@ -44,4 +44,25 @@ void optimizeSpeed(Text *text);
 // (and skips) blank lines on its own, so this changes what
 // content.display() prints, not what gets assembled.
 void removeBlankLines(Text *text);
+
+// Makes every value that is held in a call-clobbered register across a
+// call survive it. Expression temporaries are handed out from a15/f15
+// downward, and nothing in the code generator moves one out of the way
+// when the rest of the expression contains a call: in `20 + rand(200)`
+// the 20 sits in a15 while rand() runs, and in
+// `readInt(b, 0) + readInt(b, 4)` the first result does. A windowed call
+// gives the callee the caller's a8..a15 as its own a0..a7, and every
+// float register is caller-saved, so whether the value survived depended
+// on what the callee happened to use.
+//
+// For each call, each such register that is read again before being
+// rewritten is stored to a frame slot just before the call and loaded
+// back right after it; the function's `entry` is enlarged to make room.
+// Since each save/restore pair sits tight around its own call, all calls
+// in a function share the same slots.
+//
+// Runs last, on the final text, so no other pass has to know about the
+// extra loads and stores. Functions in `content` only -- top-level
+// initializer code (the footer) is not covered.
+void preserveAcrossCalls(Text *text);
 #endif

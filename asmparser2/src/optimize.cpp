@@ -1,4 +1,5 @@
 #include "optimize.h"
+#include "parser_define.h"
 #include "string_functions.h"
 #include "vect.h"
 #include <stdio.h>
@@ -831,5 +832,244 @@ void removeBlankLines(Text *text)
         char *tmp = *text->getChildAtPos(i);
         if (tmp == NULL || strcmp(tmp, " ") == 0 || strcmp(tmp, "") == 0)
             text->_texts.erase(i);
+    }
+}
+
+// ---------------------------------------------------------------------
+// preserveAcrossCalls() -- see optimize.h.
+// ---------------------------------------------------------------------
+
+// Copies `src` into `dst` without leading/trailing blanks.
+static void trimmedLine(const char *src, char *dst, size_t n)
+{
+    dst[0] = 0;
+    if (src == NULL)
+        return;
+    while (*src == ' ')
+        src++;
+    size_t len = strlen(src);
+    while (len > 0 && src[len - 1] == ' ')
+        len--;
+    if (len >= n)
+        len = n - 1;
+    memcpy(dst, src, len);
+    dst[len] = 0;
+}
+
+static bool isCallLine(const char *line)
+{
+    return strncmp(line, "callExt ", 8) == 0 || strncmp(line, "call8 ", 6) == 0;
+}
+
+static bool isFunctionLabel(const char *line)
+{
+    size_t len = strlen(line);
+    return len > 2 && strncmp(line, "@_", 2) == 0 && line[len - 1] == ':';
+}
+
+// Instructions whose first operand is written without being read. For
+// anything not listed here (stores, branches, maddn.s-style accumulating
+// ops, anything unknown), a register named as first operand is assumed to
+// be read -- the safe direction: it can only cause a save/restore pair
+// that wasn't strictly needed.
+static bool writesFirstOperandOnly(const char *op)
+{
+    static const char *ops[] = {
+        "movi", "mov", "mov.s", "l32i", "l16i", "l16ui", "l16si", "l8ui", "lsi", "l32r", "movExt",
+        "add", "addi", "sub", "mull", "quos", "quou", "remu", "rems", "and", "or", "xor", "extui",
+        "slli", "srli", "srai", "addx2", "addx4", "addx8", "subx8", "neg", "neg.s", "abs.s",
+        "float.s", "ufloat.s", "trunc.s", "wfr", "rfr", "add.s", "sub.s", "mul.s", "const.s",
+        "nexp01.s", "div0.s"};
+    for (size_t i = 0; i < sizeof(ops) / sizeof(ops[0]); i++)
+        if (strcmp(op, ops[i]) == 0)
+            return true;
+    return false;
+}
+
+enum RegRole
+{
+    REG_UNTOUCHED,
+    REG_READ,
+    REG_WRITTEN
+};
+
+// What `line` does to `reg`. A call line itself is REG_UNTOUCHED: its
+// outgoing arguments are always set by explicit instructions just before
+// it, and treating it as a write would hide a value that has to survive
+// two calls in a row (`a * (f() + g())`) from the first one's scan.
+static RegRole regRole(const char *line, const char *reg)
+{
+    if (line[0] == 0 || strchr(line, ':') != NULL || isCallLine(line))
+        return REG_UNTOUCHED;
+    const char *sp = strchr(line, ' ');
+    if (sp == NULL)
+        return REG_UNTOUCHED;
+    char op[24];
+    size_t opLen = (size_t)(sp - line);
+    if (opLen >= sizeof(op))
+        return REG_UNTOUCHED;
+    memcpy(op, line, opLen);
+    op[opLen] = 0;
+
+    size_t regLen = strlen(reg);
+    bool first = false, later = false;
+    const char *p = sp;
+    int index = 0;
+    while (*p)
+    {
+        while (*p == ' ' || *p == ',')
+            p++;
+        size_t len = strcspn(p, ", ");
+        if (len == 0)
+            break;
+        if (len == regLen && strncmp(p, reg, len) == 0)
+        {
+            if (index == 0)
+                first = true;
+            else
+                later = true;
+        }
+        index++;
+        p += len;
+    }
+    if (later)
+        return REG_READ;
+    if (first)
+        return writesFirstOperandOnly(op) ? REG_WRITTEN : REG_READ;
+    return REG_UNTOUCHED;
+}
+
+// a8 is the callExt scratch register and a10 carries the return value, so
+// neither can hold anything across a call to begin with. f0 (the float
+// division helper) and f2 (script functions) carry float return values,
+// which a restore placed right after the call would overwrite, and f1/f2
+// are float argument registers; expression temporaries start at f15.
+static const char *const kCallClobbered[] = {
+    "a9", "a11", "a12", "a13", "a14", "a15",
+    "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15"};
+#define NUM_CALL_CLOBBERED ((int)(sizeof(kCallClobbered) / sizeof(kCallClobbered[0])))
+
+// Registers from kCallClobbered whose value is read again after the call
+// at `callPos` before being rewritten, scanning straight down to `end`
+// (the end of the function). Following the text order rather than the
+// real control flow can only add registers, never miss one that a
+// forward path reads.
+static int liveAcrossCall(Text *text, int callPos, int end, const char *live[])
+{
+    int n = 0;
+    char line[160];
+    for (int r = 0; r < NUM_CALL_CLOBBERED; r++)
+    {
+        for (int j = callPos + 1; j < end; j++)
+        {
+            trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+            RegRole role = regRole(line, kCallClobbered[r]);
+            if (role == REG_READ)
+            {
+                live[n++] = kCallClobbered[r];
+                break;
+            }
+            if (role == REG_WRITTEN)
+                break;
+        }
+    }
+    return n;
+}
+
+void preserveAcrossCalls(Text *text)
+{
+    char line[160];
+    int i = 0;
+    while (i < text->size())
+    {
+        trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+        if (strncmp(line, "entry a1,", 9) != 0)
+        {
+            i++;
+            continue;
+        }
+        int entryPos = i;
+        int frame = atoi(line + 9);
+        int end = entryPos + 1;
+        while (end < text->size())
+        {
+            trimmedLine(*text->getChildAtPos(end), line, sizeof(line));
+            if (isFunctionLabel(line))
+                break;
+            end++;
+        }
+
+        // The save slots start where the frame's reserved top
+        // _FRAME_RESERVED bytes currently are, and the frame grows by as
+        // much as they take, so that reserved area moves up intact: the
+        // window overflow handler stores the caller's a0..a3 in the top
+        // 16 and this frame's own a4..a7 in the 16 below (see
+        // _visitdefFunctionNode()). lsi/ssi/l32i/s32i can only reach
+        // offset 1020.
+        const char *live[NUM_CALL_CLOBBERED];
+        int maxSlots = 0;
+        for (int c = entryPos + 1; c < end; c++)
+        {
+            trimmedLine(*text->getChildAtPos(c), line, sizeof(line));
+            if (!isCallLine(line))
+                continue;
+            int n = liveAcrossCall(text, c, end, live);
+            if (n > maxSlots && frame - _FRAME_RESERVED + 4 * (n - 1) <= 1020)
+                maxSlots = n;
+        }
+        if (maxSlots == 0)
+        {
+            i = end;
+            continue;
+        }
+        int growth = ((maxSlots * 4 + 7) / 8) * 8;
+
+        // Anything this function addresses at or above its old frame
+        // size lives in the caller's frame (arguments past the sixth,
+        // see _visitdefInputArgumentsNode()'s `stek`) and is now
+        // `growth` bytes further away.
+        for (int c = entryPos + 1; c < end; c++)
+        {
+            trimmedLine(*text->getChildAtPos(c), line, sizeof(line));
+            char *base = strstr(line, ",a1,");
+            if (base == NULL)
+                continue;
+            char *num = base + 4;
+            char *endNum = NULL;
+            long off = strtol(num, &endNum, 10);
+            if (endNum == num || *endNum != 0 || off < frame)
+                continue;
+            *num = 0;
+            char *moved = string_format("%s%d", line, (int)off + growth);
+            text->replaceText(c, (const char *)moved);
+            free(moved);
+        }
+        char *newEntry = string_format("entry a1,%d", frame + growth);
+        text->replaceText(entryPos, (const char *)newEntry);
+        free(newEntry);
+
+        for (int c = entryPos + 1; c < end; c++)
+        {
+            trimmedLine(*text->getChildAtPos(c), line, sizeof(line));
+            if (!isCallLine(line))
+                continue;
+            int n = liveAcrossCall(text, c, end, live);
+            if (n == 0 || n > maxSlots)
+                continue;
+            for (int k = 0; k < n; k++)
+            {
+                bool isFloat = live[k][0] == 'f';
+                text->addAfter(c, string_format(isFloat ? "lsi %s,a1,%d" : "l32i %s,a1,%d", live[k], frame - _FRAME_RESERVED + 4 * k));
+            }
+            for (int k = 0; k < n; k++)
+            {
+                bool isFloat = live[k][0] == 'f';
+                text->addAfter(c - 1, string_format(isFloat ? "ssi %s,a1,%d" : "s32i %s,a1,%d", live[k], frame - _FRAME_RESERVED + 4 * k));
+            }
+            // the call is now at c + n, its restores at c + n + 1 .. c + 2n
+            c += 2 * n;
+            end += 2 * n;
+        }
+        i = end;
     }
 }

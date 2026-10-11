@@ -127,6 +127,8 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     PARSER_LOG("optimize speed")
     optimizeSpeed(&content);
     removeBlankLines(&content);
+    PARSER_LOG("preserve across calls")
+    preserveAcrossCalls(&content);
 }
 
 void Parser::parseProgram()
@@ -1710,6 +1712,33 @@ void Parser::parseStatement()
         {
             parseBlockStatement();
             RETURN_IF_ERROR
+        }
+        else if (Match(TokenKeywordIf))
+        {
+            // `else if (...) ... else ...`: the trailing else belongs to
+            // the inner if, so both have to end up inside this else's
+            // body. Left to the plain parseStatement() path below, only
+            // the inner if is consumed here and the trailing else is then
+            // parsed as a sibling of *this* else -- _visitelseNode() puts
+            // its skip-jump right before the last emitted line, which at
+            // that point is this else's own closing label, not the inner
+            // if's `_end:` label: the first branch falls into the final
+            // else block and the "nothing matched" path jumps past it.
+            // Parse the pair as if it had been written `else { if ...
+            // else ... }` instead; a longer chain nests the same way
+            // through the inner else's own pass through here.
+            current_cntx = current_cntx->addChild(NodeToken());
+            block_statement_num++;
+            current_node = current_node->addChild(NodeToken(current(), blockStatementNode));
+            parseStatement();
+            RETURN_IF_ERROR
+            if (Match(TokenKeywordElse))
+            {
+                parseStatement();
+                RETURN_IF_ERROR
+            }
+            current_cntx = current_cntx->parent;
+            current_node = current_node->parent;
         }
         else
         {

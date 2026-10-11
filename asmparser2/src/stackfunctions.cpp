@@ -150,15 +150,26 @@
     }
     void Text::blankCurrent()
     {
-        int lastIdx = _texts.size() - 1;
-        char *old = _texts.get(lastIdx);
+        // The slot _it actually points at, not the last element of
+        // _texts: _visitifNode()/_visitforNode()/_visitwhileNode() rewind
+        // the iterator to generate a condition in front of an already
+        // generated body, and the constant-folding callers in
+        // _visitoperatorNode() (addi, slli, add/addx2/addx4/addx8) then
+        // run with the buffer's last line being some unrelated line of
+        // that body or beyond. Freeing that one while overwriting *_it
+        // left the real last line -- a label, the next function's entry
+        // -- dangling, and leaked the line that was blanked.
+        int idx = currentPos();
+        if (idx < 0 || idx >= _texts.size())
+            return;
+        char *old = _texts.get(idx);
 
         // Look up a pooled " " before freeing old -- findText() scans the
         // whole pool, including this slot's current entry, so freeing it
         // first would leave that scan reading a dangling pointer.
         int pos = findText((char *)" ");
         char *m;
-        if (pos == lastIdx)
+        if (pos > -1 && _texts.get(pos) == old)
         {
             // Already blank -- nothing to do.
             return;
@@ -174,9 +185,9 @@
             m[1] = 0;
         }
 
-        if (!isReused(lastIdx))
+        if (!isReused(idx))
             free(old);
-        *_it = m;
+        *getChildAtPos(idx) = m;
     }
     char * Text::front()
     {

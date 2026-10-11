@@ -4,6 +4,9 @@
 
 #define _START_2 32
 #define _STACK_SIZE (_START_2 + 6 * 4)
+// Bytes kept free at the top of every script function's frame for the
+// windowed ABI's register save areas (see _visitdefFunctionNode()).
+#define _FRAME_RESERVED 32
 #define _MAX_FOR_DEPTH_REG 4
 #define _MAX_FOR_DEPTH_REG_2 2
 #define _TRIGGER 20

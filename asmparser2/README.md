@@ -707,6 +707,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `PrintFibonacciAssembly` | Printing the generated Xtensa assembly for a recursive `fib()` before assembling/loading it, then running `fib(10)`. |
 | `MultiEffectController` | A real, several-hundred-line multi-effect script actually compiled and run, every host binding real. |
 | `GameOfLife` | Conway's Game of Life on a 2D `external CRGB leds[h, w]` matrix -- `hsv()`-coloured generations, `CRGB(0,0,0)` for dead cells, a small self-contained automaton. |
+| `ProceduralEffects` | Two separately compiled procedural effects for a 128x96 matrix -- a table-driven integer plasma and a fire simulation -- run alternately from `loop()`. |
 | `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently. ESP32-only. |
 | `MemoryAllocator` | `alloc()`/`free()`/`writeInt()`/`readInt()`, the built-in dynamic-memory design covering this DSL's lack of pointer-dereference syntax. |
 
