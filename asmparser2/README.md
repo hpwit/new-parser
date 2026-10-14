@@ -747,6 +747,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `MultiEffectController` | A real, several-hundred-line multi-effect script actually compiled and run, every host binding real. |
 | `GameOfLife` | Conway's Game of Life on a 2D `external CRGB leds[h, w]` matrix -- `hsv()`-coloured generations, `CRGB(0,0,0)` for dead cells, a small self-contained automaton. |
 | `ProceduralEffects` | Five separately compiled procedural effects for a 128x96 matrix -- a table-driven integer plasma, a fire simulation, an animated Voronoi pattern, a six-fold mandala and spinning gradient squares -- run in turn from `loop()`. [Frames of each](examples/ProceduralEffects/README.md). |
+| `MandelbrotFixedPoint` | The Mandelbrot set on a 128x96 matrix computed with integers only -- the classic float script rewritten in 12-bit fixed-point arithmetic, with the conversion rules explained. |
 | `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently. ESP32-only. |
 | `MemoryAllocator` | `alloc()`/`free()`/`writeInt()`/`readInt()`, the built-in dynamic-memory design covering this DSL's lack of pointer-dereference syntax. |
 | `SafeMode` | `safe_mode` bounds checking: an out-of-range write stops the script, reports which array and index, and `execute()` returns false. |
