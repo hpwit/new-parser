@@ -173,6 +173,21 @@ struct jsonVariable
     uint8_t type = 0;
 };
 
+// What a script's safe_mode bounds check reported the last time one
+// failed (see visitnode.cpp's emitSafeBoundsCheck() and
+// runtime_functions.cpp's safeModeError()). Cleared each time the host
+// enters the script from outside.
+struct runtime_error_struct
+{
+    bool error = false;
+    // Name of the array as declared in the script (truncated to fit).
+    char array[32] = {0};
+    // Its declared element count, and the offending (flattened) index.
+    // The index is kept signed: a negative one fails the check too.
+    uint32_t size = 0;
+    int32_t index = 0;
+};
+
 // A relocated, loaded script ready to run: start_program/data are real
 // addresses (executable memory + a scratch data region), and functions
 // lists each declared entry point by name so the caller can pick which
@@ -195,6 +210,13 @@ struct executable
     // fillHandleWord() falls back to the executable's own address in
     // that case.
     void *owner = NULL;
+    // Last safe_mode failure, if any -- see runtime_error_struct.
+    runtime_error_struct runtimeError;
+    // While the host is inside this script (asm_execute.cpp's
+    // enterScript()), points at the jmp_buf of the innermost such entry,
+    // so a failed bounds check can abandon the script and come straight
+    // back to it. NULL whenever no host call is in progress.
+    void *runtimeUnwind = NULL;
 };
 
 #endif

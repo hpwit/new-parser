@@ -34,4 +34,19 @@
 // exact expected output through this exact registration.
 void registerBuiltinRuntimeFunctions();
 
+// safe_mode's runtime half. A script compiled with `safe_mode` calls the
+// built-in safeModeError(name, size, index, handle) when an indexed store
+// is out of bounds (see visitnode.cpp's emitSafeBoundsCheck()). It
+//   1. records the failure in the executable's runtimeError,
+//   2. reports it -- through onScriptRuntimeError if the host installed
+//      one, otherwise as one line on stdout:
+//      "Execution error: index 12 is out of bounds for array 'buf' (size 10)"
+//   3. abandons the script: control returns to the host call that entered
+//      it (execute(), callFunction(), runExecutable()...), which returns
+//      false.
+// Like printf/printfln it is registered automatically; a host can bind
+// its own "safeModeError" before compiling to replace the whole thing.
+struct runtime_error_struct;
+extern void (*onScriptRuntimeError)(const runtime_error_struct *error);
+
 #endif

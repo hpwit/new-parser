@@ -44,6 +44,126 @@ static const char *_div[] = {
     "divn.s f0, f2, f6", "retw.n"};
 static const int _div_size = 28;
 
+// ---------------------------------------------------------------------
+// safe_mode: bounds-checked writes to arrays of known size.
+//
+// `safe_mode` anywhere in a script turns the check on for every global or
+// external array declared with explicit dimensions (pointers and unsized
+// `a[]` declarations have no known bound and stay unchecked). Each such
+// array gets two extra header entries
+// (declareSafeArray()): its element count and its name. Every indexed
+// store into it is then preceded by (emitSafeBoundsCheck()):
+//
+//     l32r  aS,@_size_<name>      ; element count
+//     l32i  aS,aS,0
+//     bltu  aI,aS,__test_safe_N   ; unsigned: a negative index fails too
+//     l32r  a10,@_name_<name>     ; error path
+//     mov   a11,aS
+//     mov   a12,aI
+//     l32r  a13,@__handle_
+//     l32i  a13,a13,0
+//     callExt a8,@_safeModeError(char*|num|num|num)
+//     retw.n
+//   __test_safe_N:
+//
+// safeModeError() (runtime_functions.cpp) records the error on the
+// executable the handle designates and unwinds straight back to the host
+// call that entered the script, so nothing after the faulty store runs.
+// The `retw.n` only matters when there is nothing to unwind to (see
+// that function): it at least keeps the store itself from happening.
+//
+// For a multi-dimensional array the index checked is the flattened one,
+// against the total element count, the same as v1.
+// ---------------------------------------------------------------------
+static const char *const _safe_error_label = "@_safeModeError(char*|num|num|num)";
+
+// Element count of an array declared with explicit dimensions, 0 for
+// anything else (`type *p`, `type a[]`). The parser records the
+// dimensions of `type a[d1, d2, ...]` as the declaration's target text,
+// "@<n> d1 d2 ..." (see the TokenOpenBracket branch of
+// Parser::parseVariableForCreation()); a pointer or an unsized array has
+// none. Taken from there rather than from _total_size, which is a
+// uint16_t byte count.
+static uint32_t declaredElementCount(NodeToken *nd)
+{
+    if (nd->target == EOF_TEXTARRAY)
+        return 0;
+    const char *dims = nd->getTargetText();
+    if (dims == NULL || dims[0] != '@')
+        return 0;
+    const char *p = strchr(dims, ' ');
+    uint32_t count = 0;
+    while (p != NULL)
+    {
+        while (*p == ' ')
+            p++;
+        if (*p < '0' || *p > '9')
+            break;
+        uint32_t d = (uint32_t)strtoul(p, NULL, 10);
+        count = (count == 0) ? d : count * d;
+        p = strchr(p, ' ');
+    }
+    return count;
+}
+
+static void declareSafeArray(NodeToken *nd)
+{
+    uint32_t count = declaredElementCount(nd);
+    if (count == 0)
+        return;
+    header.addAfter(string_format("@_size_%s:", nd->getText()));
+    header.addAfter(_numToBytes(count));
+
+    const char *name = nd->getText();
+    int len = (int)strlen(name);
+    char *bytesLine = string_format(".bytes %d", len + 1);
+    for (int i = 0; i < len; i++)
+        bytesLine = str_concat("%s %02x", bytesLine, (unsigned char)name[i]);
+    bytesLine = str_concat("%s 00", bytesLine);
+    header.addAfter(string_format("@_name_%s:", name));
+    header.addAfter(bytesLine);
+}
+
+// `sizeReg` is a register free to use at this point (the one the caller
+// is about to load the array's base address into); the index is in
+// register_numl.get().
+static void emitSafeBoundsCheck(NodeToken *nd, int sizeReg)
+{
+    // Only an array declared with explicit dimensions has a size entry
+    // (declareSafeArray()). A plain pointer or an unsized `a[]` has no
+    // known bound and is left unchecked.
+    char *sizeLabel = string_format("@_size_%s:", nd->getText());
+    bool declared = header.findText(sizeLabel) > -1;
+    free(sizeLabel);
+    if (!declared)
+        return;
+
+    char *slotLabel = string_format("%s:", _safe_error_label);
+    if (header.findText(slotLabel) < 0)
+    {
+        header.addAfter(slotLabel);
+        header.addAfter(".bytes 4");
+    }
+    else
+        free(slotLabel);
+
+    int indexReg = register_numl.get();
+    bufferText->addAfter(string_format("l32r a%d,@_size_%s", sizeReg, nd->getText()));
+    bufferText->addAfter(string_format(l32i, sizeReg, sizeReg, 0));
+    bufferText->addAfter(string_format("bltu a%d,a%d,__test_safe_%d", indexReg, sizeReg, for_if_num2));
+    bufferText->addAfter(string_format("l32r a10,@_name_%s", nd->getText()));
+    bufferText->addAfter(string_format(mov, 11, sizeReg));
+    bufferText->addAfter(string_format(mov, 12, indexReg));
+    // _handle_ is declared for every script (with or without the
+    // prelude), first in the data region; fillHandleWord() fills it.
+    bufferText->addAfter("l32r a13,@__handle_");
+    bufferText->addAfter(string_format(l32i, 13, 13, 0));
+    bufferText->addAfter(string_format("callExt a8,%s", _safe_error_label));
+    bufferText->addAfter("retw.n");
+    bufferText->addAfter(string_format("__test_safe_%d:", for_if_num2));
+    for_if_num2++;
+}
+
 Text content, header, footer, *bufferText;
 void _visittypeNode(NodeToken *nd) {}
 void _visitnumberNode(NodeToken *nd)
@@ -2725,14 +2845,8 @@ int stek = ((nd->parent->stack_pos) / 8 + 1) * 8 + _FRAME_RESERVED;
 
 void _visitdefExtGlobalVariableNode(NodeToken *nd)
 {
-    if (safeMode)
-    {
-        if (nd->isPointer)
-        {
-            header.addAfter(string_format("@_size_%s:", nd->getText()));
-            header.addAfter(_numToBytes(nd->_total_size / nd->getVarTypeObj()->total_size));
-        }
-    }
+    if (safeMode && nd->isPointer)
+        declareSafeArray(nd);
     header.addAfter(string_format("@_ext_%s:", nd->getText()));
     header.addAfter(".bytes 4");
 }
@@ -2757,14 +2871,8 @@ void _visitdefGlobalVariableNode(NodeToken *nd)
 {
     if (strcmp(nd->getText(), _handle_) == 0)
         return;
-    if (safeMode)
-    {
-        if (nd->isPointer)
-        {
-            header.addAfter(string_format("@_size_%s:", nd->getText()));
-            header.addAfter(_numToBytes(nd->_total_size / nd->getVarTypeObj()->total_size));
-        }
-    }
+    if (safeMode && nd->isPointer)
+        declareSafeArray(nd);
     header.addAfter(string_format("@_%s:", nd->getText()));
     if (nd->children_size() == 0)
     {
@@ -3087,18 +3195,7 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
     }
 
     if (safeMode && nd->isPointer)
-    {
-        bufferText->addAfter(string_format("l32r a%d,@_size_%s", point_regnum, nd->getText()));
-        bufferText->addAfter(string_format(l32i, point_regnum, point_regnum, 0));
-        bufferText->addAfter(string_format("bge a%d,a%d,__test_safe_%d", point_regnum, register_numl.get(), for_if_num2));
-        bufferText->addAfter(string_format(movi, 10, 0));
-        bufferText->addAfter(string_format(mov, 11, point_regnum));
-        bufferText->addAfter(string_format(mov, 12, register_numl.get()));
-        bufferText->addAfter("callExt a8,error");
-        bufferText->addAfter("retw.n");
-        bufferText->addAfter(string_format("__test_safe_%d:", for_if_num2));
-        for_if_num2++;
-    }
+        emitSafeBoundsCheck(nd, point_regnum);
 
     if (nd->isPointer && nd->children_size() > 0)
     {
@@ -3283,18 +3380,7 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
     }
 
     if (safeMode && nd->isPointer)
-    {
-        bufferText->addAfter(string_format("l32r a%d,@_size_%s", regnum, nd->getText()));
-        bufferText->addAfter(string_format(l32i, regnum, regnum, 0));
-        bufferText->addAfter(string_format("bge a%d,a%d,__test_safe_%d", regnum, register_numl.get(), for_if_num2));
-        bufferText->addAfter(string_format(movi, 10, 0)); // nd->_token->line
-        bufferText->addAfter(string_format(mov, 11, regnum));
-        bufferText->addAfter(string_format("mov a12,a%d", register_numl.get()));
-        bufferText->addAfter("callExt a8,error");
-        bufferText->addAfter("retw.n");
-        bufferText->addAfter(string_format("__test_safe_%d:", for_if_num2));
-        for_if_num2++;
-    }
+        emitSafeBoundsCheck(nd, regnum);
     // boolextern (see _visitforNode()): if the enclosing for-loop already
     // resolved this exact array's base address into a7 once, before the
     // loop, just copy it -- nbofextern's parse-time count already

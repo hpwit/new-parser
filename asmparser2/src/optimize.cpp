@@ -97,6 +97,49 @@ static bool firstOperandIs(const char *operands, const char *reg)
     return reg[0] != 0 && strlen(reg) == len && strncmp(operands, reg, len) == 0;
 }
 
+enum RegRole
+{
+    REG_UNTOUCHED,
+    REG_READ,
+    REG_WRITTEN
+};
+static RegRole regRole(const char *line, const char *reg);
+static void trimmedLine(const char *src, char *dst, size_t n);
+static bool isFunctionLabel(const char *line);
+static bool lineWritesRegister(const char *line, const char *reg);
+
+// Pass 4 helper: blanks the `movr aY,aX` / `mov aY,aX` at `defPos` once a
+// read of aY at line `usePos` has been rewritten to read aX instead --
+// but only if nothing after `usePos` still reads aY before it is
+// rewritten. Pass 4 used to blank the copy unconditionally at its first
+// rewritten use; when that use was a branch (which also drops the tracked
+// fact) or was followed by a label or call (which reset every fact),
+// later reads of aY were left as they were, now reading a register nobody
+// had loaded. Seen with safe_mode's bounds check: the index copied into
+// a15 was compared (rewritten, copy blanked), then read again by the
+// address computation that follows the check.
+static void blankCopyIfDead(Text *text, int defPos, const char *reg, int usePos)
+{
+    char line[160];
+    // The line being rewritten may itself overwrite aY
+    // (`mull a15,a15,a11` -> `mull a15,a3,a11`): the copy is dead right
+    // there, whatever reads a15 afterwards reads the new value.
+    trimmedLine(*text->getChildAtPos(usePos), line, sizeof(line));
+    bool overwritten = lineWritesRegister(line, reg);
+    for (int j = usePos + 1; !overwritten && j < text->size(); j++)
+    {
+        trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+        if (isFunctionLabel(line))
+            break;
+        RegRole role = regRole(line, reg);
+        if (role == REG_READ)
+            return;
+        if (role == REG_WRITTEN)
+            break;
+    }
+    text->replaceText(defPos, " ");
+}
+
 void optimize(Text *text)
 {
     // Pass 1: for each register a3..a10, walk the buffer and blank out an
@@ -410,7 +453,7 @@ void optimize(Text *text)
                 if (strcmp(d2.get(0), from.get(mp)) == 0)
                 {
                     newstr = str_concat("%s%s,", newstr, to.get(mp));
-                    text->replaceText(index.get(mp), " ");
+                    blankCopyIfDead(text, index.get(mp), from.get(mp), i);
                     found = true;
                 }
             if (!found)
@@ -433,7 +476,7 @@ void optimize(Text *text)
                 if (strcmp(d2.get(0), from.get(mp)) == 0)
                 {
                     newstr = str_concat("%s%s,", newstr, to.get(mp));
-                    text->replaceText(index.get(mp), " ");
+                    blankCopyIfDead(text, index.get(mp), from.get(mp), i);
                     found = true;
                     ind = mp;
                 }
@@ -447,7 +490,7 @@ void optimize(Text *text)
                 if (strcmp(d2.get(1), from.get(mp)) == 0)
                 {
                     newstr = str_concat("%s%s,", newstr, to.get(mp));
-                    text->replaceText(index.get(mp), " ");
+                    blankCopyIfDead(text, index.get(mp), from.get(mp), i);
                     found = true;
                     ind = mp;
                 }
@@ -490,7 +533,7 @@ void optimize(Text *text)
                 {
                     finalSrc = to.get(mp);
                     newstr = str_concat("%s%s", newstr, to.get(mp));
-                    text->replaceText(index.get(mp), " ");
+                    blankCopyIfDead(text, index.get(mp), from.get(mp), i);
                     found = true;
                     ind = mp;
                 }
@@ -552,7 +595,7 @@ void optimize(Text *text)
                 if (strcmp(d2.get(1), from.get(mp)) == 0)
                 {
                     newstr = str_concat("%s%s,", newstr, to.get(mp));
-                    text->replaceText(index.get(mp), " ");
+                    blankCopyIfDead(text, index.get(mp), from.get(mp), i);
                     found = true;
                     ind = mp;
                 }
@@ -586,7 +629,7 @@ void optimize(Text *text)
                 if (strcmp(d2.get(1), from.get(mp)) == 0)
                 {
                     newstr = str_concat("%s%s,", newstr, to.get(mp));
-                    text->replaceText(index.get(mp), " ");
+                    blankCopyIfDead(text, index.get(mp), from.get(mp), i);
                     found = true;
                     ind = mp;
                 }
@@ -600,7 +643,7 @@ void optimize(Text *text)
                     newstr = str_concat("%s%s", newstr, to.get(mp));
                     found = true;
                     ind = mp;
-                    text->replaceText(index.get(mp), " ");
+                    blankCopyIfDead(text, index.get(mp), from.get(mp), i);
                 }
             if (!found)
                 newstr = str_concat("%s%s", newstr, d2.get(2));
@@ -875,7 +918,7 @@ static bool isFunctionLabel(const char *line)
 static bool writesFirstOperandOnly(const char *op)
 {
     static const char *ops[] = {
-        "movi", "mov", "mov.s", "l32i", "l16i", "l16ui", "l16si", "l8ui", "lsi", "l32r", "movExt",
+        "movi", "mov", "movr", "mov.s", "l32i", "l16i", "l16ui", "l16si", "l8ui", "lsi", "l32r", "movExt",
         "add", "addi", "sub", "mull", "quos", "quou", "remu", "rems", "and", "or", "xor", "extui",
         "slli", "srli", "srai", "addx2", "addx4", "addx8", "subx8", "neg", "neg.s", "abs.s",
         "float.s", "ufloat.s", "trunc.s", "wfr", "rfr", "add.s", "sub.s", "mul.s", "const.s",
@@ -886,12 +929,26 @@ static bool writesFirstOperandOnly(const char *op)
     return false;
 }
 
-enum RegRole
+// True if `line` is an instruction that writes its first operand and that
+// operand is `reg` -- whether or not it also reads `reg` as a source.
+static bool lineWritesRegister(const char *line, const char *reg)
 {
-    REG_UNTOUCHED,
-    REG_READ,
-    REG_WRITTEN
-};
+    const char *sp = strchr(line, ' ');
+    if (sp == NULL || strchr(line, ':') != NULL)
+        return false;
+    char op[24];
+    size_t opLen = (size_t)(sp - line);
+    if (opLen >= sizeof(op))
+        return false;
+    memcpy(op, line, opLen);
+    op[opLen] = 0;
+    if (!writesFirstOperandOnly(op))
+        return false;
+    while (*sp == ' ')
+        sp++;
+    size_t len = strcspn(sp, ", ");
+    return len == strlen(reg) && strncmp(sp, reg, len) == 0;
+}
 
 // What `line` does to `reg`. A call line itself is REG_UNTOUCHED: its
 // outgoing arguments are always set by explicit instructions just before
@@ -963,6 +1020,12 @@ static int liveAcrossCall(Text *text, int callPos, int end, const char *live[])
         for (int j = callPos + 1; j < end; j++)
         {
             trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+            // Nothing after an unconditional return is reached by falling
+            // through from this call, so a later read is some other
+            // path's business (a bounds check's `callExt ...; retw.n`
+            // would otherwise have every temporary used after it saved).
+            if (strcmp(line, "retw.n") == 0)
+                break;
             RegRole role = regRole(line, kCallClobbered[r]);
             if (role == REG_READ)
             {

@@ -98,6 +98,11 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     // below has any chance of resolving a call to one of them.
     registerBuiltinRuntimeFunctions();
 
+    // safe_mode is a property of the script being compiled, switched on
+    // by the keyword in its own text -- not something a previous script
+    // compiled in this process should be able to leave behind.
+    safeMode = false;
+
     _tks = __tks;
     _tks->tokenize(main_script, true, true, 1);
     parseProgram();

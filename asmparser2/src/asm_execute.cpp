@@ -3,6 +3,7 @@
 #include "string_functions.h"
 #include "binary_hex.h"
 #include "runtime_functions.h"
+#include <setjmp.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -503,6 +504,41 @@ static void fillHandleWord(executable *ex)
     }
 }
 
+// Every entry into compiled script code goes through here, so that a
+// failed safe_mode bounds check has somewhere to come back to:
+// runtime_functions.cpp's safeModeError() longjmp()s to the jmp_buf
+// armed below, abandoning whatever script functions were on the stack.
+// Returns false in that case (and leaves *result alone), true if the
+// script function returned normally.
+//
+// Entries nest -- a pinInterrupt() callback re-entering the script while
+// main() is still running is one inside the other -- so the previous
+// unwind point is saved and put back; a failure unwinds only the
+// innermost entry. ex->runtimeError is cleared when entering from
+// outside, so it always describes the most recent outermost call.
+static bool enterScript(executable *ex, void *entry, const int32_t *args, int nargs, int32_t *result)
+{
+    jmp_buf unwind;
+    void *outer = ex->runtimeUnwind;
+    if (outer == NULL)
+        ex->runtimeError = runtime_error_struct();
+
+    // Written after setjmp() and read after a possible longjmp().
+    volatile bool completed = false;
+    volatile int32_t value = 0;
+    if (setjmp(unwind) == 0)
+    {
+        ex->runtimeUnwind = &unwind;
+        value = callXtensaDirect(entry, args, nargs);
+        completed = true;
+    }
+    ex->runtimeUnwind = outer;
+
+    if (completed && result != NULL)
+        *result = value;
+    return completed;
+}
+
 bool callFunction(executable *ex, const char *name, Arguments *args, int32_t *result)
 {
     int32_t raw[6];
@@ -536,13 +572,11 @@ bool callFunction(executable *ex, const char *name, const int32_t *args, int nar
 #ifdef ASM_PARSER_DEBUG
     int64_t __debugStart = debugNowMicros();
 #endif
-    int32_t r = callXtensaDirect(entry, args, nargs);
+    bool completed = enterScript(ex, entry, args, nargs, result);
 #ifdef ASM_PARSER_DEBUG
     printf("ASM_PARSER_DEBUG: %s() took %lld us\n", name, (long long)(debugNowMicros() - __debugStart));
 #endif
-    if (result != NULL)
-        *result = r;
-    return true;
+    return completed;
 }
 
 bool runExecutableWithArgs(executable *ex, Arguments *args)
@@ -587,8 +621,7 @@ bool runExecutableWithArgs(executable *ex, const int32_t *args, int nargs)
     fillHandleWord(ex);
 
     uint8_t *entry = (uint8_t *)ex->start_program + target->address;
-    callXtensaDirect(entry, args, nargs);
-    return true;
+    return enterScript(ex, entry, args, nargs, NULL);
 }
 
 void runExecutable(executable *ex)

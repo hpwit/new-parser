@@ -86,6 +86,13 @@ public:
     // find anything to run.
     void free() { freeExecutable(&exe); }
 
+    // True if the last execute()/executeOnly() was cut short by a
+    // safe_mode bounds check (that call returned false); runtimeError()
+    // then says which array, its size and the offending index. See
+    // runtime_functions.h.
+    bool hasRuntimeError() const { return exe.runtimeError.error; }
+    const runtime_error_struct &runtimeError() const { return exe.runtimeError; }
+
     // Matches upstream's Executable::isExeExists() -- true if parsing,
     // assembling, and loading all succeeded and there's at least one
     // callable function. Not const-qualified: vect<T>::size() (vect.h)

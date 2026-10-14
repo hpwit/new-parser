@@ -326,6 +326,25 @@ static void runOptimizeUnitTest()
             }
         }
 
+        // Copy propagation must keep a copy that is read again after the
+        // use it rewrote. Shape of a safe_mode check: the index copied
+        // into a15 is compared (that use is rewritten to read a2), then
+        // read again on both paths after it. The `movr` has to stay.
+        Text k;
+        k.addAfter("movr a15,a2");
+        k.addAfter("bltu a15,a6,__test_safe_1");
+        k.addAfter("mov a12,a15");
+        k.addAfter("callExt a8,@_safeModeError(char*|num|num|num)");
+        k.addAfter("retw.n");
+        k.addAfter("__test_safe_1:");
+        k.addAfter("add a15,a15,a15");
+        optimize(&k);
+        if (strcmp(*k.getChildAtPos(0), "movr a15,a2") != 0)
+        {
+            printf("       copy line 0: expected \"movr a15,a2\" to be kept, got \"%s\"\n", *k.getChildAtPos(0));
+            ok = false;
+        }
+
         // preserveAcrossCalls(): a15 holds a value across the first call
         // (read by the `add` after it) and has to be saved around it;
         // around the second call nothing is live (a15 is rewritten before
@@ -757,6 +776,208 @@ static void runAutoDeclareBinaryTest()
                     printf("       loaded %d function(s)\n", exe.functions.size());
                 }
                 freeExecutable(&exe);
+            }
+        }
+
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
+// safe_mode code generation. What the checks *do* at runtime (stop the
+// script, report, unwind across script functions) can only be seen by
+// running them -- test/qemu_full/SafeModeTest does that on an emulated
+// ESP32. This checks the compile-time half: which stores get a check,
+// what the header declares, that the result assembles and the error
+// handler's slot relocates, and that safe_mode does not leak from one
+// compiled script into the next.
+static int countLinesContaining(Text &t, const char *needle)
+{
+    int n = 0;
+    for (int i = 0; i < t.size(); i++)
+        if (strstr(t.getText(i), needle) != NULL)
+            n++;
+    return n;
+}
+
+// The two lines after `label` in the header, joined, e.g.
+// "@_size_buf: .bytes 4 0a 00 00 00".
+static bool headerEntryIs(const char *label, const char *bytesLine)
+{
+    for (int i = 0; i + 1 < header.size(); i++)
+        if (strcmp(header.getText(i), label) == 0)
+            return strcmp(header.getText(i + 1), bytesLine) == 0;
+    return false;
+}
+
+static bool compileForTest(const char *script)
+{
+    Parser p;
+    p.clean();
+    content.clear();
+    header.clear();
+    footer.clear();
+    Script s;
+    s.addContent(strdup(script));
+    s.init();
+    p.parse(&s, &__allTokens);
+    if (Error.error)
+    {
+        printf("       parse error=%d (%s)\n", Error.error, error_messages[Error.error]);
+        return false;
+    }
+    return true;
+}
+
+static void runSafeModeTest()
+{
+    const char *name = "safe_mode: bounds checks on sized arrays only, assembles, relocates, does not leak";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        static uint8_t hostExt[6];
+        static uint8_t hostRaw[4];
+        bindVariable((char *)"uint8_t", (char *)"ext", (char *)"[]", (void *)hostExt);
+        bindVariable((char *)"uint8_t", (char *)"raw", (char *)"[]", (void *)hostRaw);
+
+        bool ok = true;
+        const char *safeScript =
+            "uint32_t _handle_;\n"
+            "safe_mode\n"
+            "external uint8_t ext[6];\n"
+            "external uint8_t raw[];\n"
+            "int buf[10];\n"
+            "uint8_t grid[3, 4];\n"
+            "uint8_t *p;\n"
+            "void main()\n"
+            "{\n"
+            "   for (int i = 0; i < 10; i++)\n"
+            "      buf[i] = i;\n"
+            "   grid[2, 3] = 1;\n"
+            "   ext[5] = 2;\n"
+            "   raw[1] = 3;\n"
+            "   p[1] = 4;\n"
+            "}\n";
+        if (!compileForTest(safeScript))
+            ok = false;
+        else
+        {
+            // One check per store into buf, grid and ext; none for the
+            // unsized external `raw[]` or the pointer `p`.
+            int checks = countLinesContaining(content, "bltu ");
+            if (checks != 3)
+            {
+                printf("       expected 3 bounds checks, found %d\n", checks);
+                ok = false;
+            }
+            const char *expectedChecks[] = {"l32r a10,@_name_buf", "l32r a10,@_name_grid", "l32r a10,@_name_ext",
+                                            "callExt a8,@_safeModeError(char*|num|num|num)", "l32r a13,@__handle_"};
+            for (int i = 0; i < 5; i++)
+                if (!textContains(content, expectedChecks[i]))
+                {
+                    printf("       missing \"%s\" in the code\n", expectedChecks[i]);
+                    ok = false;
+                }
+            if (!headerEntryIs("@_size_buf:", ".bytes 4 0a 00 00 00") ||
+                !headerEntryIs("@_size_grid:", ".bytes 4 0c 00 00 00") ||
+                !headerEntryIs("@_size_ext:", ".bytes 4 06 00 00 00") ||
+                !headerEntryIs("@_name_buf:", ".bytes 4 62 75 66 00"))
+            {
+                printf("       size/name header entries missing or wrong\n");
+                ok = false;
+            }
+            if (textContains(header, "@_size_raw:") || textContains(header, "@_size_p:"))
+            {
+                printf("       a pointer or unsized array got a size entry\n");
+                ok = false;
+            }
+            if (countLinesContaining(header, "@_safeModeError(") != 1)
+            {
+                printf("       expected exactly one safeModeError slot in the header\n");
+                ok = false;
+            }
+
+            Binary bin = createBinary(&footer, &header, &content, false);
+            if (bin.error.error)
+            {
+                printf("       assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+                ok = false;
+            }
+            else
+            {
+                executable exe = createExecutableFromBinary(&bin);
+                if (exe.error.error)
+                {
+                    printf("       loader error: %s\n", exe.error.error_message ? exe.error.error_message : "?");
+                    ok = false;
+                }
+                freeExecutable(&exe);
+            }
+        }
+
+        // Same kind of script without the keyword, compiled right after:
+        // no checks, no size entries, no error-handler slot.
+        const char *plainScript =
+            "uint32_t _handle_;\n"
+            "int buf[10];\n"
+            "void main()\n"
+            "{\n"
+            "   buf[3] = 1;\n"
+            "}\n";
+        if (!compileForTest(plainScript))
+            ok = false;
+        else if (textContains(content, "bltu ") || textContains(header, "@_size_buf:") ||
+                 textContains(header, "@_safeModeError("))
+        {
+            printf("       safe_mode carried over into the next compiled script\n");
+            ok = false;
+        }
+
+        // A script without the usual `uint32_t _handle_;` prelude still
+        // gets a _handle_ word (the compiler always declares it), so the
+        // check can always pass the handler its executable.
+        const char *noPreludeScript =
+            "safe_mode\n"
+            "int buf[4];\n"
+            "void main()\n"
+            "{\n"
+            "   buf[2] = 1;\n"
+            "}\n";
+        if (!compileForTest(noPreludeScript))
+            ok = false;
+        else
+        {
+            if (!textContains(content, "l32r a13,@__handle_"))
+            {
+                printf("       expected the check to load _handle_ without the prelude too\n");
+                ok = false;
+            }
+            Binary bin = createBinary(&footer, &header, &content, false);
+            if (bin.error.error)
+            {
+                printf("       assembler error without the prelude: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+                ok = false;
             }
         }
 
@@ -1976,6 +2197,7 @@ int main()
     runStructArrayFieldStrideTest();
     runStructArrayMethodSelfPointerTest();
     runOptimizeUnitTest();
+    runSafeModeTest();
     runGenerateBinaryTest(
         "generates executable binary: empty function",
         "void main(){}");

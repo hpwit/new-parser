@@ -1,5 +1,8 @@
 #include "runtime_functions.h"
 #include "binding.h"
+#include "asm_types.h"
+#include <csetjmp>
+#include <cstring>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -60,6 +63,44 @@ static int32_t artiReadInt(uint32_t p, int32_t offset)
     return *(int32_t *)((uint8_t *)(uintptr_t)p + offset);
 }
 
+void (*onScriptRuntimeError)(const runtime_error_struct *error) = NULL;
+
+// See runtime_functions.h. `handle` is the script's own _handle_ word:
+// the ScriptExecutable that owns the script, or the bare `executable`
+// when there is no wrapper (asm_execute.cpp's fillHandleWord()). Either
+// way it is the address of an `executable` -- ScriptExecutable's only
+// data member is its `exe`, at offset 0 (asserted in its constructor).
+// When nothing is unwinding (the script was entered some other way than
+// through asm_execute.cpp, e.g. a hand-written runner), the error is
+// still recorded and reported, and the script's own `retw.n` after this
+// call skips the store and returns from the function it was in, as v1
+// does.
+static void artiSafeModeError(const char *name, uint32_t size, uint32_t index, uint32_t handle)
+{
+    runtime_error_struct info;
+    info.error = true;
+    info.size = size;
+    info.index = (int32_t)index;
+    if (name != NULL)
+    {
+        strncpy(info.array, name, sizeof(info.array) - 1);
+        info.array[sizeof(info.array) - 1] = 0;
+    }
+
+    executable *ex = (executable *)(uintptr_t)handle;
+    if (ex != NULL)
+        ex->runtimeError = info;
+
+    if (onScriptRuntimeError != NULL)
+        onScriptRuntimeError(&info);
+    else
+        printf("Execution error: index %d is out of bounds for array '%s' (size %u)\r\n",
+               (int)info.index, info.array, (unsigned)info.size);
+
+    if (ex != NULL && ex->runtimeUnwind != NULL)
+        longjmp(*(jmp_buf *)ex->runtimeUnwind, 1);
+}
+
 void registerBuiltinRuntimeFunctions()
 {
     static bool registered = false;
@@ -86,4 +127,7 @@ void registerBuiltinRuntimeFunctions()
         bindFunction((char *)"void", (char *)"writeInt", (char *)"uint32_t,int,int", (void *)artiWriteInt);
     if (findLink((char *)"readInt", function) < 0)
         bindFunction((char *)"int", (char *)"readInt", (char *)"uint32_t,int", (void *)artiReadInt);
+    if (findLink((char *)"safeModeError", function) < 0)
+        bindFunction((char *)"void", (char *)"safeModeError", (char *)"char*,uint32_t,uint32_t,uint32_t",
+                     (void *)artiSafeModeError);
 }

@@ -452,7 +452,7 @@ void main()
 }
 ```
 
-`safe_mode` (still the same keyword, no `#`) turns on a bounds check before every write to a `safe_mode`-declared array:
+Put `safe_mode` (the same keyword as v1, no `#`) anywhere in the script and every write to an array declared with explicit dimensions gets a bounds check:
 
 ```c
 safe_mode
@@ -467,7 +467,46 @@ void main()
 }
 ```
 
-**NB: the check runs on every single write, so it costs real speed -- turn it on while debugging an array-indexing bug, not by default.**
+When an index is out of bounds, the script stops before the write happens:
+
+- the error is reported, by default as one line on the console:
+  `Execution error: index 10 is out of bounds for array 'array' (size 10)`
+- the whole script is abandoned, not just the function that failed: control goes straight back to the host call that entered it, and `execute()` returns `false`;
+- the details stay available on the executable until the next call:
+
+```cpp
+ScriptExecutable exec = parseScript(script);
+if (!exec.execute("main") && exec.hasRuntimeError())
+{
+   const runtime_error_struct &e = exec.runtimeError();
+   // e.array == "array", e.size == 10, e.index == 10
+}
+```
+
+To report errors your own way (a display, a log, a web page), install a handler before running the script; it is called instead of the console message, just before the script is abandoned:
+
+```cpp
+#include "runtime_functions.h"
+
+void onBoundsError(const runtime_error_struct *e)
+{
+   Serial.printf("%s[%d] out of range (size %u)\n", e->array, (int)e->index, (unsigned)e->size);
+}
+
+onScriptRuntimeError = onBoundsError;
+```
+
+What is checked:
+
+- writes to global and `external` arrays declared with explicit dimensions, e.g. `int buf[10];`, `external CRGB leds[96, 128];`;
+- a negative index, which fails like any other;
+- for a multi-dimensional array, the flattened index against the total element count, so `leds[96, 0]` fails but an out-of-range column that still lands inside the array does not.
+
+What is not checked: reads, plain pointers (`uint8_t *p`) and arrays declared without a size (`external uint8_t raw[];`), since there is no known bound for those.
+
+`safe_mode` applies to the script it appears in only. Another script compiled afterwards is unchecked unless it says `safe_mode` too.
+
+**NB: each checked write costs three extra instructions (load the bound, compare, branch), so turn it on while you are hunting an indexing bug rather than by default.** See [SafeMode](examples/SafeMode) for a complete sketch.
 
 # Variable types
 
@@ -710,6 +749,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `ProceduralEffects` | Five separately compiled procedural effects for a 128x96 matrix -- a table-driven integer plasma, a fire simulation, an animated Voronoi pattern, a six-fold mandala and spinning gradient squares -- run in turn from `loop()`. [Frames of each](examples/ProceduralEffects/README.md). |
 | `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently. ESP32-only. |
 | `MemoryAllocator` | `alloc()`/`free()`/`writeInt()`/`readInt()`, the built-in dynamic-memory design covering this DSL's lack of pointer-dereference syntax. |
+| `SafeMode` | `safe_mode` bounds checking: an out-of-range write stops the script, reports which array and index, and `execute()` returns false. |
 
 # Known limitations
 

@@ -38,6 +38,13 @@ ScriptExecutable::ScriptExecutable(Binary *bin) : exe(createExecutableFromBinary
     // itself elided into the caller's local by the same rule). See
     // asm_types.h's `executable::owner` doc comment for what reads this.
     exe.owner = this;
+    // runtime_functions.cpp's safeModeError() treats a script's _handle_
+    // (this object's address) as the address of its `executable`.
+    if ((void *)this != (void *)&exe)
+    {
+        printf("ScriptExecutable layout changed: exe must stay its first member\n");
+        abort();
+    }
     freeBinary(bin);
     if (exe.error.error)
     {
