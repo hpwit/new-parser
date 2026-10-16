@@ -107,6 +107,7 @@ static RegRole regRole(const char *line, const char *reg);
 static void trimmedLine(const char *src, char *dst, size_t n);
 static bool isFunctionLabel(const char *line);
 static bool lineWritesRegister(const char *line, const char *reg);
+static bool writtenRegister(const char *line, char *out, size_t n);
 
 // Pass 4 helper: blanks the `movr aY,aX` / `mov aY,aX` at `defPos` once a
 // read of aY at line `usePos` has been rewritten to read aX instead --
@@ -664,6 +665,23 @@ void optimize(Text *text)
         {
             trackReset(from, to, index);
         }
+
+        // A copy "aY is aX" stops being true as soon as aX is written:
+        // a later read of aY must then not be rewritten to read aX. The
+        // branches above only drop a fact when aY itself is written. Seen
+        // with call arguments, `mov a14,a10` (keep a call's result) ...
+        // `mov a10,a13` (next argument into a10) ... `mov a11,a14`: the
+        // last line was rewritten to `mov a11,a10`, passing the other
+        // argument twice. Checked after this line's own rewrite, which
+        // may legitimately read aX before writing it.
+        char *now = *text->getChildAtPos(i);
+        char written[8];
+        if (now != NULL && writtenRegister(now, written, sizeof(written)))
+        {
+            for (int mp = index.size() - 1; mp >= 0; mp--)
+                if (strcmp(to.get(mp), written) == 0)
+                    trackRemoveAt(from, to, index, mp);
+        }
     }
     trackReset(from, to, index);
 
@@ -927,6 +945,35 @@ static bool writesFirstOperandOnly(const char *op)
         if (strcmp(op, ops[i]) == 0)
             return true;
     return false;
+}
+
+// The register `line` writes, if any, into `out`. Every instruction this
+// compiler emits that names a register first writes it, except stores,
+// branches, jumps, calls and returns.
+static bool writtenRegister(const char *line, char *out, size_t n)
+{
+    char buf[160];
+    trimmedLine(line, buf, sizeof(buf));
+    if (buf[0] == 0 || strchr(buf, ':') != NULL)
+        return false;
+    char *sp = strchr(buf, ' ');
+    if (sp == NULL)
+        return false;
+    *sp = 0;
+    const char *op = buf;
+    if (op[0] == 'b' || op[0] == 'j' || strncmp(op, "call", 4) == 0 || strncmp(op, "retw", 4) == 0 ||
+        strcmp(op, "s8i") == 0 || strcmp(op, "s16i") == 0 || strcmp(op, "s32i") == 0 || strcmp(op, "ssi") == 0 ||
+        strcmp(op, "entry") == 0)
+        return false;
+    const char *reg = sp + 1;
+    while (*reg == ' ')
+        reg++;
+    size_t len = strcspn(reg, ", ");
+    if (len == 0 || len >= n || (reg[0] != 'a' && reg[0] != 'f'))
+        return false;
+    memcpy(out, reg, len);
+    out[len] = 0;
+    return true;
 }
 
 // True if `line` is an instruction that writes its first operand and that

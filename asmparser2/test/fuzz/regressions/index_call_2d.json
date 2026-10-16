@@ -1,0 +1,61 @@
+{
+ "description": "A call in an index of a 2D array overwrote the partial index sum (kept in a10). Reduced from seed 7.",
+ "funcs": [],
+ "main": [
+  {
+   "kind": "assign",
+   "target": [
+    "idx",
+    "N",
+    [
+     [
+      "call",
+      "ix",
+      [
+       [
+        "lit",
+        1
+       ],
+       [
+        "lit",
+        4
+       ]
+      ]
+     ],
+     [
+      "lit",
+      1
+     ]
+    ]
+   ],
+   "op": "=",
+   "expr": [
+    "lit",
+    1
+   ]
+  },
+  {
+   "kind": "emit",
+   "expr": [
+    "idx",
+    "M",
+    [
+     [
+      "lit",
+      1
+     ],
+     [
+      "call",
+      "ext1",
+      [
+       [
+        "lit",
+        0
+       ]
+      ]
+     ]
+    ]
+   ]
+  }
+ ]
+}

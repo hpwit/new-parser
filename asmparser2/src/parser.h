@@ -35,6 +35,7 @@ public:
     void parseExprAndOr();
     void parseTerm();
     void parseBlockStatement();
+    void parseUnbracedBody();
     void parseCreateArguments();
     void parseStatement();
     void getVariable(bool isStore);

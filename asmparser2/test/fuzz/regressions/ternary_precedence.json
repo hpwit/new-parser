@@ -1,0 +1,58 @@
+{
+ "description": "`a < b ? x : y` was parsed as `a < (b ? x : y)`.",
+ "funcs": [],
+ "main": [
+  {
+   "kind": "emit",
+   "expr": [
+    "tern",
+    [
+     "cmp",
+     "<",
+     [
+      "var",
+      "g0"
+     ],
+     [
+      "var",
+      "g1"
+     ]
+    ],
+    [
+     "lit",
+     1
+    ],
+    [
+     "lit",
+     2
+    ]
+   ]
+  },
+  {
+   "kind": "emit",
+   "expr": [
+    "tern",
+    [
+     "cmp",
+     ">",
+     [
+      "var",
+      "g0"
+     ],
+     [
+      "var",
+      "g1"
+     ]
+    ],
+    [
+     "lit",
+     1
+    ],
+    [
+     "lit",
+     2
+    ]
+   ]
+  }
+ ]
+}

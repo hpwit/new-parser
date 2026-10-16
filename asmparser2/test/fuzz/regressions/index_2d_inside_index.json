@@ -1,0 +1,54 @@
+{
+ "description": "A 2D read with a call in its index, inside a call, inside a store index. Reduced from seed 14.",
+ "funcs": [],
+ "main": [
+  {
+   "kind": "assign",
+   "target": [
+    "idx",
+    "A",
+    [
+     [
+      "call",
+      "ix",
+      [
+       [
+        "idx",
+        "N",
+        [
+         [
+          "lit",
+          1
+         ],
+         [
+          "call",
+          "ix",
+          [
+           [
+            "lit",
+            1
+           ],
+           [
+            "lit",
+            1
+           ]
+          ]
+         ]
+        ]
+       ],
+       [
+        "lit",
+        8
+       ]
+      ]
+     ]
+    ]
+   ],
+   "op": "=",
+   "expr": [
+    "lit",
+    1
+   ]
+  }
+ ]
+}

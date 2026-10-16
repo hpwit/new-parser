@@ -1,0 +1,67 @@
+{
+ "funcs": [
+  {
+   "name": "f0",
+   "params": [
+    "p0"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": true
+  }
+ ],
+ "main": [
+  {
+   "kind": "for",
+   "var": "i2",
+   "count": 5,
+   "body": [
+    {
+     "kind": "for",
+     "var": "i3",
+     "count": 1,
+     "body": [
+      {
+       "kind": "assign",
+       "target": [
+        "var",
+        "g2"
+       ],
+       "op": "-=",
+       "expr": [
+        "call",
+        "ext2",
+        [
+         [
+          "idx",
+          "B",
+          [
+           [
+            "lit",
+            1
+           ]
+          ]
+         ],
+         [
+          "call",
+          "f0",
+          [
+           [
+            "lit",
+            1
+           ]
+          ]
+         ]
+        ]
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "description": "Copy propagation kept treating a register as a copy of a10 after a10 was overwritten, so a call got the same argument twice. Reduced from seed 60. Only reachable once call arguments are kept in temporaries (the argument-ordering fix): it passes on older compilers that never produce the pattern, and fails with the fix in optimize.cpp's Pass 4 removed."
+}

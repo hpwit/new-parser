@@ -1,0 +1,66 @@
+{
+ "description": "Temporaries of an argument expression overwrote an argument placed earlier, deep inside an index. Reduced from seed 28.",
+ "funcs": [],
+ "main": [
+  {
+   "kind": "assign",
+   "target": [
+    "idx",
+    "M",
+    [
+     [
+      "call",
+      "ix",
+      [
+       [
+        "idx",
+        "N",
+        [
+         [
+          "call",
+          "ix",
+          [
+           [
+            "bin",
+            "+",
+            [
+             "lit",
+             895
+            ],
+            [
+             "var",
+             "g1"
+            ]
+           ],
+           [
+            "lit",
+            1
+           ]
+          ]
+         ],
+         [
+          "lit",
+          0
+         ]
+        ]
+       ],
+       [
+        "lit",
+        3
+       ]
+      ]
+     ],
+     [
+      "lit",
+      1
+     ]
+    ]
+   ],
+   "op": "=",
+   "expr": [
+    "lit",
+    1
+   ]
+  }
+ ]
+}

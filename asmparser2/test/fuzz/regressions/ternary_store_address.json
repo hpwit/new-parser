@@ -1,0 +1,45 @@
+{
+ "description": "A store's address load landed inside one branch of a ternary on its right-hand side.",
+ "funcs": [],
+ "main": [
+  {
+   "kind": "assign",
+   "target": [
+    "var",
+    "g2"
+   ],
+   "op": "=",
+   "expr": [
+    "bin",
+    "*",
+    [
+     "tern",
+     [
+      "cmp",
+      ">",
+      [
+       "var",
+       "g0"
+      ],
+      [
+       "var",
+       "g1"
+      ]
+     ],
+     [
+      "lit",
+      1
+     ],
+     [
+      "lit",
+      3
+     ]
+    ],
+    [
+     "lit",
+     6
+    ]
+   ]
+  }
+ ]
+}

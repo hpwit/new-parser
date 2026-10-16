@@ -1,0 +1,166 @@
+{
+ "description": "A call nested in an argument overwrote arguments already placed: `f(f(5, 1), 8)` passed 1 for the 8.",
+ "funcs": [
+  {
+   "name": "f0",
+   "params": [
+    "p0",
+    "p1"
+   ],
+   "body": [],
+   "ret": [
+    "bin",
+    "-",
+    [
+     "var",
+     "p0"
+    ],
+    [
+     "var",
+     "p1"
+    ]
+   ],
+   "pure": true
+  },
+  {
+   "name": "f1",
+   "params": [
+    "p0",
+    "p1",
+    "p2"
+   ],
+   "body": [],
+   "ret": [
+    "bin",
+    "+",
+    [
+     "bin",
+     "*",
+     [
+      "var",
+      "p0"
+     ],
+     [
+      "lit",
+      100
+     ]
+    ],
+    [
+     "bin",
+     "+",
+     [
+      "bin",
+      "*",
+      [
+       "var",
+       "p1"
+      ],
+      [
+       "lit",
+       10
+      ]
+     ],
+     [
+      "var",
+      "p2"
+     ]
+    ]
+   ],
+   "pure": true
+  }
+ ],
+ "main": [
+  {
+   "kind": "emit",
+   "expr": [
+    "call",
+    "f0",
+    [
+     [
+      "call",
+      "f0",
+      [
+       [
+        "lit",
+        5
+       ],
+       [
+        "lit",
+        1
+       ]
+      ]
+     ],
+     [
+      "lit",
+      8
+     ]
+    ]
+   ]
+  },
+  {
+   "kind": "emit",
+   "expr": [
+    "call",
+    "f1",
+    [
+     [
+      "call",
+      "f0",
+      [
+       [
+        "call",
+        "f1",
+        [
+         [
+          "lit",
+          1
+         ],
+         [
+          "call",
+          "f0",
+          [
+           [
+            "lit",
+            9
+           ],
+           [
+            "lit",
+            2
+           ]
+          ]
+         ],
+         [
+          "lit",
+          3
+         ]
+        ]
+       ],
+       [
+        "lit",
+        5
+       ]
+      ]
+     ],
+     [
+      "call",
+      "f0",
+      [
+       [
+        "lit",
+        8
+       ],
+       [
+        "lit",
+        1
+       ]
+      ]
+     ],
+     [
+      "lit",
+      7
+     ]
+    ]
+   ]
+  }
+ ]
+}

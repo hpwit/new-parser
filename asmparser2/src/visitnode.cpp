@@ -769,6 +769,60 @@ void _visitoperatorNode(NodeToken *nd)
     }
 }
 
+
+// Flattened element index of `nd[c0, c1, ..., cn-1]`, for an array whose
+// declared dimensions are tile[1..n] (the "@n d0 d1 ..." target text the
+// parser records), left in register_numl.get():
+//     c0 * d1*...*dn-1  +  c1 * d2*...*dn-1  +  ...  +  cn-1
+// The running sum stays in register_numl.get() itself and each index is
+// evaluated in the register below it, with the one below that as scratch
+// for the dimension constants. This used to be done in a10/a11 whatever
+// the surrounding expression was using: a10 is where a call passes its
+// first argument and returns its result, so `N[ext1(1), 1]` lost the
+// partial sum to the call, and a 2D read inside a 2D index (`M[N[i, j],
+// k]`) overwrote the outer one's sum with its own.
+static void emitFlatIndex(NodeToken *nd, vect<char *> &tile, bool pushIntType)
+{
+    int n = nd->children_size();
+    int sum = register_numl.get();
+    bufferText->addAfter(string_format(movi, sum, 0));
+    register_numl.decrease();
+    for (int i = 0; i < n; i++)
+    {
+        if (pushIntType)
+            globalType.push(__int__);
+        register_numl.duplicate();
+        nd->getChildPtr(i)->visitNode();
+        register_numl.pop();
+        int value = register_numl.get();
+        if (nd->getChildPtr(i)->getVarTypeObj() != NULL)
+            translateType(__int__, nd->getChildPtr(i)->getVarTypeObj()->_varType, value);
+        for (int h = 1; h < n - i; h++)
+        {
+            bufferText->addAfter(string_format(movi, value - 1, stringToInt((char *)tile[i + 1 + h])));
+            bufferText->addAfter(string_format(mull, value, value, value - 1));
+        }
+        bufferText->addAfter(string_format(add, sum, sum, value));
+        if (pushIntType)
+            globalType.pop();
+    }
+    register_numl.increase();
+}
+
+// The single-index case of the same thing: `nd[c0]`.
+static void emitSingleIndex(NodeToken *nd, bool pushIntType)
+{
+    if (pushIntType)
+        globalType.push(__int__);
+    register_numl.duplicate();
+    nd->getChildPtr(0)->visitNode();
+    register_numl.pop();
+    if (nd->getChildPtr(0)->getVarTypeObj() != NULL)
+        translateType(__int__, nd->getChildPtr(0)->getVarTypeObj()->_varType, register_numl.get());
+    if (pushIntType)
+        globalType.pop();
+}
+
 void _visitglobalVariableNode(NodeToken *nd)
 {
 
@@ -792,39 +846,9 @@ void _visitglobalVariableNode(NodeToken *nd)
             // r_size = stringToInt((char *)tile[1].c_str());
         }
         if (nb > 1)
-        {
-            bufferText->addAfter(string_format(movi, 10, 0));
-        }
-
-        for (int i = 0; i < nd->children_size(); i++)
-        {
-            //  globalType.push(__int__);
-            register_numl.duplicate();
-            nd->getChildPtr(i)->visitNode();
-            register_numl.pop();
-            translateType(__int__, nd->getChildPtr(i)->getVarTypeObj()->_varType, register_numl.get());
-            if (nd->children_size() > 1)
-            {
-                if (i < nd->children_size() - 1)
-                {
-
-                    for (int h = 1; h < nd->children_size() - i; h++)
-                    {
-                        bufferText->addAfter(string_format(movi, 11,stringToInt(tile[i + 1 + h])));
-                        // bufferText->addAfter(string_format("mull a11,a10,a11"));
-                        bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(),11));
-                    }
-                    // if(i>0)
-                    bufferText->addAfter(string_format(add, 10,10,register_numl.get()));
-                }
-                else
-                {
-                    bufferText->addAfter(string_format(add, register_numl.get(), 10,register_numl.get()));
-                }
-            }
-
-            // globalType.pop();
-        }
+            emitFlatIndex(nd, tile, false);
+        else
+            emitSingleIndex(nd, false);
         tile.empty();
         tile.clear();
     }
@@ -2546,7 +2570,9 @@ void _visitargumentNode(NodeToken *nd) {}
 void _visitextGlobalVariableNode(NodeToken *nd)
 {
     register_numl.duplicate();
-    if (nd->children_size() > 0)
+    // A single index is evaluated up front; several are combined by
+    // emitFlatIndex() further down, which evaluates them itself.
+    if (nd->children_size() == 1)
     {
         register_numl.duplicate();
         nd->getChildPtr(0)->visitNode();
@@ -2588,44 +2614,9 @@ void _visitextGlobalVariableNode(NodeToken *nd)
                     // r_size = stringToInt((char *)tile[1].c_str());
                 }
                 if (nb > 1)
-                {
-                    bufferText->addAfter(string_format(movi, 10, 0));
-                }
-
-                for (int par = 0; par < nd->children_size(); par++)
-                {
-                    // globalType.push(__int__);
-                    if (par > 0)
-                    {
-                        register_numl.duplicate();
-                        nd->getChildPtr(par)->visitNode();
-                        register_numl.pop();
-                    }
-                    if (nd->getChildPtr(par)->getVarTypeObj() != NULL)
-                    {
-                        translateType(__int__, nd->getChildPtr(par)->getVarTypeObj()->_varType, register_numl.get());
-                    }
-                    if (nb > 1)
-                    {
-                        if (par < nd->children_size() - 1)
-                        {
-
-                            for (int h = 1; h < nd->children_size() - par; h++)
-                            {
-                                bufferText->addAfter(string_format(movi, 11, stringToInt((char *)tile[par + 1 + h])));
-                                // bufferText->addAfter(string_format("mull a11,a10,a11"));
-                                bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(), 11));
-                            }
-                            bufferText->addAfter(string_format(add, 10, 10, register_numl.get()));
-                        }
-                        else
-                        {
-                            bufferText->addAfter(string_format(add, register_numl.get(), 10, register_numl.get()));
-                        }
-                    }
-
-                    // globalType.pop();
-                }
+                    emitFlatIndex(nd, tile, false);
+                else if (nd->getChildPtr(0)->getVarTypeObj() != NULL)
+                    translateType(__int__, nd->getChildPtr(0)->getVarTypeObj()->_varType, register_numl.get());
                 tile.empty();
                 tile.clear();
             }
@@ -3155,41 +3146,9 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
             sscanf(tile[0], "@%d", &nb);
         }
         if (nb > 1)
-        {
-            bufferText->addAfter(string_format(movi, 10, 0));
-        }
-        for (int i = 0; i < nd->children_size(); i++)
-        {
-            globalType.push(__int__);
-            register_numl.duplicate();
-            nd->getChildPtr(i)->visitNode();
-            register_numl.pop();
-            translateType(__int__, nd->getChildPtr(i)->getVarTypeObj()->_varType, register_numl.get());
-            if (nb > 1)
-            {
-                if (i < nd->children_size() - 1)
-                {
-
-                    for (int h = 1; h < nd->children_size() - i; h++)
-                    {
-                        // bufferText->addAfter(string_format("movi a11,%d", stringToInt((char *)tile[i + 1 + h].c_str())));
-                        bufferText->addAfter(string_format(movi, 11, stringToInt(tile[i + 1 + h])));
-
-                        // bufferText->addAfter(string_format("mull a%d,a%d,a11", register_numl.get(), register_numl.get()));
-                        bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(), 11));
-                    }
-                    // bufferText->addAfter(string_format("add a10,a10,a%d", register_numl.get()));
-                    bufferText->addAfter(string_format(add, 10, 10, register_numl.get()));
-                }
-                else
-                {
-                    // bufferText->addAfter(string_format("add a%d,a10,a%d", register_numl.get(), register_numl.get()));
-                    bufferText->addAfter(string_format(add, register_numl.get(), 10, register_numl.get()));
-                }
-            }
-
-            globalType.pop();
-        }
+            emitFlatIndex(nd, tile, true);
+        else
+            emitSingleIndex(nd, true);
         tile.empty();
         tile.clear();
     }
@@ -3344,37 +3303,9 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
             // r_size = stringToInt((char *)tile[1].c_str());
         }
         if (nb > 1)
-        {
-            bufferText->addAfter(string_format(movi, 10, 0));
-        }
-        for (int par = 0; par < nd->children_size(); par++)
-        {
-            // globalType.push(__int__);
-            register_numl.duplicate();
-            nd->getChildPtr(par)->visitNode();
-            register_numl.pop();
-            translateType(__int__, nd->getChildPtr(par)->getVarTypeObj()->_varType, register_numl.get());
-            if (nb > 1)
-            {
-                if (par < nd->children_size() - 1)
-                {
-
-                    for (int h = 1; h < nd->children_size() - par; h++)
-                    {
-                        bufferText->addAfter(string_format(movi, 11, stringToInt((char *)tile[par + 1 + h])));
-                        // bufferText->addAfter(string_format("mull a11,a10,a11"));
-                        bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(), 11));
-                    }
-                    bufferText->addAfter(string_format(add, 10, 10, register_numl.get()));
-                }
-                else
-                {
-                    bufferText->addAfter(string_format(add, register_numl.get(), 10, register_numl.get()));
-                }
-            }
-
-            // globalType.pop();
-        }
+            emitFlatIndex(nd, tile, false);
+        else
+            emitSingleIndex(nd, false);
         tile.empty();
         tile.clear();
     }
@@ -3854,6 +3785,9 @@ void _visittestNode(NodeToken *nd)
 
 void _visitternaryIfNode(NodeToken *nd)
 {
+    // Positions the condition and both branches push onto bufferText->sp
+    // are dropped at the end -- see the end of this function.
+    int spDepthAtEntry = bufferText->sp._stack.size();
 
     register_numl.duplicate();
     nd->getChildPtr(0)->visitNode();
@@ -3870,6 +3804,22 @@ void _visitternaryIfNode(NodeToken *nd)
     nd->getChildPtr(2)->visitNode();
     register_numl.pop();
     bufferText->addAfter(string_format("%s_end:", nd->getTargetText()));
+
+    // Leave things the way any other expression does, so the expression
+    // around this one keeps working:
+    //  - the result occupies register_numl.get(): move past it, as a leaf
+    //    does once it has loaded its value. Otherwise the next operand of
+    //    an enclosing binary operator is evaluated into the same
+    //    register: `(c ? 1 : 1) * 6` computed 6 * 6.
+    //  - exactly one position, after the whole conditional, on top of
+    //    bufferText->sp. The branches' own positions left in between made
+    //    a store's address computation land inside one branch, where the
+    //    other path skips it: in `x = (c ? a : b) * 6;` the `l32r` loading
+    //    x's address ended up in the first branch only.
+    while (bufferText->sp._stack.size() > spDepthAtEntry)
+        bufferText->sp.pop();
+    bufferText->sp.push(bufferText->get());
+    register_numl.decrease();
 }
 
 void _visitcallConstructorNode(NodeToken *nd)
@@ -4005,6 +3955,86 @@ char *_numToBytes(uint32_t __num)
     return val;
 }
 
+// True if `nd` or anything below it is a call.
+static bool containsCall(NodeToken *nd)
+{
+    if (nd == NULL)
+        return false;
+    if (nd->_nodetype == callFunctionNode || nd->_nodetype == extCallFunctionNode)
+        return true;
+    for (int i = 0; i < nd->children_size(); i++)
+        if (containsCall(nd->getChildPtr(i)))
+            return true;
+    return false;
+}
+
+// An argument whose value can be loaded straight into a given register
+// without touching any other: a number, or a plain (unindexed, non-float)
+// variable. Arguments arrive wrapped in a changeTypeNode.
+static bool isTrivialArgument(NodeToken *arg)
+{
+    if (arg == NULL)
+        return false;
+    NodeToken *e = arg;
+    if (e->_nodetype == changeTypeNode && e->children_size() == 1)
+        e = e->getChildPtr(0);
+    if (e->children_size() != 0 || e->isPointer || e->asPointer)
+        return false;
+    if (e->getVarTypeObj() != NULL && e->getVarTypeObj()->_varType == __float__)
+        return false;
+    return e->_nodetype == numberNode || e->_nodetype == globalVariableNode ||
+           e->_nodetype == localVariableNode || e->_nodetype == localVariableNodeAsRegister;
+}
+
+// Emits the register moves dst[k] <- src[k] (k < n) as if all happened at
+// once: a move is only made once no other pending move still reads its
+// destination, and a cycle is broken through a9.
+static void emitParallelMoves(int *dst, int *src, int n)
+{
+    bool done[6] = {false, false, false, false, false, false};
+    int remaining = 0;
+    for (int k = 0; k < n; k++)
+    {
+        if (dst[k] == src[k])
+            done[k] = true;
+        else
+            remaining++;
+    }
+    while (remaining > 0)
+    {
+        bool progress = false;
+        for (int k = 0; k < n; k++)
+        {
+            if (done[k])
+                continue;
+            bool stillRead = false;
+            for (int m = 0; m < n; m++)
+                if (!done[m] && m != k && src[m] == dst[k])
+                    stillRead = true;
+            if (stillRead)
+                continue;
+            bufferText->addAfter(string_format(mov, dst[k], src[k]));
+            done[k] = true;
+            remaining--;
+            progress = true;
+        }
+        if (!progress)
+        {
+            // Every pending destination is still someone's source: a cycle.
+            for (int k = 0; k < n; k++)
+            {
+                if (done[k])
+                    continue;
+                bufferText->addAfter(string_format(mov, 9, src[k]));
+                for (int m = 0; m < n; m++)
+                    if (!done[m] && src[m] == src[k])
+                        src[m] = 9;
+                break;
+            }
+        }
+    }
+}
+
 void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
 {
 
@@ -4034,6 +4064,58 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
         // globalType.pop();
         return;
     }
+    // Arguments are evaluated right to left, each straight into its
+    // argument register. That is only safe if nothing evaluated after it
+    // -- the arguments to its left -- can change that register. Two
+    // things can: a call (it sets its own argument registers, and a
+    // script function's a2..a7 are our a10..a15), and, when the
+    // surrounding expression has already used up the higher temporaries,
+    // the temporaries of an ordinary expression, which count down from
+    // a15 into the argument registers. `f(f(5, 1), 8)` passed 1 for the
+    // 8; `ix(895 + g1, 1)` deep inside an index passed g1 for the 1.
+    //
+    // So, for the first four arguments (the rest go through the stack as
+    // before), unless one is a CRGB or a vararg:
+    //  - a trivial argument (number, plain variable) that has a
+    //    non-trivial one to its left is deferred: once everything else
+    //    is in place, it is loaded directly into its own register, which
+    //    disturbs nothing;
+    //  - if two or more arguments are non-trivial, each is evaluated into
+    //    a temporary and kept there (temporaries survive calls, see
+    //    optimize.cpp's preserveAcrossCalls()); they are then moved into
+    //    their argument registers together, as one parallel move;
+    //  - a single non-trivial argument is evaluated first and moved into
+    //    its register directly, as before: only trivial arguments are
+    //    loaded after it.
+    // (Saving to the fixed stack slots, which this used to rely on, both
+    // missed cases -- arguments 0 and 1 of a script function call were
+    // never saved -- and was itself unsafe: the slots are shared by every
+    // call in the function, so a nested call saving its own argument i
+    // overwrote the outer call's saved argument i.)
+    int nargs = nd->getChildPtr(2)->children_size();
+    bool orderedArgs = true;
+    for (int k = 0; k < nargs && k < func->getChildPtr(1)->children_size(); k++)
+    {
+        // Unknown (NULL) parameter types -- struct method calls among
+        // others -- keep the previous behaviour too.
+        varType *ptObj = func->getChildPtr(1)->getChildPtr(k)->getVarTypeObj();
+        if (ptObj == NULL || ptObj->_varType == __Args__ || ptObj->_varType == __CRGB__ ||
+            ptObj->_varType == __CRGBW__)
+            orderedArgs = false;
+    }
+    bool trivialArg[6];
+    int nonTrivial = 0;
+    for (int k = 0; k < 6; k++)
+        trivialArg[k] = k < nargs && k < 4 && isTrivialArgument(nd->getChildPtr(2)->getChildPtr(k));
+    for (int k = 0; k < nargs && k < 4; k++)
+        if (!trivialArg[k])
+            nonTrivial++;
+    bool deferred[6] = {false, false, false, false, false, false};
+    int heldReg[6];
+    bool heldFloat[6];
+    int heldCount = 0;
+    for (int k = 0; k < 6; k++)
+        heldReg[k] = -1;
     // Every argument expression visited below pushes buffer positions of
     // its own onto bufferText->sp and nothing pops them. Remember the
     // depth here so they can be dropped once the call is emitted -- see
@@ -4075,12 +4157,36 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
             save_in_stack = false;
             saveinstack[i] = false;
         }
+        bool hold = false;
+        if (orderedArgs && i < 4)
+        {
+            // The ordering above replaces the stack slots for these.
+            save_in_stack = false;
+            saveinstack[i] = false;
+            bool nonTrivialToTheLeft = false;
+            for (int j = 0; j < i; j++)
+                if (!trivialArg[j])
+                    nonTrivialToTheLeft = true;
+            if (trivialArg[i] && nonTrivialToTheLeft)
+            {
+                deferred[i] = true;
+                continue;
+            }
+            hold = !trivialArg[i] && nonTrivial >= 2;
+        }
         if (t->getChildPtr(2)->getChildPtr(i)->isPointer)
         {
             register_numl.duplicate();
             nd->getChildPtr(2)->getChildPtr(i)->visitNode();
             register_numl.pop();
-            if (save_in_stack == true)
+            if (hold)
+            {
+                heldReg[i] = register_numl.get();
+                heldFloat[i] = false;
+                heldCount++;
+                register_numl.decrease();
+            }
+            else if (save_in_stack == true)
             {
                 bufferText->addAfter(string_format("s32i a%d,a1,%d", register_numl.get(), i * 4 + _START_2));
             }
@@ -4144,7 +4250,14 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
                 }
                 else
                 {
-                    if (save_in_stack == true)
+                    if (hold)
+                    {
+                        heldReg[i] = register_numl.get();
+                        heldFloat[i] = true;
+                        heldCount++;
+                        register_numl.decrease();
+                    }
+                    else if (save_in_stack == true)
                     {
                         bufferText->addAfter(string_format("ssi f%d,a1,%d", register_numl.get(), i * 4 + _START_2));
                     }
@@ -4242,7 +4355,14 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
 
             else
             {
-                if (save_in_stack == true)
+                if (hold)
+                {
+                    heldReg[i] = register_numl.get();
+                    heldFloat[i] = false;
+                    heldCount++;
+                    register_numl.decrease();
+                }
+                else if (save_in_stack == true)
                 {
                     bufferText->addAfter(string_format("s32i a%d,a1,%d", register_numl.get(), i * 4 + _START_2));
                 }
@@ -4261,6 +4381,47 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
                 }
             }
 
+            globalType.pop();
+        }
+    }
+
+    // Held arguments into their registers, all at once.
+    {
+        int dst[6], src[6], n = 0;
+        for (int i = 0; i < 6; i++)
+        {
+            if (heldReg[i] < 0)
+                continue;
+            if (heldFloat[i])
+                bufferText->addAfter(string_format("rfr a%d,f%d", regbase + i, heldReg[i]));
+            else
+            {
+                dst[n] = regbase + i;
+                src[n] = heldReg[i];
+                n++;
+            }
+        }
+        emitParallelMoves(dst, src, n);
+    }
+    for (int k = 0; k < heldCount; k++)
+        register_numl.increase();
+
+    // Deferred trivial arguments, loaded straight into their registers.
+    for (int i = 0; i < 6; i++)
+    {
+        if (!deferred[i])
+            continue;
+        bool typed = i < func->getChildPtr(1)->children_size() &&
+                     func->getChildPtr(1)->getChildPtr(i)->getVarTypeObj() != NULL;
+        if (typed)
+            globalType.push(func->getChildPtr(1)->getChildPtr(i)->getVarTypeObj()->_varType);
+        register_numl.push(regbase + i);
+        nd->getChildPtr(2)->getChildPtr(i)->visitNode();
+        register_numl.pop();
+        if (typed)
+        {
+            if (nd->getChildPtr(2)->getChildPtr(i)->getVarTypeObj() != NULL)
+                translateType(globalType.get(), nd->getChildPtr(2)->getChildPtr(i)->getVarTypeObj()->_varType, regbase + i);
             globalType.pop();
         }
     }

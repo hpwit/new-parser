@@ -816,6 +816,29 @@ void Parser::parseVariableForCreation()
     }
 }
 
+// `?:` has the lowest precedence of the expression operators, as in C:
+// `a < b ? x : y` is `(a < b) ? x : y`. parseExprAndOr() builds the
+// conditional once the whole &&/|| expression to its left has been
+// parsed. parseTerm() still accepts a factor directly followed by `?`
+// (`x = flag ? 1 : 2;`, in the contexts that parse with parseExpr() and
+// never reach parseExprAndOr()) -- except while parseExprConditionnal()
+// is parsing an operand of a comparison, where taking it would bind the
+// `?` to that operand alone: `a < b ? x : y` used to compile as
+// `a < (b ? x : y)`. ternarySuppressed counts those nested operand
+// parses; parseFactor() clears it while parsing what is inside its own
+// parentheses, brackets and call arguments, which are expressions of
+// their own.
+static int ternarySuppressed = 0;
+namespace
+{
+struct TernaryScope
+{
+    int saved;
+    explicit TernaryScope(int value) : saved(ternarySuppressed) { ternarySuppressed = value; }
+    ~TernaryScope() { ternarySuppressed = saved; }
+};
+}
+
 void Parser::parseFactor()
 {
 #ifdef PARSER_DEBUG
@@ -823,6 +846,7 @@ void Parser::parseFactor()
 #endif
 
     Error.error = 0;
+    TernaryScope ownExpressions(0);
 
     if (Match(TokenStar) && Match(TokenIdentifier, 1))
     {
@@ -1718,37 +1742,10 @@ void Parser::parseStatement()
             parseBlockStatement();
             RETURN_IF_ERROR
         }
-        else if (Match(TokenKeywordIf))
-        {
-            // `else if (...) ... else ...`: the trailing else belongs to
-            // the inner if, so both have to end up inside this else's
-            // body. Left to the plain parseStatement() path below, only
-            // the inner if is consumed here and the trailing else is then
-            // parsed as a sibling of *this* else -- _visitelseNode() puts
-            // its skip-jump right before the last emitted line, which at
-            // that point is this else's own closing label, not the inner
-            // if's `_end:` label: the first branch falls into the final
-            // else block and the "nothing matched" path jumps past it.
-            // Parse the pair as if it had been written `else { if ...
-            // else ... }` instead; a longer chain nests the same way
-            // through the inner else's own pass through here.
-            current_cntx = current_cntx->addChild(NodeToken());
-            block_statement_num++;
-            current_node = current_node->addChild(NodeToken(current(), blockStatementNode));
-            parseStatement();
-            RETURN_IF_ERROR
-            if (Match(TokenKeywordElse))
-            {
-                parseStatement();
-                RETURN_IF_ERROR
-            }
-            current_cntx = current_cntx->parent;
-            current_node = current_node->parent;
-        }
         else
         {
-            // next();
-            parseStatement();
+            // `else if (...) ... else ...` included: see parseUnbracedBody().
+            parseUnbracedBody();
             RETURN_IF_ERROR
         }
 
@@ -1788,7 +1785,7 @@ void Parser::parseStatement()
             else
             {
 
-                parseStatement();
+                parseUnbracedBody();
                 RETURN_IF_ERROR
             }
 
@@ -1837,7 +1834,7 @@ void Parser::parseStatement()
             else
             {
 
-                parseStatement();
+                parseUnbracedBody();
                 if (Error.error)
                 {
                     return;
@@ -1930,7 +1927,7 @@ void Parser::parseStatement()
             else
             {
 
-                parseStatement();
+                parseUnbracedBody();
                 if (Error.error)
                 {
                     return;
@@ -2172,6 +2169,37 @@ void Parser::parseStatement()
         next();
         return;
     }
+}
+
+// The body of an if/else/for/while written without braces. If it is
+// itself an `if`, any `else` that follows belongs to that inner `if`, as
+// in C -- for `if (a) if (b) x; else y;` as much as for an
+// `else if (b) x; else y;` chain. parseStatement() alone stops after the
+// inner if's body, so the `else` used to be parsed afterwards as a
+// sibling of the *enclosing* statement, and _visitelseNode() then tied it
+// to whatever came before it there: the outer if's own end label, or the
+// end of a loop. Parsing the pair as if it had been written in braces,
+// `{ if (b) x; else y; }`, gives the else the right if; a longer
+// else-if chain nests the same way through each else's own body.
+void Parser::parseUnbracedBody()
+{
+    if (!Match(TokenKeywordIf))
+    {
+        parseStatement();
+        return;
+    }
+    current_cntx = current_cntx->addChild(NodeToken());
+    block_statement_num++;
+    current_node = current_node->addChild(NodeToken(current(), blockStatementNode));
+    parseStatement();
+    RETURN_IF_ERROR
+    if (Match(TokenKeywordElse))
+    {
+        parseStatement();
+        RETURN_IF_ERROR
+    }
+    current_cntx = current_cntx->parent;
+    current_node = current_node->parent;
 }
 
 void Parser::parseBlockStatement()
@@ -2432,7 +2460,37 @@ void Parser::parseExprAndOr()
         RETURN_IF_ERROR
         current_node = current_node->parent;
     }
-    // next();
+
+    // Lowest precedence: the condition is everything parsed so far.
+    // Both branches are full expressions themselves, so a nested
+    // conditional in the second one groups to the right, as in C
+    // (`c1 ? a : c2 ? b : d`).
+    if (Match(TokenQuestionMark))
+    {
+        next();
+        _node_token_stack.push_back(current_node->children_back());
+        current_node->children_pop();
+        current_node = current_node->addChild(NodeToken(ternaryIfNode));
+        current_node->addChildClear(_node_token_stack.back());
+        _node_token_stack.pop_back();
+        current_node->addTargetText(string_format(_label_tern_d, for_if_num));
+        for_if_num++;
+        {
+            TernaryScope branch(0);
+            parseExprAndOr();
+        }
+        RETURN_IF_ERROR
+        if (!Match(TokenColon))
+            RETURN_ERROR(expectingSemicolon)
+        next();
+        {
+            TernaryScope branch(0);
+            parseExprAndOr();
+        }
+        RETURN_IF_ERROR
+        current_node = current_node->parent;
+    }
+
     current_node = sav_token.back();
     sav_token.pop_back();
 
@@ -2445,6 +2503,7 @@ void Parser::parseExprConditionnal()
     updateMem();
 #endif
     sav_token.push_back(current_node);
+    TernaryScope operands(ternarySuppressed + 1);
     parseExpr();
     RETURN_IF_ERROR
     // TokenNotEqual ("!=") was missing here even though visitnode.cpp's
@@ -2567,7 +2626,7 @@ void Parser::parseTerm()
     sav_token.push_back(current_node);
     parseFactor();
     RETURN_IF_ERROR
-    if (Match(TokenQuestionMark))
+    if (ternarySuppressed == 0 && Match(TokenQuestionMark))
     {
         next();
         _node_token_stack.push_back(current_node->children_back());

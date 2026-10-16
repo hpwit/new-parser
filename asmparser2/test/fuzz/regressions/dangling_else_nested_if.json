@@ -1,0 +1,128 @@
+{
+ "description": "In `if (a) if (b) x; else y;` the else attached to the outer if instead of the inner one.",
+ "funcs": [],
+ "main": [
+  {
+   "kind": "if",
+   "branches": [
+    [
+     [
+      "cmp",
+      "<",
+      [
+       "var",
+       "g0"
+      ],
+      [
+       "lit",
+       50
+      ]
+     ],
+     [
+      {
+       "kind": "if",
+       "branches": [
+        [
+         [
+          "cmp",
+          ">",
+          [
+           "var",
+           "g0"
+          ],
+          [
+           "lit",
+           50
+          ]
+         ],
+         [
+          {
+           "kind": "emit",
+           "expr": [
+            "lit",
+            1
+           ]
+          }
+         ]
+        ]
+       ],
+       "else": [
+        {
+         "kind": "emit",
+         "expr": [
+          "lit",
+          2
+         ]
+        }
+       ],
+       "braces": false
+      }
+     ]
+    ]
+   ],
+   "else": null,
+   "braces": false
+  },
+  {
+   "kind": "if",
+   "branches": [
+    [
+     [
+      "cmp",
+      ">",
+      [
+       "var",
+       "g0"
+      ],
+      [
+       "lit",
+       50
+      ]
+     ],
+     [
+      {
+       "kind": "if",
+       "branches": [
+        [
+         [
+          "cmp",
+          ">",
+          [
+           "var",
+           "g0"
+          ],
+          [
+           "lit",
+           5
+          ]
+         ],
+         [
+          {
+           "kind": "emit",
+           "expr": [
+            "lit",
+            3
+           ]
+          }
+         ]
+        ]
+       ],
+       "else": [
+        {
+         "kind": "emit",
+         "expr": [
+          "lit",
+          4
+         ]
+        }
+       ],
+       "braces": false
+      }
+     ]
+    ]
+   ],
+   "else": null,
+   "braces": false
+  }
+ ]
+}

@@ -1,0 +1,104 @@
+{
+ "description": "An `else if ... else` after a nested unbraced if attached to the outer if. Reduced from seed 55.",
+ "funcs": [],
+ "main": [
+  {
+   "kind": "if",
+   "branches": [
+    [
+     [
+      "cmp",
+      "==",
+      [
+       "lit",
+       1
+      ],
+      [
+       "lit",
+       1
+      ]
+     ],
+     [
+      {
+       "kind": "if",
+       "branches": [
+        [
+         [
+          "and",
+          [
+           "cmp",
+           "==",
+           [
+            "lit",
+            1
+           ],
+           [
+            "lit",
+            3
+           ]
+          ],
+          [
+           "cmp",
+           "<=",
+           [
+            "lit",
+            1
+           ],
+           [
+            "lit",
+            1
+           ]
+          ]
+         ],
+         []
+        ],
+        [
+         [
+          "cmp",
+          "==",
+          [
+           "lit",
+           16
+          ],
+          [
+           "lit",
+           1
+          ]
+         ],
+         []
+        ]
+       ],
+       "else": [
+        {
+         "kind": "assign",
+         "target": [
+          "idx",
+          "M",
+          [
+           [
+            "lit",
+            1
+           ],
+           [
+            "lit",
+            1
+           ]
+          ]
+         ],
+         "op": "=",
+         "expr": [
+          "lit",
+          1
+         ]
+        }
+       ],
+       "braces": true
+      }
+     ]
+    ]
+   ],
+   "else": null,
+   "braces": false
+  }
+ ]
+}

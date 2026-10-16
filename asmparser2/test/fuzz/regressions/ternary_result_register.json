@@ -1,0 +1,115 @@
+{
+ "description": "A ternary did not reserve its result register: `(c ? 1 : 1) * 6` computed 6 * 6. Reduced from seed 14.",
+ "funcs": [],
+ "main": [
+  {
+   "kind": "assign",
+   "target": [
+    "idx",
+    "A",
+    [
+     [
+      "lit",
+      1
+     ]
+    ]
+   ],
+   "op": "=",
+   "expr": [
+    "bin",
+    "*",
+    [
+     "tern",
+     [
+      "and",
+      [
+       "cmp",
+       "<",
+       [
+        "lit",
+        0
+       ],
+       [
+        "lit",
+        1
+       ]
+      ],
+      [
+       "cmp",
+       "<",
+       [
+        "lit",
+        1
+       ],
+       [
+        "lit",
+        2
+       ]
+      ]
+     ],
+     [
+      "lit",
+      1
+     ],
+     [
+      "lit",
+      1
+     ]
+    ],
+    [
+     "lit",
+     6
+    ]
+   ]
+  },
+  {
+   "kind": "emit",
+   "expr": [
+    "bin",
+    "+",
+    [
+     "tern",
+     [
+      "and",
+      [
+       "cmp",
+       "<",
+       [
+        "var",
+        "g0"
+       ],
+       [
+        "var",
+        "g1"
+       ]
+      ],
+      [
+       "cmp",
+       "<",
+       [
+        "var",
+        "g1"
+       ],
+       [
+        "var",
+        "g2"
+       ]
+      ]
+     ],
+     [
+      "lit",
+      3
+     ],
+     [
+      "lit",
+      4
+     ]
+    ],
+    [
+     "lit",
+     100
+    ]
+   ]
+  }
+ ]
+}
