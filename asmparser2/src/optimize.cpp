@@ -939,7 +939,7 @@ static bool isFunctionLabel(const char *line)
 static bool writesFirstOperandOnly(const char *op)
 {
     static const char *ops[] = {
-        "movi", "mov", "movr", "fill", "mov.s", "l32i", "l16i", "l16ui", "l16si", "l8ui", "lsi", "l32r", "movExt",
+        "movi", "mov", "movr", "fill", "pop", "mov.s", "l32i", "l16i", "l16ui", "l16si", "l8ui", "lsi", "l32r", "movExt",
         "add", "addi", "sub", "mull", "quos", "quou", "remu", "rems", "and", "or", "xor", "extui",
         "slli", "srli", "srai", "addx2", "addx4", "addx8", "subx8", "neg", "neg.s", "abs.s",
         "float.s", "ufloat.s", "trunc.s", "wfr", "rfr", "add.s", "sub.s", "mul.s", "const.s",
@@ -1158,16 +1158,20 @@ void preserveAcrossCalls(Text *text)
             if (n > maxSlots && frame - _FRAME_RESERVED + 4 * (n - 1) <= 1020)
                 maxSlots = n;
         }
-        // spill/fill pairs from the code generator (around a call whose
-        // argument registers overlap live temporaries) nest like the calls
-        // do; each nesting level gets its own slot, after the ones above.
+        // spill/fill (temporaries saved around a call whose argument
+        // registers overlap them) and push/pop (call arguments parked
+        // while the others are evaluated) from the code generator nest
+        // like the calls do: one stack of slots, after the ones above.
+        // spill/push store a register into the next slot; fill/pop load
+        // the most recent one -- fill into the register it came from, pop
+        // into whichever register it names.
         int spillDepth = 0, maxSpill = 0;
         for (int c = entryPos + 1; c < end; c++)
         {
             trimmedLine(*text->getChildAtPos(c), line, sizeof(line));
-            if (strncmp(line, "spill ", 6) == 0 && ++spillDepth > maxSpill)
+            if ((strncmp(line, "spill ", 6) == 0 || strncmp(line, "push ", 5) == 0) && ++spillDepth > maxSpill)
                 maxSpill = spillDepth;
-            else if (strncmp(line, "fill ", 5) == 0)
+            else if (strncmp(line, "fill ", 5) == 0 || strncmp(line, "pop ", 4) == 0)
                 spillDepth--;
         }
         if (maxSlots == 0 && maxSpill == 0)
@@ -1205,15 +1209,16 @@ void preserveAcrossCalls(Text *text)
         for (int c = entryPos + 1; c < end; c++)
         {
             trimmedLine(*text->getChildAtPos(c), line, sizeof(line));
-            bool isSpill = strncmp(line, "spill ", 6) == 0;
-            bool isFill = strncmp(line, "fill ", 5) == 0;
-            if (!isSpill && !isFill)
+            int store = strncmp(line, "spill ", 6) == 0 ? 6 : strncmp(line, "push ", 5) == 0 ? 5 : 0;
+            int load = strncmp(line, "fill ", 5) == 0 ? 5 : strncmp(line, "pop ", 4) == 0 ? 4 : 0;
+            bool isSpill = store != 0;
+            if (!store && !load)
                 continue;
-            if (isFill)
+            if (load)
                 spillDepth--;
             int off = frame - _FRAME_RESERVED + 4 * (maxSlots + spillDepth);
             char *converted = string_format(isSpill ? "s32i %s,a1,%d" : "l32i %s,a1,%d",
-                                            line + (isSpill ? 6 : 5), off);
+                                            line + (isSpill ? store : load), off);
             text->replaceText(c, (const char *)converted);
             free(converted);
             if (isSpill)

@@ -4015,55 +4015,6 @@ static bool isTrivialArgument(NodeToken *arg)
            e->_nodetype == localVariableNode || e->_nodetype == localVariableNodeAsRegister;
 }
 
-// Emits the register moves dst[k] <- src[k] (k < n) as if all happened at
-// once: a move is only made once no other pending move still reads its
-// destination, and a cycle is broken through a9.
-static void emitParallelMoves(int *dst, int *src, int n)
-{
-    bool done[6] = {false, false, false, false, false, false};
-    int remaining = 0;
-    for (int k = 0; k < n; k++)
-    {
-        if (dst[k] == src[k])
-            done[k] = true;
-        else
-            remaining++;
-    }
-    while (remaining > 0)
-    {
-        bool progress = false;
-        for (int k = 0; k < n; k++)
-        {
-            if (done[k])
-                continue;
-            bool stillRead = false;
-            for (int m = 0; m < n; m++)
-                if (!done[m] && m != k && src[m] == dst[k])
-                    stillRead = true;
-            if (stillRead)
-                continue;
-            bufferText->addAfter(string_format(mov, dst[k], src[k]));
-            done[k] = true;
-            remaining--;
-            progress = true;
-        }
-        if (!progress)
-        {
-            // Every pending destination is still someone's source: a cycle.
-            for (int k = 0; k < n; k++)
-            {
-                if (done[k])
-                    continue;
-                bufferText->addAfter(string_format(mov, 9, src[k]));
-                for (int m = 0; m < n; m++)
-                    if (!done[m] && src[m] == src[k])
-                        src[m] = 9;
-                break;
-            }
-        }
-    }
-}
-
 void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
 {
 
@@ -4109,10 +4060,13 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
     //    non-trivial one to its left is deferred: once everything else
     //    is in place, it is loaded directly into its own register, which
     //    disturbs nothing;
-    //  - if two or more arguments are non-trivial, each is evaluated into
-    //    a temporary and kept there (temporaries survive calls, see
-    //    optimize.cpp's preserveAcrossCalls()); they are then moved into
-    //    their argument registers together, as one parallel move;
+    //  - if two or more arguments are non-trivial, each one is pushed to
+    //    the stack as soon as it is evaluated and popped straight into its
+    //    argument register just before the call (push/pop are lowered by
+    //    optimize.cpp's preserveAcrossCalls() to nested frame slots). They
+    //    used to stay in temporaries, which ran the remaining arguments'
+    //    temporaries down into a10 in nested calls: `(0 - 120) / dv(g0)`
+    //    kept -120 in a10 and lost it to dv()'s own argument (seed 2165);
     //  - a single non-trivial argument is evaluated first and moved into
     //    its register directly, as before: only trivial arguments are
     //    loaded after it.
@@ -4140,9 +4094,7 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
         if (!trivialArg[k])
             nonTrivial++;
     bool deferred[6] = {false, false, false, false, false, false};
-    int heldReg[6];
-    bool heldFloat[6];
-    int heldCount = 0;
+    int heldReg[6]; // >= 0: argument i was pushed (see below)
     for (int k = 0; k < 6; k++)
         heldReg[k] = -1;
     // Every argument expression visited below pushes buffer positions of
@@ -4253,10 +4205,8 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
             register_numl.pop();
             if (hold)
             {
-                heldReg[i] = register_numl.get();
-                heldFloat[i] = false;
-                heldCount++;
-                register_numl.decrease();
+                bufferText->addAfter(string_format("push a%d", register_numl.get()));
+                heldReg[i] = 1;
             }
             else if (save_in_stack == true)
             {
@@ -4324,10 +4274,10 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
                 {
                     if (hold)
                     {
-                        heldReg[i] = register_numl.get();
-                        heldFloat[i] = true;
-                        heldCount++;
-                        register_numl.decrease();
+                        // Float arguments travel as their bits in an a-register.
+                        bufferText->addAfter(string_format("rfr a9,f%d", register_numl.get()));
+                        bufferText->addAfter("push a9");
+                        heldReg[i] = 1;
                     }
                     else if (save_in_stack == true)
                     {
@@ -4429,10 +4379,8 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
             {
                 if (hold)
                 {
-                    heldReg[i] = register_numl.get();
-                    heldFloat[i] = false;
-                    heldCount++;
-                    register_numl.decrease();
+                    bufferText->addAfter(string_format("push a%d", register_numl.get()));
+                    heldReg[i] = 1;
                 }
                 else if (save_in_stack == true)
                 {
@@ -4457,26 +4405,12 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
         }
     }
 
-    // Held arguments into their registers, all at once.
-    {
-        int dst[6], src[6], n = 0;
-        for (int i = 0; i < 6; i++)
-        {
-            if (heldReg[i] < 0)
-                continue;
-            if (heldFloat[i])
-                bufferText->addAfter(string_format("rfr a%d,f%d", regbase + i, heldReg[i]));
-            else
-            {
-                dst[n] = regbase + i;
-                src[n] = heldReg[i];
-                n++;
-            }
-        }
-        emitParallelMoves(dst, src, n);
-    }
-    for (int k = 0; k < heldCount; k++)
-        register_numl.increase();
+    // Held arguments, straight from their stack slots into their
+    // argument registers. They were pushed as they were evaluated, right
+    // to left, so they come back left to right.
+    for (int i = 0; i < 6; i++)
+        if (heldReg[i] >= 0)
+            bufferText->addAfter(string_format("pop a%d", regbase + i));
 
     // Deferred trivial arguments, loaded straight into their registers.
     for (int i = 0; i < 6; i++)
