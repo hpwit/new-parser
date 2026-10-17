@@ -173,6 +173,10 @@ int addTextNoDelete(char* str);
 private:
     int position;
     char **_it;
+    // Set by putIteratorAtPos(-1): the next addAfter() inserts in front
+    // of the first line rather than after _it. A position saved while the
+    // buffer was still empty is -1, and means exactly that.
+    bool _beforeFirst = false;
     //char _space[1]="";
 };
 #endif

@@ -27,6 +27,8 @@ external uint8_t ext[6];
 int buf[10];
 int canary;
 uint8_t grid[3, 4];
+int untouched;
+int untouchedRow[6];
 
 int fillOk()
 {
@@ -105,6 +107,14 @@ int bufAt(int i)
 {
    return buf[i];
 }
+
+int readUntouched()
+{
+   int s = untouched;
+   for (int i = 0; i < 6; i++)
+      s = s + untouchedRow[i];
+   return s;
+}
 )EOF";
 
 // Compiled after safeScript, without the keyword: safe mode must not carry
@@ -165,6 +175,11 @@ void setup()
 
    int32_t r = 0;
    bool done;
+
+   // Not a safe_mode check: globals the script never assigns must start at
+   // 0, as in C. The loader used to leave them holding heap garbage.
+   done = safe.execute("readUntouched", &r);
+   check(done && r == 0, "uninitialised globals start at 0");
 
    done = safe.execute("fillOk", &r);
    check(done && r == 285 && !safe.hasRuntimeError(), "in-bounds writes run normally (sum 285)");

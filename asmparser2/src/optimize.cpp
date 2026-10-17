@@ -615,7 +615,7 @@ void optimize(Text *text)
             if (found)
                 trackRemoveAt(from, to, index, ind);
         }
-        else if ((strcmp(op, "remu") == 0 || strcmp(op, "or") == 0 || strcmp(op, "and") == 0 ||
+        else if ((strcmp(op, "remu") == 0 || strcmp(op, "rems") == 0 || strcmp(op, "or") == 0 || strcmp(op, "and") == 0 ||
                   strcmp(op, "mull") == 0 || strcmp(op, "sub") == 0 || strcmp(op, "add") == 0 ||
                   strcmp(op, "quou") == 0 || strcmp(op, "quos") == 0 ||
                   strcmp(op, "addx2") == 0 || strcmp(op, "addx4") == 0 || strcmp(op, "addx8") == 0 ||
@@ -666,7 +666,9 @@ void optimize(Text *text)
             trackReset(from, to, index);
         }
 
-        // A copy "aY is aX" stops being true as soon as aX is written:
+        // A copy "aY is aX" stops being true as soon as either register
+        // is written -- aY by an instruction none of the branches above
+        // knows about, or aX at all.
         // a later read of aY must then not be rewritten to read aX. The
         // branches above only drop a fact when aY itself is written. Seen
         // with call arguments, `mov a14,a10` (keep a call's result) ...
@@ -679,7 +681,8 @@ void optimize(Text *text)
         if (now != NULL && writtenRegister(now, written, sizeof(written)))
         {
             for (int mp = index.size() - 1; mp >= 0; mp--)
-                if (strcmp(to.get(mp), written) == 0)
+                if (strcmp(to.get(mp), written) == 0 ||
+                    (strcmp(from.get(mp), written) == 0 && index.get(mp) != i))
                     trackRemoveAt(from, to, index, mp);
         }
     }
@@ -936,7 +939,7 @@ static bool isFunctionLabel(const char *line)
 static bool writesFirstOperandOnly(const char *op)
 {
     static const char *ops[] = {
-        "movi", "mov", "movr", "mov.s", "l32i", "l16i", "l16ui", "l16si", "l8ui", "lsi", "l32r", "movExt",
+        "movi", "mov", "movr", "fill", "mov.s", "l32i", "l16i", "l16ui", "l16si", "l8ui", "lsi", "l32r", "movExt",
         "add", "addi", "sub", "mull", "quos", "quou", "remu", "rems", "and", "or", "xor", "extui",
         "slli", "srli", "srai", "addx2", "addx4", "addx8", "subx8", "neg", "neg.s", "abs.s",
         "float.s", "ufloat.s", "trunc.s", "wfr", "rfr", "add.s", "sub.s", "mul.s", "const.s",
@@ -997,14 +1000,42 @@ static bool lineWritesRegister(const char *line, const char *reg)
     return len == strlen(reg) && strncmp(sp, reg, len) == 0;
 }
 
-// What `line` does to `reg`. A call line itself is REG_UNTOUCHED: its
-// outgoing arguments are always set by explicit instructions just before
-// it, and treating it as a write would hide a value that has to survive
-// two calls in a row (`a * (f() + g())`) from the first one's scan.
+// What `line` does to `reg` (see the call case inside).
+// Number of arguments a call line passes, from its label's signature:
+// `call8 @_f(num|num)` -> 2, `callExt a8,@_g()` -> 0.
+static int callArgumentCount(const char *line)
+{
+    const char *open = strchr(line, '(');
+    if (open == NULL || open[1] == ')')
+        return 0;
+    int n = 1;
+    for (const char *p = open + 1; *p && *p != ')'; p++)
+        if (*p == '|')
+            n++;
+    return n > 6 ? 6 : n;
+}
+
 static RegRole regRole(const char *line, const char *reg)
 {
-    if (line[0] == 0 || strchr(line, ':') != NULL || isCallLine(line))
+    if (line[0] == 0 || strchr(line, ':') != NULL)
         return REG_UNTOUCHED;
+    if (isCallLine(line))
+    {
+        // A call reads its argument registers a10..a(10+n-1) -- a value
+        // set up as an argument, then kept there across another call made
+        // for a later argument, is live across that other call. Anything
+        // else the call changes is not a read; the caller sets arguments
+        // with explicit instructions, so treating it as a write would hide
+        // a value that has to survive two calls in a row (`a * (f() + g())`)
+        // from the first one's scan.
+        if (reg[0] == 'a')
+        {
+            int r = atoi(reg + 1);
+            if (r >= 10 && r < 10 + callArgumentCount(line))
+                return REG_READ;
+        }
+        return REG_UNTOUCHED;
+    }
     const char *sp = strchr(line, ' ');
     if (sp == NULL)
         return REG_UNTOUCHED;
@@ -1127,12 +1158,24 @@ void preserveAcrossCalls(Text *text)
             if (n > maxSlots && frame - _FRAME_RESERVED + 4 * (n - 1) <= 1020)
                 maxSlots = n;
         }
-        if (maxSlots == 0)
+        // spill/fill pairs from the code generator (around a call whose
+        // argument registers overlap live temporaries) nest like the calls
+        // do; each nesting level gets its own slot, after the ones above.
+        int spillDepth = 0, maxSpill = 0;
+        for (int c = entryPos + 1; c < end; c++)
+        {
+            trimmedLine(*text->getChildAtPos(c), line, sizeof(line));
+            if (strncmp(line, "spill ", 6) == 0 && ++spillDepth > maxSpill)
+                maxSpill = spillDepth;
+            else if (strncmp(line, "fill ", 5) == 0)
+                spillDepth--;
+        }
+        if (maxSlots == 0 && maxSpill == 0)
         {
             i = end;
             continue;
         }
-        int growth = ((maxSlots * 4 + 7) / 8) * 8;
+        int growth = (((maxSlots + maxSpill) * 4 + 7) / 8) * 8;
 
         // Anything this function addresses at or above its old frame
         // size lives in the caller's frame (arguments past the sixth,
@@ -1157,6 +1200,25 @@ void preserveAcrossCalls(Text *text)
         char *newEntry = string_format("entry a1,%d", frame + growth);
         text->replaceText(entryPos, (const char *)newEntry);
         free(newEntry);
+
+        spillDepth = 0;
+        for (int c = entryPos + 1; c < end; c++)
+        {
+            trimmedLine(*text->getChildAtPos(c), line, sizeof(line));
+            bool isSpill = strncmp(line, "spill ", 6) == 0;
+            bool isFill = strncmp(line, "fill ", 5) == 0;
+            if (!isSpill && !isFill)
+                continue;
+            if (isFill)
+                spillDepth--;
+            int off = frame - _FRAME_RESERVED + 4 * (maxSlots + spillDepth);
+            char *converted = string_format(isSpill ? "s32i %s,a1,%d" : "l32i %s,a1,%d",
+                                            line + (isSpill ? 6 : 5), off);
+            text->replaceText(c, (const char *)converted);
+            free(converted);
+            if (isSpill)
+                spillDepth++;
+        }
 
         for (int c = entryPos + 1; c < end; c++)
         {

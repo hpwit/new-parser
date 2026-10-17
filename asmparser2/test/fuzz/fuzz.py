@@ -16,7 +16,7 @@ reduced to a small reproducer with --reduce.
 
 Programs only use constructs whose meaning is the same in both
 languages. In particular they avoid, by construction:
-  * signed `%` and division by zero (operands go through nn()/dv());
+  * division by zero, and INT_MIN / -1 (divisors go through dv());
   * reading uninitialised globals (main() initialises everything first;
     the script language does not zero them);
   * out-of-bounds indexes (they go through ix() or are loop counters);
@@ -49,7 +49,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # ASMPARSER_SRC points at another copy of the compiler sources, e.g. an
 # older commit, to check that a regression program really catches its bug.
 SRC = os.environ.get("ASMPARSER_SRC") or os.path.normpath(os.path.join(HERE, "..", "..", "src"))
-BUILD = os.path.join(HERE, "build", "alt" if os.environ.get("ASMPARSER_SRC") else "current")
+# One build directory per source tree: the rebuild check below compares
+# timestamps, which says nothing when switching to a different tree.
+import hashlib
+BUILD = os.path.join(HERE, "build", hashlib.sha1(os.path.abspath(SRC).encode()).hexdigest()[:10])
 REGRESSIONS = os.path.join(HERE, "regressions")
 FAILURES = os.path.join(HERE, "failures")
 
@@ -179,7 +182,14 @@ class Gen:
         if op == "/":
             return ("bin", "/", a, ("call", "dv", [b]))
         if op == "%":
-            return ("bin", "%", ("call", "nn", [a]), ("call", "dv", [b]))
+            # Signed remainder, as in C: the left operand may be negative,
+            # and so may the divisor -- never 0 and never -1 (INT_MIN % -1
+            # is undefined in C).
+            divisor = ("call", "dv", [b])
+            if self.r.random() < 0.3:
+                divisor = ("bin", "-", ("lit", 0), ("bin", "+", divisor, ("lit", 1)))
+            left = a if self.r.random() < 0.6 else ("call", "nn", [a])
+            return ("bin", "%", left, divisor)
         return ("bin", op, a, b)
 
     def cond(self, scope, depth=0):
@@ -260,7 +270,10 @@ class Gen:
         nfuncs = self.r.randint(1, 5)
         for i in range(nfuncs):
             pure = self.r.random() < 0.5
-            params = ["p%d" % k for k in range(self.r.randint(0, 3))]
+            # Mostly 0-3 parameters, sometimes 4-6: the fifth and sixth go
+            # through the stack, and six reach every argument register.
+            nparams = self.r.choices(range(7), weights=[2, 3, 3, 3, 1, 1, 1])[0]
+            params = ["p%d" % k for k in range(nparams)]
             scope = {"vars": list(params), "loops": [], "counter": [0]}
             body = self.block(scope, self.r.randint(1, 5), 0, pure)
             ret = self.expr({"vars": scope["vars"] + params, "loops": [], "counter": scope["counter"]})
@@ -647,13 +660,26 @@ def save_failure(seed, prog, status, detail, suffix=""):
 
 
 def run_regressions(compiler, gcc, qemu, jobs):
+    """Runs regressions/*.json (generated programs, rendered both ways) and
+    regressions/*.sc with a matching .c (hand-written pairs, for things the
+    generator does not produce, such as global initializers or six-argument
+    calls). A hand-written pair's description is its first comment line."""
     import json
-    names = sorted(f[:-5] for f in os.listdir(REGRESSIONS) if f.endswith(".json"))
+    files = os.listdir(REGRESSIONS)
+    names = sorted(f[:-5] for f in files if f.endswith(".json"))
+    names += sorted(f[:-3] for f in files if f.endswith(".sc") and f[:-3] + ".c" in files
+                    and f[:-3] + ".json" not in files)
 
     def one(name):
-        prog = json.load(open(os.path.join(REGRESSIONS, name + ".json")))
-        st, detail = run_program(render(prog, False), render(prog, True), compiler, gcc, qemu)
-        return name, prog.get("description", ""), st, detail
+        base = os.path.join(REGRESSIONS, name)
+        if os.path.exists(base + ".json"):
+            prog = json.load(open(base + ".json"))
+            script, c, desc = render(prog, False), render(prog, True), prog.get("description", "")
+        else:
+            script, c = open(base + ".sc").read(), open(base + ".c").read()
+            desc = script.splitlines()[0].lstrip("/ ")
+        st, detail = run_program(script, c, compiler, gcc, qemu)
+        return name, desc, st, detail
 
     failures = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:

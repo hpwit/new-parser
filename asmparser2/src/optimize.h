@@ -62,7 +62,7 @@ void removeBlankLines(Text *text);
 // in a function share the same slots.
 //
 // Runs last, on the final text, so no other pass has to know about the
-// extra loads and stores. Functions in `content` only -- top-level
-// initializer code (the footer) is not covered.
+// extra loads and stores. Run on `content` and on `footer` (the global
+// initializers' function).
 void preserveAcrossCalls(Text *text);
 #endif

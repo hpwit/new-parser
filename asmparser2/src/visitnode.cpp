@@ -685,7 +685,11 @@ void _visitoperatorNode(NodeToken *nd)
         // return;
         break;
     case TokenModulo:
-        bufferText->addAfter(string_format(remu, register_numl.get(), register_numl.get(), register_numr.get()));
+        // Signed unless an operand is uint32_t, as in C and as for `/`
+        // above: `-7 % 3` is -1. It was always unsigned (remu), which
+        // gave 0 for that (0xFFFFFFF9 % 3).
+        bufferText->addAfter(string_format((l == __uint32_t__ || r == __uint32_t__) ? remu : rems,
+                                           register_numl.get(), register_numl.get(), register_numr.get()));
         //  return;
         break;
     case TokenPower:
@@ -3968,6 +3972,23 @@ static bool containsCall(NodeToken *nd)
     return false;
 }
 
+// Largest argument count of any call in `nd`'s subtree (0 if none).
+static int largestNestedCall(NodeToken *nd)
+{
+    if (nd == NULL)
+        return 0;
+    int best = 0;
+    if ((nd->_nodetype == callFunctionNode || nd->_nodetype == extCallFunctionNode) && nd->children_size() > 2)
+        best = nd->getChildPtr(2)->children_size();
+    for (int i = 0; i < nd->children_size(); i++)
+    {
+        int k = largestNestedCall(nd->getChildPtr(i));
+        if (k > best)
+            best = k;
+    }
+    return best;
+}
+
 // An argument whose value can be loaded straight into a given register
 // without touching any other: a number, or a plain (unindexed, non-float)
 // variable. Arguments arrive wrapped in a changeTypeNode.
@@ -4121,6 +4142,32 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
     // depth here so they can be dropped once the call is emitted -- see
     // the end of this function.
     int spDepthAtEntry = bufferText->sp._stack.size();
+
+    // Temporaries above register_numl.get() hold values of the
+    // expression this call is part of. This call's argument registers
+    // a10..a(10+n-1) can reach into them -- `x + f(1, 2, 3, 4, 5, 6)`
+    // with x in a15, or an outer call holding arguments in a14/a15 -- and
+    // setting them up would destroy those values before
+    // preserveAcrossCalls() (which saves right before the call) could
+    // save them. Spill each one before the arguments are set up and fill
+    // it back after the call; preserveAcrossCalls() turns the spill/fill
+    // pseudo-instructions into stack stores and loads with nested slots.
+    // a10 is left alone: it carries the result.
+    int spilledRegs[6];
+    int spilledCount = 0;
+    {
+        int callArgs = nd->getChildPtr(2)->children_size();
+        if (callArgs > 6)
+            callArgs = 6;
+        int firstLive = register_numl.get() + 1;
+        if (firstLive < regbase + 1)
+            firstLive = regbase + 1;
+        for (int r = firstLive; r <= regbase + callArgs - 1 && r <= 15; r++)
+        {
+            bufferText->addAfter(string_format("spill a%d", r));
+            spilledRegs[spilledCount++] = r;
+        }
+    }
     // printf(" %s %d %d\n",nd->_token->text.c_str(),  t->children_size(),t->getChildPtr(1)->children_size());
     // for (int i = 0; i < t->getChildPtr(1)->children_size(); i++)
 
@@ -4173,6 +4220,23 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
                 continue;
             }
             hold = !trivialArg[i] && nonTrivial >= 2;
+        }
+        else if (i >= 4 && i < 6)
+        {
+            // The fifth and sixth arguments still go through the fixed
+            // stack slots at a1+_START_2+4*i -- one set per function. A
+            // call nested in an argument to the left, if it also has an
+            // argument i, saves that into the same slot before this one is
+            // reloaded. Keep this one in a temporary instead in exactly
+            // that case.
+            for (int j = 0; j < i; j++)
+                if (largestNestedCall(nd->getChildPtr(2)->getChildPtr(j)) > i)
+                    hold = true;
+            if (hold)
+            {
+                save_in_stack = false;
+                saveinstack[i] = false;
+            }
         }
         if (t->getChildPtr(2)->getChildPtr(i)->isPointer)
         {
@@ -4464,6 +4528,8 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
         // bufferText->addAfter(string_format("mov a10,a2"));
         bufferText->addAfter(string_format("call8 @_%s", nd->getText()));
     }
+    for (int k = spilledCount - 1; k >= 0; k--)
+        bufferText->addAfter(string_format("fill a%d", spilledRegs[k]));
     // A call has to leave bufferText->sp the way any other expression
     // does: nothing but the position(s) of its own result on top of what
     // was there before. The store visitors rely on that -- they pop one

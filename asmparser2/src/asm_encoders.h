@@ -339,6 +339,11 @@ uint32_t bin_remu(uint32_t *values)
 {
     return (((values[2] << 4) & 0xF0)) + ((values[1] << 8) & 0xF00) + ((values[0] << 12) & 0x0F000) + 0xe20000;
 }
+// REMS: same RRR format, op2 = 0xF (QUOU 0xC, QUOS 0xD, REMU 0xE).
+uint32_t bin_rems(uint32_t *values)
+{
+    return (((values[2] << 4) & 0xF0)) + ((values[1] << 8) & 0xF00) + ((values[0] << 12) & 0x0F000) + 0xf20000;
+}
 
 operandeType op_entry[2] = {operandeType::registers, operandeType::l0_32760};
 uint32_t bin_entry(uint32_t *values)

@@ -13,7 +13,7 @@ emitting every global. Any difference is a compiler, assembler, optimizer
 or loader bug, as is a crash or a hang.
 
 Generated programs stay away from the places where the two languages
-legitimately differ: `%` and `/` operands go through `nn()`/`dv()`, every
+legitimately differ: divisors go through `dv()` (never 0, never -1), every
 global is initialised before use (the script language does not zero
 them), indexes go through `ix()` or are loop counters, and functions
 called inside expressions have no side effects, so evaluation order does

@@ -80,6 +80,29 @@
     }
     void Text::addAfter(int pos, char * s)
     {
+        _beforeFirst = false;
+        // "After line -1" is the very start of the buffer -- what a saved
+        // position means when it was taken while the buffer was still
+        // empty. getChildAtPos(-1) is end(), so this used to append
+        // instead: the first global initializer in the footer got its
+        // store's address loaded after the store.
+        if (pos < 0)
+        {
+            int found = findText(s);
+            char *m = s;
+            if (found > -1)
+            {
+                m = _texts[found];
+                free(s);
+            }
+            if (_texts.size() == 0)
+                _texts.push_back(m);
+            else
+                _texts.insertBefore(_texts.begin(), m);
+            position++;
+            _it = getChildAtPos(position - 1);
+            return;
+        }
         _it = getChildAtPos(pos);
         // printf(" on recupere %d:%s\n",pos,(*__it).c_str());
         // if((*_it).compare(s)!=0)
@@ -93,6 +116,7 @@
 
     void Text::addBefore(int pos, char * s)
     {
+        _beforeFirst = false;
         _it = getChildAtPos(pos-1);
         // printf(" on recupere %d:%s\n",pos,(*__it).c_str());
         // if((*_it).compare(s)!=0)
@@ -123,7 +147,12 @@
         {
             m=str;  
         }
-        if (_it == _texts.end())
+        if (_beforeFirst)
+        {
+            _beforeFirst = false;
+            _it = _texts.insertBefore(_texts.begin(), m);
+        }
+        else if (_it == _texts.end())
         {
            
             _texts.push_back(m);
@@ -303,6 +332,7 @@
     }
     void Text::putIteratorAtPos(int pos)
     {
+        _beforeFirst = pos < 0 && _texts.size() > 0;
         _it = getChildAtPos(pos);
         //position=pos-1;
     }
@@ -314,10 +344,12 @@
     }
     void Text::end()
     {
+        _beforeFirst = false;
         _it = getChildAtPos(_texts.size() - 1);
     }
     void Text::clear()
     {
+        _beforeFirst = false;
         /*
          for (int i = 0; i < _texts.size(); i++)
         {
@@ -408,6 +440,7 @@
     }
     void Text::begin()
     {
+        _beforeFirst = false;
         _it = _texts.begin();
         position = 0;
     }

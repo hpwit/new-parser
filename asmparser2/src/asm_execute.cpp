@@ -234,7 +234,11 @@ executable createExecutableFromBinary(Binary *bin)
 #else
     uint32_t *exec = (uint32_t *)malloc(bin->instruction_size);
 #endif
-    uint8_t *binary_data = (uint8_t *)malloc(bin->data_size > 0 ? bin->data_size : 4);
+    // Zeroed, so a global declared without an initializer starts at 0 as
+    // in C, not with whatever the heap held (initializers are copied in
+    // over this by decodeBinaryHeader()). Scripts read such globals
+    // routinely -- counters, accumulators, "has this run yet" flags.
+    uint8_t *binary_data = (uint8_t *)calloc(1, bin->data_size > 0 ? bin->data_size : 4);
 
     // Neither allocation's result used to be checked before being handed
     // to decodeBinaryHeader()/memcpy() below -- harmless on host, where

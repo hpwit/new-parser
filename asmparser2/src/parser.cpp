@@ -134,6 +134,8 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     removeBlankLines(&content);
     PARSER_LOG("preserve across calls")
     preserveAcrossCalls(&content);
+    // Global initializers run as one more function, @__footer.
+    preserveAcrossCalls(&footer);
 }
 
 void Parser::parseProgram()

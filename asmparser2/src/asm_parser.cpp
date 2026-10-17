@@ -602,6 +602,8 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         return parseOperandes(sp.operandes, 3, op_l16si, 3, bin_l16ui);
     if (strcmp(op, "remu") == 0)
         return parseOperandes(sp.operandes, 3, op_remu, 3, bin_remu);
+    if (strcmp(op, "rems") == 0)
+        return parseOperandes(sp.operandes, 3, op_remu, 3, bin_rems);
     if (strcmp(op, "entry") == 0)
         return parseOperandes(sp.operandes, 2, op_entry, 3, bin_entry);
     if (strcmp(op, "extui") == 0)
