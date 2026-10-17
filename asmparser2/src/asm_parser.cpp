@@ -1194,6 +1194,171 @@ static uint8_t *createBinaryHeader(parsedLines *asm_parsed)
     return _binary_header;
 }
 
+// ---------------------------------------------------------------------
+// Branch relaxation.
+//
+// Xtensa's conditional branches reach only so far: 8-bit signed offsets
+// for the two-register and register-immediate forms (blt, bgei...), 12
+// bits for beqz/bnez. The encoders just mask the offset to the field, so
+// a loop or if body longer than about 128 bytes made its closing branch
+// jump to some unrelated address -- in the middle of an instruction of
+// another function, typically, and a double exception. The code
+// generator cannot know distances, so the assembler fixes them: after
+// assembling once, every short branch whose target is out of reach is
+// rewritten as its inverse over an unconditional `j` (18 bits):
+//
+//     blti a3,2,label_4        bgei a3,2,__relax_N
+//                       ->     j label_4
+//                            __relax_N:
+//
+// and the whole thing is assembled again, until everything fits (each
+// rewrite only adds bytes, so this converges).
+// ---------------------------------------------------------------------
+struct BranchForm
+{
+    const char *op;
+    const char *inverse;
+    int bits;
+};
+static const BranchForm kBranchForms[] = {
+    {"blt", "bge", 8}, {"bge", "blt", 8}, {"bltu", "bgeu", 8}, {"bgeu", "bltu", 8},
+    {"beq", "bne", 8}, {"bne", "beq", 8}, {"blti", "bgei", 8}, {"bgei", "blti", 8},
+    {"beqi", "bnei", 8}, {"bnei", "beqi", 8}, {"bt", "bf", 8}, {"bf", "bt", 8},
+    {"beqz", "bnez", 12}, {"bnez", "beqz", 12}};
+
+static const BranchForm *branchFormOf(const char *line)
+{
+    while (*line == ' ')
+        line++;
+    size_t len = strcspn(line, " ");
+    for (size_t k = 0; k < sizeof(kBranchForms) / sizeof(kBranchForms[0]); k++)
+        if (strlen(kBranchForms[k].op) == len && strncmp(line, kBranchForms[k].op, len) == 0)
+            return &kBranchForms[k];
+    return NULL;
+}
+
+static void snapshotText(Text *t, vect<char *> *out)
+{
+    for (int i = 0; i < t->size(); i++)
+        out->push_back(strdup(t->getText(i)));
+}
+
+static void restoreText(Text *t, vect<char *> &lines)
+{
+    t->clear();
+    for (int i = 0; i < lines.size(); i++)
+        t->_texts.push_back(strdup(lines.get(i)));
+    t->end();
+}
+
+static void freeLines(vect<char *> &lines)
+{
+    for (int i = 0; i < lines.size(); i++)
+        free(lines.get(i));
+    lines.clear();
+}
+
+// Rewrites, in `lines`, the branch at index `idx` as inverse + j + label.
+static void relaxBranchLine(vect<char *> &lines, int idx, const BranchForm *form)
+{
+    static int relaxCount = 0;
+    char *line = lines.get(idx);
+    char *operands = line + strspn(line, " ");
+    operands += strcspn(operands, " ");
+    operands += strspn(operands, " ");
+    char *lastComma = strrchr(operands, ',');
+    if (lastComma == NULL)
+        return;
+    char *target = strdup(lastComma + 1);
+    *lastComma = 0;
+    char *skip = string_format("__relax_%d", relaxCount++);
+    char *branch = string_format("%s %s,%s", form->inverse, operands, skip);
+    char *jump = string_format("j %s", target);
+    char *label = string_format("%s:", skip);
+    free(lines.get(idx));
+    lines.getptr(idx)[0] = branch;
+    lines.insertAfter(lines.getptr(idx), jump);
+    lines.insertAfter(lines.getptr(idx + 1), label);
+    free(skip);
+    free(target);
+}
+
+// Assembles, relaxing out-of-range branches as needed. On return the
+// three Texts are consumed, as parseASM() leaves them.
+static asm_error_message_struct parseASMRelaxed(Text *_footer, Text *_header, Text *_content, parsedLines *asm_parsed)
+{
+    vect<char *> header, content, footer;
+    snapshotText(_header, &header);
+    snapshotText(_content, &content);
+    snapshotText(_footer, &footer);
+
+    asm_error_message_struct err;
+    for (int attempt = 0;; attempt++)
+    {
+        asm_parsed->clear();
+        err = parseASM(_footer, _header, _content, asm_parsed);
+        if (err.error || attempt >= 16)
+            break;
+
+        // Out-of-range short branches, by their line in the snapshot.
+        // parseline() numbers lines header first, then content, then
+        // footer (assembleBuffer()'s lineOffset).
+        vect<int> badContent, badFooter;
+        for (int i = 0; i < asm_parsed->size(); i++)
+        {
+            result_parse_line *pl = asm_parsed->getChildAtPos(i);
+            if (pl->op != opCodeType::jump || pl->calculateOfssetJump == NULL)
+                continue;
+            int global = pl->line - 1;
+            char *src = NULL;
+            bool inContent = false;
+            if (global >= header.size() && global < header.size() + content.size())
+            {
+                src = content.get(global - header.size());
+                inContent = true;
+            }
+            else if (global >= header.size() + content.size() && global < header.size() + content.size() + footer.size())
+                src = footer.get(global - header.size() - content.size());
+            const BranchForm *form = src ? branchFormOf(src) : NULL;
+            if (form == NULL)
+                continue;
+            int index = findLabel(pl->getText(), asm_parsed);
+            if (index < 0)
+                continue;
+            int32_t dif = (int32_t)getInstrAtPos(index)->address - (int32_t)pl->address - 4;
+            int32_t limit = 1 << (form->bits - 1);
+            if (dif >= -limit && dif < limit)
+                continue;
+            if (inContent)
+                badContent.push_back(global - header.size());
+            else
+                badFooter.push_back(global - header.size() - content.size());
+        }
+        if (badContent.size() == 0 && badFooter.size() == 0)
+            break;
+
+        // Rewrite from the last line up, so earlier indexes stay valid.
+        for (int k = badContent.size() - 1; k >= 0; k--)
+            relaxBranchLine(content, badContent.get(k), branchFormOf(content.get(badContent.get(k))));
+        for (int k = badFooter.size() - 1; k >= 0; k--)
+            relaxBranchLine(footer, badFooter.get(k), branchFormOf(footer.get(badFooter.get(k))));
+
+        if (tmp_exec != NULL)
+        {
+            free(tmp_exec);
+            tmp_exec = NULL;
+        }
+        asm_text.clear();
+        restoreText(_header, header);
+        restoreText(_content, content);
+        restoreText(_footer, footer);
+    }
+    freeLines(header);
+    freeLines(content);
+    freeLines(footer);
+    return err;
+}
+
 Binary createBinary(Text *_footer, Text *_header, Text *_content, bool display)
 {
     Binary bin;
@@ -1202,7 +1367,7 @@ Binary createBinary(Text *_footer, Text *_header, Text *_content, bool display)
     bin.error.error = 0;
     _asm_parsed.clear();
 
-    asm_error_message_struct err = parseASM(_footer, _header, _content, &_asm_parsed);
+    asm_error_message_struct err = parseASMRelaxed(_footer, _header, _content, &_asm_parsed);
 
     _header->clear();
     _content->clear();

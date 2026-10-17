@@ -1,0 +1,116 @@
+{
+ "funcs": [
+  {
+   "name": "f0",
+   "params": [
+    "p0",
+    "p1",
+    "p2"
+   ],
+   "body": [
+    {
+     "kind": "for",
+     "var": "i1",
+     "count": 2,
+     "body": [
+      {
+       "kind": "assign",
+       "target": [
+        "idx",
+        "M",
+        [
+         [
+          "call",
+          "ix",
+          [
+           [
+            "bin",
+            "%",
+            [
+             "lit",
+             1
+            ],
+            [
+             "call",
+             "dv",
+             [
+              [
+               "bin",
+               "%",
+               [
+                "call",
+                "nn",
+                [
+                 [
+                  "lit",
+                  1
+                 ]
+                ]
+               ],
+               [
+                "call",
+                "dv",
+                [
+                 [
+                  "lit",
+                  1
+                 ]
+                ]
+               ]
+              ]
+             ]
+            ]
+           ],
+           [
+            "lit",
+            1
+           ]
+          ]
+         ],
+         [
+          "lit",
+          1
+         ]
+        ]
+       ],
+       "op": "=",
+       "expr": [
+        "lit",
+        1
+       ]
+      }
+     ]
+    }
+   ],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": false
+  }
+ ],
+ "main": [
+  {
+   "kind": "callstmt",
+   "call": [
+    "call",
+    "f0",
+    [
+     [
+      "lit",
+      1
+     ],
+     [
+      "lit",
+      1
+     ],
+     [
+      "lit",
+      1
+     ]
+    ]
+   ]
+  }
+ ],
+ "description": "A loop body longer than 128 bytes: its closing short branch (blti) was encoded with a truncated offset and jumped into the middle of another function. Reduced from seed 2032."
+}
