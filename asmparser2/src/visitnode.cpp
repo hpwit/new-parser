@@ -1826,6 +1826,12 @@ void _visitcomparatorNode(NodeToken *nd)
 
         if (nd->_total_size > 127)
         {
+            // Long form: branch *into* the body when the condition holds,
+            // then `j _end` over it -- so the branch tests the condition
+            // itself, unlike the short form below, which branches past the
+            // body when it fails. `==` and `!=` had the short form's
+            // inverted mnemonics here, so `if (a != 1)` with a long body
+            // ran the body exactly when a == 1.
             if (isLiteralIntOperand(nd->getChildPtr(1)))
             {
                 switch (nd->type)
@@ -1841,7 +1847,7 @@ void _visitcomparatorNode(NodeToken *nd)
                 case TokenDoubleEqual:
                     if (isBranchImmediate(f, false))
                     {
-                        compop = bnei;
+                        compop = beqi;
                         leftl = numl;
                         immediate = true;
                     }
@@ -1849,7 +1855,7 @@ void _visitcomparatorNode(NodeToken *nd)
                 case TokenNotEqual:
                     if (isBranchImmediate(f, false))
                     {
-                        compop = beqi;
+                        compop = bnei;
                         leftl = numl;
                         immediate = true;
                     }
@@ -2282,7 +2288,9 @@ void _visitforConditionRotated(NodeToken *test, char *bodyLabel, int distance)
     {
         // Body is within short-branch range: natural sense (matches
         // _visitcomparatorNode()'s own >127/"_if" block's mnemonic
-        // choices exactly), straight back to it, one instruction.
+        // choices exactly), straight back to it, one instruction. Both
+        // had `==` and `!=` swapped (bnei/beqi) for an immediate operand,
+        // so `for (...; i != 3; ...)` looped while i == 3.
         if (isLiteralIntOperand(test->getChildPtr(1)))
         {
             switch (test->type)
@@ -2291,10 +2299,10 @@ void _visitforConditionRotated(NodeToken *test, char *bodyLabel, int distance)
                 if (isBranchImmediate(f, false)) { compop = blti; leftl = numl; immediate = true; }
                 break;
             case TokenDoubleEqual:
-                if (isBranchImmediate(f, false)) { compop = bnei; leftl = numl; immediate = true; }
+                if (isBranchImmediate(f, false)) { compop = beqi; leftl = numl; immediate = true; }
                 break;
             case TokenNotEqual:
-                if (isBranchImmediate(f, false)) { compop = beqi; leftl = numl; immediate = true; }
+                if (isBranchImmediate(f, false)) { compop = bnei; leftl = numl; immediate = true; }
                 break;
             case TokenMoreOrEqualThan:
                 if (isBranchImmediate(f, false)) { compop = bgei; leftl = numl; immediate = true; }
