@@ -9,23 +9,21 @@
 #include <cstring>
 
 // v1's real compile entrypoints (Parser::parseScript() et al.) always
-// prepend this exact boilerplate before the user's own script text --
-// true/false and the _handle_ global (which pinInterrupt() needs, see
-// KeyboardCallback.ino-style scripts) real scripts routinely depend on
-// silently existing come from here. parseScript() is meant to be the
-// batteries-included entry point (see script_executable.h), so it does
-// the same -- without this, `bool b = true;` or
-// `pinInterrupt(_handle_, "fn", pin);` would fail to compile with a
-// confusing "impossible to find variable declaration" for something the
-// script never declared itself. parseScript() below counts this
-// prelude's own lines and offsets _tokenizer_start_line accordingly, so
-// despite living in the same buffer the tokenizer reads, it doesn't
-// shift reported parse-error line numbers away from the user's own
-// script text.
+// prepend boilerplate before the user's own script text, and real
+// scripts routinely depend on what it defines silently existing.
+// parseScript() is meant to be the batteries-included entry point (see
+// script_executable.h), so it does the same -- without this,
+// `bool b = true;` would fail to compile with a confusing "impossible
+// to find variable declaration" for something the script never
+// declared itself. (_handle_, the other thing v1's boilerplate
+// declared, is declared by Parser::parse() itself, for every script.)
+// parseScript() below counts this prelude's own lines and offsets
+// _tokenizer_start_line accordingly, so despite living in the same
+// buffer the tokenizer reads, it doesn't shift reported parse-error
+// line numbers away from the user's own script text.
 static const char *kPrelude =
     "#define true 1\n"
-    "#define false 0\n"
-    "uint32_t _handle_;\n";
+    "#define false 0\n";
 
 ScriptExecutable::ScriptExecutable(Binary *bin) : exe(createExecutableFromBinary(bin))
 {

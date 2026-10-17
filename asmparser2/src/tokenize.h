@@ -49,6 +49,11 @@ public:
     Script();
     void init();
     void addContent(char *str);
+    // Puts str in front of everything added so far (Parser::parse()'s
+    // built-in declarations). Call init() again afterwards.
+    void addContentFront(char *str);
+    // True if str is the first piece of text.
+    bool startsWith(const char *str);
     void clear();
     char *currentCharPtr();
     char *firstCharPtr();

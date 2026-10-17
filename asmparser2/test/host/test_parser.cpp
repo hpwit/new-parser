@@ -1004,6 +1004,112 @@ static void runSafeModeTest()
     }
 }
 
+// _handle_ (the executable's address, filled in on every entry) is
+// declared by Parser::parse() itself, so it exists however a script is
+// compiled -- the raw Parser path included, which used to reject it as
+// undeclared (only parseScript()'s prelude declared it). A script that
+// declares it itself, as v1-era scripts and test preludes do, still
+// compiles, and the extra line in front of the script text does not move
+// reported error lines.
+static void runBuiltinHandleTest()
+{
+    const char *name = "_handle_ is declared for every script; own declaration accepted; error lines unchanged";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        bool ok = true;
+
+        const char *undeclared =
+            "uint32_t saved;\n"
+            "void main()\n"
+            "{\n"
+            "   saved = _handle_;\n"
+            "}\n";
+        if (!compileForTest(undeclared))
+        {
+            printf("       raw Parser path: _handle_ not declared\n");
+            ok = false;
+        }
+        else
+        {
+            if (!textContains(content, "@__handle_"))
+            {
+                printf("       expected main() to read @__handle_\n");
+                ok = false;
+            }
+            Binary bin = createBinary(&footer, &header, &content, false);
+            if (bin.error.error)
+            {
+                printf("       assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+                ok = false;
+            }
+        }
+
+        const char *declared =
+            "uint32_t _handle_;\n"
+            "uint32_t saved;\n"
+            "void main()\n"
+            "{\n"
+            "   saved = _handle_;\n"
+            "}\n";
+        if (!compileForTest(declared))
+        {
+            printf("       a script declaring _handle_ itself no longer compiles\n");
+            ok = false;
+        }
+
+        // Still an error for any other name.
+        if (compileForTest("int a;\nint a;\nvoid main()\n{\n}\n"))
+        {
+            printf("       duplicate global accepted\n");
+            ok = false;
+        }
+
+        // `int a = ;` on line 3: reported on line 3 by both entry points.
+        const char *broken = "void main()\n{\n   int a = ;\n}\n";
+        compileForTest(broken);
+        if (!Error.error || Error.token == NULL || Error.token->line != 3)
+        {
+            printf("       raw Parser path: error reported on line %d, expected 3\n",
+                   (Error.error && Error.token) ? (int)Error.token->line : -1);
+            ok = false;
+        }
+        {
+            ScriptExecutable exe = parseScript(broken);
+            if (exe.isExeExists() || !Error.error || Error.token == NULL || Error.token->line != 3)
+            {
+                printf("       parseScript(): error reported on line %d, expected 3\n",
+                       (Error.error && Error.token) ? (int)Error.token->line : -1);
+                ok = false;
+            }
+        }
+
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 // Regression test found via a purpose-written several-hundred-line script
 // (test/host/fixtures/multi_effect_controller.sc, test/host/test_large_script.cpp)
 // exercising `structArray[index].field` read from *outside* the struct's own
@@ -2198,6 +2304,7 @@ int main()
     runStructArrayMethodSelfPointerTest();
     runOptimizeUnitTest();
     runSafeModeTest();
+    runBuiltinHandleTest();
     runGenerateBinaryTest(
         "generates executable binary: empty function",
         "void main(){}");

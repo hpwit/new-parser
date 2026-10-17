@@ -419,6 +419,14 @@ varType _varTypes[] = {
     {
         script.push_back(str);
     }
+    void Script::addContentFront(char *str)
+    {
+        script.push_front(str);
+    }
+    bool Script::startsWith(const char *str)
+    {
+        return script.size() > 0 && *script.begin() == str;
+    }
     void Script::clear()
     {
         script.clear();

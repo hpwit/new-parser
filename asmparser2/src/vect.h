@@ -289,7 +289,7 @@ template <typename T>
 T *vect<T>::push_front(T asset)
 {
     if (point != NULL)
-        return insertBefore(asset, point);
+        return insertBefore(point, asset);
     else
         return push_back(asset);
 }

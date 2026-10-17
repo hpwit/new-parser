@@ -103,8 +103,25 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     // compiled in this process should be able to leave behind.
     safeMode = false;
 
+    // `_handle_` -- the address of the executable running the script,
+    // filled in by asm_execute.cpp's fillHandleWord() on every entry --
+    // exists in every script, however it is compiled, so a script can
+    // always hand itself to the host (pinInterrupt(_handle_, "fn", pin)).
+    // Declared as script text in front of the caller's own, one line,
+    // which the line counter starts early to absorb: reported line
+    // numbers stay those of the caller's text. A script (or a harness
+    // prelude) that declares it again itself is accepted, see
+    // parseVariableForCreation().
+    static char builtinDeclarations[] = "uint32_t _handle_;\n";
+    if (!main_script->startsWith(builtinDeclarations))
+        main_script->addContentFront(builtinDeclarations);
+    main_script->init();
+    int startLine = _tokenizer_start_line;
+    _tokenizer_start_line = startLine - 1;
+
     _tks = __tks;
     _tks->tokenize(main_script, true, true, 1);
+    _tokenizer_start_line = startLine;
     parseProgram();
     if(Error.error)
     return;
@@ -729,7 +746,11 @@ void Parser::parseVariableForCreation()
     updateMem();
 #endif
     findVariable(current_cntx, current(), true);
-    if (search_result != NULL)
+    // _handle_ is declared for every script (Parser::parse()); a global
+    // declaration of it in the script itself, as v1-era scripts and
+    // preludes have, is the same variable.
+    if (search_result != NULL &&
+        !(current_cntx == &main_context && strcmp(current()->getText(), _handle_) == 0))
         RETURN_ERROR(alreadyDeclaredVariableInScope);
 
     if (Match(TokenOpenBracket, 1))

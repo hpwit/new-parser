@@ -695,7 +695,7 @@ I'd rather publish that honestly than reuse v1's old table with a different comp
 
 ## Pointer to the executable, and interrupts
 
-`_handle_` is an always-available variable holding the address of the `ScriptExecutable` running this script (or, for a script loaded through the raw `parse -> createBinary -> createExecutableFromBinary` pipeline with no `ScriptExecutable` wrapper, the address of the `executable` itself), so registering an interrupt callback doesn't need anything script-specific beyond the target function's name:
+`_handle_` is a variable declared in every script (however it is compiled) holding the address of the `ScriptExecutable` running this script (or, for a script loaded through the raw `parse -> createBinary -> createExecutableFromBinary` pipeline with no `ScriptExecutable` wrapper, the address of the `executable` itself), so registering an interrupt callback doesn't need anything script-specific beyond the target function's name:
 
 ```c
 external void pinInterrupt(uint32_t exec, char *name, int pin);
@@ -716,9 +716,9 @@ void main()
 }
 ```
 
-(v1 called this variable `_execaddr_` and gave it a small scheduler-registry index rather than a real address -- see `asm_execute.cpp`'s `fillHandleWords()` for what v2 does instead, now that `_execaddr_` itself has been dropped.)
+(v1 called this variable `_execaddr_` and gave it a small scheduler-registry index rather than a real address -- see `asm_execute.cpp`'s `fillHandleWord()` for what v2 does instead, now that `_execaddr_` itself has been dropped. A script that still declares `uint32_t _handle_;` itself compiles unchanged.)
 
-`pinInterrupt` itself is just another `bindFunction()`-registered host function, real interrupt setup happens on the C++ side (`gpio_isr_handler_add()` etc.) -- see v1's README for a complete `setup_gpio_interrupt()` implementation, which ports over unchanged.
+`pinInterrupt` itself is just another `bindFunction()`-registered host function, real interrupt setup happens on the C++ side (`gpio_isr_handler_add()` etc.) -- see `examples/PinInterrupt` for a complete one. Its handler calls back with `callFunction((executable *)handle, name, NULL, 0, NULL)`: use that (or `ScriptExecutable::executeOnly()`), not `execute()`, which re-runs the script's global initializers first and would reset its globals on every interrupt.
 
 # Verification & testing infrastructure
 

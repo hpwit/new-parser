@@ -202,7 +202,9 @@ void IRAM_ATTR onScriptInterrupt()
 {
    if (g_exec != NULL)
    {
-      g_exec->execute(g_interruptFnName);
+      // executeOnly(), not execute(): execute() runs the script's global
+      // initializers first, which would reset every global on each press.
+      g_exec->executeOnly(g_interruptFnName);
    }
 }
 
