@@ -9,6 +9,7 @@
 // Exit status: 0 on success, 1 if the script was rejected (parse or
 // assembler error, printed to stderr).
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <iterator>
@@ -18,11 +19,20 @@
 #include "compiler_error.h"
 #include "asm_parser.h"
 
-#define MAX_TYPE0_RECORDS 64
-#define MAX_TYPE1_RECORDS 16
-#define MAX_TYPE2_RECORDS 16
-#define MAX_TYPE4_RECORDS 16
-#define MAX_TYPE3_RECORDS 16
+#define MAX_TYPE0_RECORDS 1024
+#define MAX_TYPE1_RECORDS 256
+#define MAX_TYPE2_RECORDS 256
+#define MAX_TYPE4_RECORDS 256
+#define MAX_TYPE3_RECORDS 1024
+
+// A record that does not fit is a harness limit, not a compiler bug: stop
+// rather than drop it, or the runner silently runs with part of the
+// binary unrelocated (literals reading back 0, calls to nowhere...).
+static void tooMany(const char *what)
+{
+    fprintf(stderr, "compile_script: too many %s records (raise the limit)\n", what);
+    exit(3);
+}
 
 int main(int argc, char **argv)
 {
@@ -91,12 +101,11 @@ int main(int argc, char **argv)
                 hdr += 4;
                 memcpy(&nb_data, hdr, 2);
                 hdr += 2;
-                if (numSlots < MAX_TYPE0_RECORDS)
-                {
-                    slotOffsets[numSlots] = nb_data * 4;
-                    slotBincodes[numSlots] = bincode;
-                    numSlots++;
-                }
+                if (numSlots >= MAX_TYPE0_RECORDS)
+                    tooMany("data-slot");
+                slotOffsets[numSlots] = nb_data * 4;
+                slotBincodes[numSlots] = bincode;
+                numSlots++;
             }
             else if (type == 1)
             {
@@ -111,13 +120,12 @@ int main(int argc, char **argv)
                 // textptr is "@_ext_NAME" -- strip that fixed 6-char prefix.
                 const char *p = textptr + 6;
                 size_t len = strlen(p);
-                if (numVars < MAX_TYPE1_RECORDS && len < sizeof(varNames[0]))
-                {
-                    memcpy(varNames[numVars], p, len);
-                    varNames[numVars][len] = 0;
-                    varSlotOffsets[numVars] = nb_data * 4;
-                    numVars++;
-                }
+                if (numVars >= MAX_TYPE1_RECORDS || len >= sizeof(varNames[0]))
+                    tooMany("external-variable");
+                memcpy(varNames[numVars], p, len);
+                varNames[numVars][len] = 0;
+                varSlotOffsets[numVars] = nb_data * 4;
+                numVars++;
             }
             else if (type == 2)
             {
@@ -133,13 +141,12 @@ int main(int argc, char **argv)
                 const char *p = textptr + 2;
                 const char *paren = strchr(p, '(');
                 size_t len = paren ? (size_t)(paren - p) : strlen(p);
-                if (numExt < MAX_TYPE2_RECORDS && len < sizeof(extNames[0]))
-                {
-                    memcpy(extNames[numExt], p, len);
-                    extNames[numExt][len] = 0;
-                    extSlotOffsets[numExt] = nb_data * 4;
-                    numExt++;
-                }
+                if (numExt >= MAX_TYPE2_RECORDS || len >= sizeof(extNames[0]))
+                    tooMany("external-function");
+                memcpy(extNames[numExt], p, len);
+                extNames[numExt][len] = 0;
+                extSlotOffsets[numExt] = nb_data * 4;
+                numExt++;
             }
             else if (type == 3)
             {
@@ -152,13 +159,12 @@ int main(int argc, char **argv)
                 uint16_t size;
                 memcpy(&size, hdr, 2);
                 hdr += 2;
-                if (numData3 < MAX_TYPE3_RECORDS)
-                {
-                    data3Addr[numData3] = addr;
-                    data3TmpOffset[numData3] = tmp_data;
-                    data3Size[numData3] = size;
-                    numData3++;
-                }
+                if (numData3 >= MAX_TYPE3_RECORDS)
+                    tooMany("initialized-data");
+                data3Addr[numData3] = addr;
+                data3TmpOffset[numData3] = tmp_data;
+                data3Size[numData3] = size;
+                numData3++;
             }
             else if (type == 4)
             {
@@ -182,13 +188,12 @@ int main(int argc, char **argv)
                     p++;
                 const char *paren = strchr(p, '(');
                 size_t len = paren ? (size_t)(paren - p) : strlen(p);
-                if (numFn < MAX_TYPE4_RECORDS && len < sizeof(fnNames[0]))
-                {
-                    memcpy(fnNames[numFn], p, len);
-                    fnNames[numFn][len] = 0;
-                    fnAddrs[numFn] = addr;
-                    numFn++;
-                }
+                if (numFn >= MAX_TYPE4_RECORDS || len >= sizeof(fnNames[0]))
+                    tooMany("function");
+                memcpy(fnNames[numFn], p, len);
+                fnNames[numFn][len] = 0;
+                fnAddrs[numFn] = addr;
+                numFn++;
             }
             else if (type == 5)
             {
