@@ -22,6 +22,17 @@
 #include "freertos/task.h"
 #endif
 
+// What the task started by ScriptExecutable::executeAsTask() is doing
+// (ScriptExecutable::state()). Only that task is tracked: a plain
+// execute() runs on the caller's own task and leaves this alone.
+enum class ScriptState : uint8_t
+{
+    notStarted, // executeAsTask() was never called
+    running,
+    paused,     // pause(): stopped where it was, restart() continues it
+    stopped,    // kill(), or the function returned on its own
+};
+
 // Owns a compiled+loaded script; ~ScriptExecutable() frees it via
 // freeExecutable() automatically.
 //
@@ -65,7 +76,8 @@ public:
     // to check it would require the same unsafe copy/assignment this
     // class exists to avoid.
     explicit ScriptExecutable(Binary *bin);
-    ~ScriptExecutable() { freeExecutable(&exe); }
+    // Kills the script's task first, if executeAsTask() started one.
+    ~ScriptExecutable();
 
     ScriptExecutable(const ScriptExecutable &) = delete;
     ScriptExecutable &operator=(const ScriptExecutable &) = delete;
@@ -84,7 +96,7 @@ public:
     // when `this` then goes out of scope normally. After this,
     // isExeExists() is false and no execute()/executeOnly() call will
     // find anything to run.
-    void free() { freeExecutable(&exe); }
+    void free();
 
     // True if the last execute()/executeOnly() was cut short by a
     // safe_mode bounds check (that call returned false); runtimeError()
@@ -145,11 +157,11 @@ public:
     // that version also maintains a registry of up to _MAX_PROG_AT_ONCE
     // concurrently-running scripts, suspend()/restart()/kill() with
     // cross-task handshaking, and sync()/_syncExt inter-task
-    // coordination -- none of which exists here (see README.md's "Known
-    // limitations"; this was a deliberate v2 scope decision, not an
-    // oversight). This is plain, fire-and-forget task creation: no
-    // handle returned, no way to stop the task other than however the
-    // script itself decides to return. Only declared/defined when
+    // coordination. Of those, v2 has the per-script part: pause(),
+    // restart() and kill() below, and state(); there is no registry of
+    // scripts and no sync(). Calling it while this script's task is
+    // still running or paused kills that task first, as v1 does. Only
+    // declared/defined when
     // actually building for ESP32 (FreeRTOS's task API doesn't exist
     // otherwise, including this repo's own host test build) -- guard
     // any call site the same way if it needs to compile for both.
@@ -175,9 +187,53 @@ public:
     // default's no-affinity behavior.
     bool executeAsTask(const char *name, uint32_t stackSize = 8192, UBaseType_t priority = 1,
                         BaseType_t core = tskNO_AFFINITY);
+
+    // Control of the task executeAsTask() started -- v1's suspend(),
+    // restart() and kill(). Each returns false, doing nothing, when the
+    // task is not in a state it applies to.
+    //
+    // pause(): running -> paused. The task stops where it is
+    //   (vTaskSuspend()); nothing else about it changes.
+    // restart(): paused -> running, carrying on from where it stopped
+    //   (vTaskResume()). Not a fresh start: call executeAsTask() again
+    //   for that.
+    // kill(): running or paused -> stopped (vTaskDelete()). Also frees a
+    //   task whose function has already returned (state() stopped), whose
+    //   stack is otherwise kept until then -- see executeAsTask().
+    //
+    // The task is stopped wherever it happens to be, possibly inside a
+    // host function the script called. Pausing it there holds whatever
+    // that function holds (Serial, printf's lock, a mutex of yours...)
+    // until restart(); killing it there never releases it. If that
+    // matters, have the script's loop call a host function that checks
+    // a flag and returns or blocks at a point you choose instead.
+    //
+    // Call them from a task (not an interrupt), and from one controlling
+    // task at a time; the script's own task may call them on itself.
+    bool pause();
+    bool restart();
+    bool kill();
 #endif
 
+    // Always notStarted where executeAsTask() does not exist.
+    ScriptState state() const { return taskState; }
+    bool isRunning() const { return taskState == ScriptState::running; }
+    bool isPaused() const { return taskState == ScriptState::paused; }
+
     executable exe;
+
+private:
+    volatile ScriptState taskState = ScriptState::notStarted;
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+    // The task executeAsTask() started, until kill() (or the next
+    // executeAsTask(), or the destructor) deletes it. Kept after the
+    // function returns: the task then marks itself stopped and suspends
+    // itself rather than deleting itself, so that no pause()/kill() can
+    // be acting on a task that has just disappeared.
+    TaskHandle_t taskHandle = NULL;
+    portMUX_TYPE taskLock = portMUX_INITIALIZER_UNLOCKED;
+    static void taskMain(void *param);
+#endif
 };
 
 // Parses, assembles, and loads `script` in one call -- the v2 equivalent

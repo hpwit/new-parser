@@ -674,9 +674,23 @@ if (i < 25)
 exec.executeAsTask("function_name");
 ```
 
-Runs one script function on its own FreeRTOS task instead of blocking the caller -- ESP32 only, see `examples/ExecuteAsTask`.
+Runs one script function on its own FreeRTOS task instead of blocking the caller -- ESP32 only, see `examples/ExecuteAsTask`. The task can then be controlled, as with v1's `suspend()`/`restart()`/`kill()`:
 
-**This is the one place v2 is deliberately smaller than v1.** v1 has a full scheduler on top of this: `scriptRuntime`, a registry of several concurrently-running scripts addressable by name, `suspend()`/`kill()`/`restart()` with cross-task handshaking, and `sync()` for coordinating several scripts' output so they don't tear each other's frames. None of that exists in v2 yet -- `executeAsTask()` is fire-and-forget: no handle back, no way to stop it short of the script returning on its own, no registry to look other running scripts up in. If your project actually needs several independent, coordinated scripts running at once, that's still v1 territory for now. See [Known limitations](#known-limitations).
+```cpp
+exec.pause();    // running -> paused: the task stops where it is
+exec.restart();  // paused -> running: carries on from where it stopped
+exec.kill();     // running or paused -> stopped: the task is deleted
+
+exec.state();    // ScriptState::notStarted, running, paused or stopped
+exec.isRunning();
+exec.isPaused();
+```
+
+Each control returns `false` and does nothing when it doesn't apply (pausing a paused script, restarting a running one...). `stopped` also covers a function that returned on its own. `executeAsTask()` on a script whose task is still running or paused kills that task first and starts a fresh one; destroying the `ScriptExecutable` (or calling `free()`) kills its task too.
+
+The task is stopped wherever it happens to be -- possibly inside a host function the script called. Paused there, it keeps holding whatever that function holds (`Serial`, `printf`'s lock, a mutex of yours) until `restart()`; killed there, it never releases it. If that matters, give the script a host function to call in its loop that checks a flag and returns or blocks at a point you choose.
+
+What v1 has on top of this and v2 doesn't: a registry of several concurrently-running scripts addressable by name (`scriptRuntime`), and `sync()` for coordinating several scripts' output so they don't tear each other's frames. If your project needs several coordinated scripts running at once, that's still v1 territory for now. See [Known limitations](#known-limitations).
 
 # Performance
 
@@ -756,7 +770,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 
 Real, current gaps -- not aspirational TODOs:
 
-- **No multi-program task scheduler** -- see [Running scripts in the background](#running-scripts-in-the-background).
+- **No multi-program task scheduler** (each script's own task can be paused, restarted and killed, but there is no registry of scripts and no `sync()`) -- see [Running scripts in the background](#running-scripts-in-the-background).
 - **`import <stdlib-function>`** (e.g. `import rand`, v1's way of splicing in a small standard-library implementation at tokenize time) **doesn't work yet.** Declare the function `external` and bind a real host implementation instead.
 - **No built-in `CRGB`/`hsv()`/LED-panel support** -- always via `bindFunction()`/`bindVariable()`, see [CRGB and the hue function](#crgb-and-the-hue-function).
 

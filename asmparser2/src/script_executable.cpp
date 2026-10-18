@@ -101,6 +101,22 @@ bool ScriptExecutable::executeOnly(const char *name, const int32_t *args, int na
     return callFunction(&exe, name, args, nargs, result);
 }
 
+ScriptExecutable::~ScriptExecutable()
+{
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+    kill();
+#endif
+    freeExecutable(&exe);
+}
+
+void ScriptExecutable::free()
+{
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+    kill();
+#endif
+    freeExecutable(&exe);
+}
+
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
 namespace
 {
@@ -109,30 +125,95 @@ struct ExecuteAsTaskParams
     ScriptExecutable *self;
     const char *name;
 };
+} // namespace
 
-void executeAsTaskTrampoline(void *param)
+void ScriptExecutable::taskMain(void *param)
 {
     ExecuteAsTaskParams *p = (ExecuteAsTaskParams *)param;
     ScriptExecutable *self = p->self;
     const char *name = p->name;
     delete p;
     self->execute(name);
-    vTaskDelete(NULL);
+
+    // Returned on its own. Record it, then wait to be deleted by kill(),
+    // the next executeAsTask() or the destructor (see taskHandle). If
+    // kill() got here first, it is already deleting this task.
+    portENTER_CRITICAL(&self->taskLock);
+    self->taskState = ScriptState::stopped;
+    portEXIT_CRITICAL(&self->taskLock);
+    while (true)
+        vTaskSuspend(NULL);
 }
-} // namespace
 
 bool ScriptExecutable::executeAsTask(const char *name, uint32_t stackSize, UBaseType_t priority, BaseType_t core)
 {
+    kill(); // a previous task of this script, running, paused or finished
+    ScriptState before = taskState;
+
     ExecuteAsTaskParams *params = new ExecuteAsTaskParams{this, name};
-    TaskHandle_t handle = NULL;
-    BaseType_t created = xTaskCreatePinnedToCore(executeAsTaskTrampoline, name, stackSize, params,
-                                                  priority, &handle, core);
+    // Set before the task can run: xTaskCreatePinnedToCore() stores the
+    // handle before the task is made ready.
+    taskState = ScriptState::running;
+    BaseType_t created = xTaskCreatePinnedToCore(taskMain, name, stackSize, params,
+                                                  priority, &taskHandle, core);
     if (created != pdPASS)
     {
         delete params;
+        taskHandle = NULL;
+        taskState = before;
         return false;
     }
     return true;
+}
+
+bool ScriptExecutable::pause()
+{
+    TaskHandle_t task = NULL;
+    portENTER_CRITICAL(&taskLock);
+    if (taskState == ScriptState::running)
+    {
+        task = taskHandle;
+        taskState = ScriptState::paused;
+    }
+    portEXIT_CRITICAL(&taskLock);
+    if (task == NULL)
+        return false;
+    vTaskSuspend(task);
+    return true;
+}
+
+bool ScriptExecutable::restart()
+{
+    TaskHandle_t task = NULL;
+    portENTER_CRITICAL(&taskLock);
+    if (taskState == ScriptState::paused)
+    {
+        task = taskHandle;
+        taskState = ScriptState::running;
+    }
+    portEXIT_CRITICAL(&taskLock);
+    if (task == NULL)
+        return false;
+    vTaskResume(task);
+    return true;
+}
+
+bool ScriptExecutable::kill()
+{
+    portENTER_CRITICAL(&taskLock);
+    TaskHandle_t task = taskHandle;
+    bool active = taskState == ScriptState::running || taskState == ScriptState::paused;
+    taskHandle = NULL;
+    if (task != NULL)
+        taskState = ScriptState::stopped;
+    portEXIT_CRITICAL(&taskLock);
+    if (task == NULL)
+        return false;
+    // enterScript() (asm_execute.cpp) left its unwind point for a
+    // safe_mode error on the task's stack, which is going away.
+    exe.runtimeUnwind = NULL;
+    vTaskDelete(task); // does not return if the task is the caller
+    return active;
 }
 #endif
 
