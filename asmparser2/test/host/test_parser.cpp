@@ -1195,6 +1195,56 @@ static void runSwitchErrorsTest()
     }
 }
 
+// ffloat: an expression is computed in fixed point, and an all-constant
+// one is folded at compile time -- `ffloat m = 2.3/4 + 2;` is the single
+// constant 2.575 * 65536 = 168755 (0x00029333), with no float instruction.
+// (ffloat arithmetic itself is checked bit-exactly under QEMU against a C
+// model: test/fuzz/regressions/ffloat_*, test/effects mandelbrot_ffloat.)
+static void runFfloatConstantTest()
+{
+    const char *name = "ffloat: constant expression folded to one fixed-point literal";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        bool ok = compileForTest("ffloat g;\nvoid main()\n{\n   ffloat m = 2.3/4 + 2;\n   g = m;\n}\n");
+        if (ok && !textContains(header, ".bytes 4 33 93 02 00"))
+        {
+            printf("       no 168755 (0x00029333) literal in the header\n");
+            ok = false;
+        }
+        const char *floatOps[] = {"lsi ", "add.s", "mul.s", "___div", "float.s", "trunc.s"};
+        for (int i = 0; ok && i < (int)(sizeof(floatOps) / sizeof(floatOps[0])); i++)
+            if (textContains(content, floatOps[i]))
+            {
+                printf("       float instruction left: %s\n", floatOps[i]);
+                ok = false;
+            }
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 static void runVarargsOrderTest()
 {
     const char *name = "printfln: arguments loaded after calls nested in later arguments";
@@ -2568,6 +2618,7 @@ int main()
     runVarargsOrderTest();
     runCharPointerArgumentsTest();
     runSwitchErrorsTest();
+    runFfloatConstantTest();
     runGenerateBinaryTest(
         "generates executable binary: empty function",
         "void main(){}");

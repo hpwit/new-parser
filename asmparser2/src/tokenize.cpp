@@ -49,7 +49,8 @@ tokenType __keywordTypes[] = {
     TokenKeywordAs,
     TokenKeywordSwitch,
     TokenKeywordCase,
-    TokenKeywordDefault
+    TokenKeywordDefault,
+    TokenKeywordVarType // ffloat: a type, but after the others (see __ffloat__)
 
 };
 const char* keywordTypeNames[] = {
@@ -189,7 +190,8 @@ const char * varTypeEnumNames[] = {
     "__Args__",
     "__bool__",
     "__userDefined__",
-    "__unknown__"
+    "__unknown__",
+    "__ffloat__"
 #endif
 
 };
@@ -200,7 +202,7 @@ const char * keyword_array[] =
      "import", "from", "__ASM__",
      "define", "safe_mode", "_header_", "_content_", "and", "or", "continue",
      "break", "fabs", "abs", "save_reg",
-     "save_reg_abs", "struct","override","json","as","switch","case","default"};
+     "save_reg_abs", "struct","override","json","as","switch","case","default","ffloat"};
 
 bool _for_display = false;
 
@@ -408,7 +410,27 @@ varType _varTypes[] = {
      .sizes = {1},
      .size = 1,
      .total_size = 1},
-
+    // __userDefined__ and __unknown__ have no entry of their own (user
+    // types live in _userDefinedTypes); these two only keep the table
+    // indexed by varTypeEnum up to __ffloat__.
+    {._varType = __none__, .varName = (char *)"void", ._varSize = 0, .load = {}, .store = {}, .membersNames = {},
+     .starts = {}, .memberSize = {}, .types = {}, .sizes = {}, .size = 0, .total_size = 0},
+    {._varType = __none__, .varName = (char *)"void", ._varSize = 0, .load = {}, .store = {}, .membersNames = {},
+     .starts = {}, .memberSize = {}, .types = {}, .sizes = {}, .size = 0, .total_size = 0},
+    // Held like an int: same loads, stores and registers; only the
+    // arithmetic and the conversions differ (visitnode.cpp).
+    {._varType = __ffloat__,
+     .varName = (char *)"num",
+     ._varSize = 4,
+     .load = {l32i},
+     .store = {s32i},
+     .membersNames = {},
+     .starts = {},
+     .memberSize = {},
+     .types = {},
+     .sizes = {4},
+     .size = 1,
+     .total_size = 4},
 };
 
  Script::Script()
@@ -1295,6 +1317,8 @@ int tokenizer(Script *script, bool update, bool increae_line,
                 t.type = (int)__keywordTypes[isKeyword(vchar, endchar)];
                 if (isKeyword(vchar, endchar) < nb_typeVariables)
                     t._vartype = isKeyword(vchar, endchar);
+                if (isKeyword(vchar, endchar) == nb_keywords - 1) // "ffloat"
+                    t._vartype = __ffloat__;
                 if (t.getType() == TokenKeywordExternalVar)
                 {
                     t.type = (int)TokenExternal;

@@ -44,7 +44,8 @@ int main()
     for (int i = 0; i < NUM_EXT_SLOTS; i++)
     {
         uint32_t c = 0;
-        if (!strcmp(ext_name[i], "emit"))
+        // emitf(ffloat): the raw Q16.16 bits, compared exactly with a C model.
+        if (!strcmp(ext_name[i], "emit") || !strcmp(ext_name[i], "emitf"))
             c = (uint32_t)(uintptr_t)host_emit;
         else if (!strcmp(ext_name[i], "ext1"))
             c = (uint32_t)(uintptr_t)host_ext1;

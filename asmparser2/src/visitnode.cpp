@@ -166,8 +166,242 @@ static void emitSafeBoundsCheck(NodeToken *nd, int sizeReg)
 
 Text content, header, footer, *bufferText;
 void _visittypeNode(NodeToken *nd) {}
+// ---------------------------------------------------------------------
+// ffloat: 32-bit fixed point with FFLOAT_FRAC_BITS (16) fraction bits,
+// written like a float. An expression evaluated as ffloat (its context
+// type, as for every type here: an ffloat variable assigned to, an ffloat
+// argument or return value, a comparison or argument involving one) is
+// computed with integer instructions:
+//   - literals and constant subexpressions are converted at compile time
+//     (`2.3/4 + 2` is one constant, 2.575 * 65536);
+//   - + - % and comparisons are the integer instructions themselves;
+//   - * is the 64-bit product shifted right by 16 (mulsh/mull, then a
+//     funnel shift: ssai 16, src);
+//   - / calls ___ffdiv below, which divides without a 64-bit dividend;
+//   - conversions (translateType): int <-> ffloat are shifts (to int
+//     truncates toward zero, as from float), float <-> ffloat use
+//     trunc.s/float.s with their scale.
+// ---------------------------------------------------------------------
+bool addffloatdivision = false;
+
+// a2 / a3 as Q16.16, truncated toward zero; division by zero gives the
+// largest value of the result's sign. The integer part comes from quou,
+// the 16 fraction bits from binary long division of the remainder, so no
+// 64-bit dividend is needed.
+static const char *_ffdiv[] = {
+    "@___ffdiv(num|num):", "entry a1,32",
+    "xor a4,a2,a3", "abs a2,a2", "abs a3,a3",
+    "bnez a3,___ffdiv_nz",
+    "movi a2,-1", "srli a2,a2,1",
+    "bgez a4,___ffdiv_ret", "neg a2,a2", "j ___ffdiv_ret",
+    "___ffdiv_nz:",
+    "quou a5,a2,a3", "remu a6,a2,a3", "movi a7,16",
+    "___ffdiv_loop:",
+    "slli a5,a5,1",
+    "bltz a6,___ffdiv_big",
+    "slli a6,a6,1",
+    "bltu a6,a3,___ffdiv_next",
+    "___ffdiv_sub:",
+    "sub a6,a6,a3", "addi a5,a5,1", "j ___ffdiv_next",
+    "___ffdiv_big:",
+    "slli a6,a6,1", "j ___ffdiv_sub",
+    "___ffdiv_next:",
+    "addi a7,a7,-1", "bnez a7,___ffdiv_loop",
+    "mov a2,a5",
+    "bgez a4,___ffdiv_ret", "neg a2,a2",
+    "___ffdiv_ret:",
+    "retw.n"};
+static const int _ffdiv_size = sizeof(_ffdiv) / sizeof(_ffdiv[0]);
+
+// Appends ___ffdiv to `text` if the script divides ffloats. Called by
+// Parser::parse() once the optimizer has run: the routine is hand-written,
+// and Pass 4 copy propagation would otherwise rewrite its last lines
+// across a branch (`mov a2,a5 / bgez / neg a2,a2` lost the mov).
+void appendFfloatDivision(Text *text)
+{
+    if (!addffloatdivision)
+        return;
+    text->end();
+    for (int i = 0; i < _ffdiv_size; i++)
+        text->addAfter(_ffdiv[i]);
+    addffloatdivision = false;
+}
+
+static int32_t ffloatOf(double v)
+{
+    double f = v * (double)(1 << FFLOAT_FRAC_BITS);
+    f = f < 0 ? f - 0.5 : f + 0.5;
+    if (f >= 2147483647.0)
+        return 2147483647;
+    if (f <= -2147483648.0)
+        return (int32_t)0x80000000;
+    return (int32_t)f;
+}
+
+char *_numToBytes(uint32_t __num);
+
+// Loads v into register_numl.get() the way _visitnumberNode() loads an
+// integer literal (same side effects on register_numl and the sp stack).
+static void emitIntConstant(int32_t v)
+{
+    if (v >= -2048 && v <= 2047)
+    {
+        bufferText->addAfter(string_format(movi, register_numl.get(), v));
+    }
+    else
+    {
+        header.addAfter(string_format("@_%s_%d:", "local_var", local_var_num));
+        header.addAfter(_numToBytes((uint32_t)v));
+        bufferText->addAfter(string_format("l32r a%d,@_%s_%d", 9, "local_var", local_var_num));
+        bufferText->addAfter(string_format(l32i, register_numl.get(), 9, 0));
+        local_var_num++;
+    }
+    bufferText->sp.push(bufferText->get());
+    register_numl.decrease();
+}
+
+// The value of an expression made only of number literals, + - * / and
+// unary minus -- folded at compile time in an ffloat context.
+static bool constantValue(NodeToken *nd, double &v)
+{
+    switch (nd->_nodetype)
+    {
+    case numberNode:
+    {
+        if (nd->children_size() > 0)
+            return false;
+        const char *t = nd->getText();
+        if (strchr(t, 'x') != NULL || strchr(t, 'X') != NULL)
+            v = (double)strtoul(t, NULL, 16);
+        else
+            v = strtod(t, NULL);
+        return true;
+    }
+    case binOpNode:
+    {
+        double a, b;
+        if (nd->children_size() < 2 || !constantValue(nd->getChildPtr(0), a) || !constantValue(nd->getChildPtr(1), b))
+            return false;
+        switch (nd->type)
+        {
+        case TokenAddition:
+            v = a + b;
+            return true;
+        case TokenSubstraction:
+            v = a - b;
+            return true;
+        case TokenStar:
+            v = a * b;
+            return true;
+        case TokenSlash:
+            if (b == 0)
+                return false;
+            v = a / b;
+            return true;
+        default:
+            return false;
+        }
+    }
+    case unitaryOpNode:
+    {
+        double a;
+        if (nd->children_size() != 1 || !constantValue(nd->getChildPtr(0), a))
+            return false;
+        if (nd->type == TokenSubstraction)
+        {
+            v = -a;
+            return true;
+        }
+        if (nd->type == TokenAddition)
+        {
+            v = a;
+            return true;
+        }
+        return false;
+    }
+    case changeTypeNode:
+        if (strlen(nd->getText()) > 0 || nd->children_size() != 1) // a cast
+            return false;
+        return constantValue(nd->getChildPtr(0), v);
+    default:
+        return false;
+    }
+}
+
+static bool isValueNode(NodeToken *nd)
+{
+    switch (nd->_nodetype)
+    {
+    case globalVariableNode:
+    case localVariableNode:
+    case extGlobalVariableNode:
+    case callFunctionNode:
+    case extCallFunctionNode:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// A variable or call of type t somewhere in nd (literals don't count).
+static bool containsValueOfType(NodeToken *nd, varTypeEnum t)
+{
+    if (isValueNode(nd) && nd->_vartype == t)
+        return true;
+    for (int i = 0; i < nd->children_size(); i++)
+        if (containsValueOfType(nd->getChildPtr(i), t))
+            return true;
+    return false;
+}
+
+// Whether the expression under nd holds an ffloat value and no float one
+// (a float variable or call keeps it float, as before; a float literal
+// does not).
+static bool isFfloatExpression(NodeToken *nd)
+{
+    return containsValueOfType(nd, __ffloat__) && !containsValueOfType(nd, __float__);
+}
+
+// a = a * b in Q16.16: the 64-bit product's bits 16..47.
+static void emitFfloatMultiply(int a, int b)
+{
+    bufferText->addAfter(string_format("mulsh a9,a%d,a%d", a, b));
+    bufferText->addAfter(string_format("mull a%d,a%d,a%d", a, a, b));
+    bufferText->addAfter(string_format("ssai %d", FFLOAT_FRAC_BITS));
+    bufferText->addAfter(string_format("src a%d,a9,a%d", a, a));
+}
+
+// translateFfloatOnce: a local variable read used to convert its value to
+// the context type itself, and its consumer (operator, assignment, type
+// node, argument, return) converts it again. Harmless for float -- the
+// conversions are idempotent -- but not for ffloat (two shifts), so for
+// ffloat only the consumer converts, as for every other kind of value.
+
+// A comparison with an ffloat value on either side, and no float one, is
+// done in ffloat: both sides get that type (a literal on the other side
+// becomes a fixed-point constant). Called by every comparison path before
+// its own float-or-not decision.
+static void ffloatComparison(NodeToken *test)
+{
+    NodeToken *a = test->getChildPtr(0), *b = test->getChildPtr(1);
+    if ((isFfloatExpression(a) || isFfloatExpression(b)) && !containsValueOfType(a, __float__) &&
+        !containsValueOfType(b, __float__))
+    {
+        a->_vartype = __ffloat__;
+        b->_vartype = __ffloat__;
+    }
+}
+
 void _visitnumberNode(NodeToken *nd)
 {
+    if (globalType.get() == __ffloat__ && nd->children_size() == 0)
+    {
+        double v;
+        constantValue(nd, v);
+        emitIntConstant(ffloatOf(v));
+        nd->_vartype = __ffloat__;
+        return;
+    }
     // //printf("in number\n");
 
     // register_numl.duplicate();
@@ -316,6 +550,18 @@ void _visitnumberNode(NodeToken *nd)
 
 void _visitbinOpNode(NodeToken *nd)
 {
+    if (globalType.get() == __ffloat__)
+    {
+        double v;
+        if (constantValue(nd, v))
+        {
+            emitIntConstant(ffloatOf(v));
+            nd->_vartype = __ffloat__;
+            return;
+        }
+    }
+    // A shift amount is a plain count, whatever the expression's type.
+    bool intRightOperand = globalType.get() == __ffloat__ && (nd->type == TokenShiftLeft || nd->type == TokenShiftRight);
 
     // printf("bin operator\n");
     // register_numl.displaystack();
@@ -330,7 +576,11 @@ void _visitbinOpNode(NodeToken *nd)
     if (nd->type != TokenPower)
     {
         // if (nd->getChildPtr(2)->visitNode != NULL)
+        if (intRightOperand)
+            globalType.push(__int__);
         nd->getChildPtr(1)->visitNode();
+        if (intRightOperand)
+            globalType.pop();
     }
     else
     {
@@ -485,11 +735,29 @@ void _visitoperatorNode(NodeToken *nd)
         ff = true;
         nd->_vartype = __float__;
     }
+    if (globalType.get() == __ffloat__)
+        nd->_vartype = __ffloat__;
     // //printf("kk5\n");
     asmInstruction asmInstr;
-    if (nd->children_size() >= 2)
+    if (nd->children_size() >= 2 && !(globalType.get() == __ffloat__ && (nd->type == TokenShiftLeft || nd->type == TokenShiftRight)))
         translateType(globalType.get(), r, register_numr.get());
     translateType(globalType.get(), l, register_numl.get());
+    if (globalType.get() == __ffloat__ && nd->type == TokenStar)
+    {
+        emitFfloatMultiply(register_numl.get(), register_numr.get());
+        return;
+    }
+    if (globalType.get() == __ffloat__ && nd->type == TokenSlash)
+    {
+        // a9 first: the operands may be in a10/a11 themselves.
+        bufferText->addAfter(string_format(mov, 9, register_numr.get()));
+        bufferText->addAfter(string_format(mov, 10, register_numl.get()));
+        bufferText->addAfter(string_format(mov, 11, 9));
+        bufferText->addAfter("call8 @___ffdiv(num|num)");
+        bufferText->addAfter(string_format(mov, register_numl.get(), 10));
+        addffloatdivision = true;
+        return;
+    }
     switch (nd->type)
     {
     case TokenAddition:
@@ -663,6 +931,23 @@ void _visitoperatorNode(NodeToken *nd)
         bufferText->addAfter(string_format(asmInstr, register_numl.get(), register_numl.get(), register_numr.get()));
         break;
     case TokenPlusPlus:
+    case TokenMinusMinus:
+        if (globalType.get() == __ffloat__ && !nd->getChildPtr(0)->isPointer)
+        {
+            // +-1.0: 65536, beyond addi's range
+            bufferText->addAfter(string_format(movi, 9, 1));
+            bufferText->addAfter(string_format("slli a9,a9,%d", FFLOAT_FRAC_BITS));
+            bufferText->addAfter(string_format(nd->type == TokenPlusPlus ? add : sub, register_numl.get(), register_numl.get(), 9));
+            break;
+        }
+        if (nd->type == TokenMinusMinus)
+        {
+            if (nd->getChildPtr(0)->isPointer && nd->getChildPtr(0)->children_size() == 0)
+                bufferText->addAfter(string_format(addi, register_numl.get(), register_numl.get(), 0 - nd->getChildPtr(0)->getVarTypeObj()->total_size));
+            else
+                bufferText->addAfter(string_format(addi, register_numl.get(), register_numl.get(), -1));
+            break;
+        }
         if (nd->getChildPtr(0)->isPointer && nd->getChildPtr(0)->children_size() == 0)
         {
             bufferText->addAfter(string_format(addi, register_numl.get(), register_numl.get(), nd->getChildPtr(0)->getVarTypeObj()->total_size));
@@ -670,17 +955,6 @@ void _visitoperatorNode(NodeToken *nd)
         else
         {
             bufferText->addAfter(string_format(addi, register_numl.get(), register_numl.get(), 1));
-        }
-        // return;
-        break;
-    case TokenMinusMinus:
-        if (nd->getChildPtr(0)->isPointer && nd->getChildPtr(0)->children_size() == 0)
-        {
-            bufferText->addAfter(string_format(addi, register_numl.get(), register_numl.get(), 0 - nd->getChildPtr(0)->getVarTypeObj()->total_size));
-        }
-        else
-        {
-            bufferText->addAfter(string_format(addi, register_numl.get(), register_numl.get(), -1));
         }
         // return;
         break;
@@ -700,7 +974,19 @@ void _visitoperatorNode(NodeToken *nd)
         {
 
             sscanf(nd->getChildPtr(1)->getText(), "%d", &__num);
-            if (__num > 2)
+            if (globalType.get() == __ffloat__)
+            {
+                int x = register_numl.get();
+                if (__num > 2)
+                {
+                    bufferText->addAfter(string_format(mov, 10, x));
+                    for (int k = 1; k < __num; k++)
+                        emitFfloatMultiply(x, 10);
+                }
+                else
+                    emitFfloatMultiply(x, x);
+            }
+            else if (__num > 2)
             {
                 if (ff)
                 {
@@ -849,10 +1135,12 @@ void _visitglobalVariableNode(NodeToken *nd)
             sscanf(tile[0], "@%d", &nb);
             // r_size = stringToInt((char *)tile[1].c_str());
         }
+        // An index is an int whatever the expression around it (ffloat
+        // or float would scale or convert it).
         if (nb > 1)
-            emitFlatIndex(nd, tile, false);
+            emitFlatIndex(nd, tile, true);
         else
-            emitSingleIndex(nd, false);
+            emitSingleIndex(nd, true);
         tile.empty();
         tile.clear();
     }
@@ -1008,7 +1296,8 @@ void _visitlocalVariableNode(NodeToken *nd)
                 asmInstruction asmInstr = v->load[0];
                 // bufferText->addAfter(string_format("%s %s%d,%s%d,%d", asmInstructionsName[asmInstr].c_str(), getRegType(asmInstr, 0).c_str(), register_numl.get(), getRegType(asmInstr, 1).c_str(), register_numl.get(), start/1000));
                 bufferText->addAfter(string_format(asmInstr, register_numl.get(), 2, start / 1000));
-                translateType(globalType.get(), v->_varType, register_numl.get());
+                if (globalType.get() != __ffloat__ && v->_varType != __ffloat__) // see translateFfloatOnce
+                    translateType(globalType.get(), v->_varType, register_numl.get());
                 // bufferText->addAfter(string_format("l16si a%d,a%d,%d", register_numl.get(),register_numl.get(),start/1000));
             }
         }
@@ -1119,7 +1408,8 @@ void _visitlocalVariableNode(NodeToken *nd)
                 // bufferText->addAfter(string_format("%s %s%d,%s%d,%d", v->load[i].c_str(), v->reg_name.c_str(), register_numl.get(), v->reg_name.c_str(), regnum, start));
                 asmInstruction asmInstr = v->load[i];
                 bufferText->addAfter(string_format(asmInstr, register_numl.get(), point_regnum, start));
-                translateType(globalType.get(), v->_varType, register_numl.get());
+                if (globalType.get() != __ffloat__ && v->_varType != __ffloat__) // see translateFfloatOnce
+                    translateType(globalType.get(), v->_varType, register_numl.get());
                 // register_numl--;
                 start += v->sizes[i];
                 bufferText->sp.push(bufferText->get());
@@ -1139,7 +1429,8 @@ void _visitlocalVariableNode(NodeToken *nd)
             asmInstruction asmInstr = v->load[i];
             bufferText->addAfter(string_format(asmInstr, register_numl.get(), regnum, start));
             // printf("jj2 :%s\n",string_format("%s %s%d,%s%d,%d", asmInstructionsName[asmInstr].c_str(), getRegType(asmInstr, 0).c_str(), register_numl.get(), getRegType(asmInstr, 1).c_str(), regnum, start).c_str());
-            translateType(globalType.get(), v->_varType, register_numl.get());
+            if (globalType.get() != __ffloat__ && v->_varType != __ffloat__) // see translateFfloatOnce
+                translateType(globalType.get(), v->_varType, register_numl.get());
             // printf("jj3\n");
             // register_numl--;
             start += v->sizes[i];
@@ -1396,6 +1687,8 @@ void _visitprogramNode(NodeToken *nd)
         footer.begin();
         footer.addBefore(string_format(arrobase_label, "_footer"));
     }
+    if (addffloatdivision)
+        header.addAfter(" .global @___ffdiv(num|num)"); // its code: appendFfloatDivision()
     if (addfloatdivision)
     {
         header.addAfter(" .global @___div(d|d)");
@@ -1623,6 +1916,10 @@ static int valBranchImmediate(int val)
 // (parseExpr()'s own operator loop never ran, so nothing else got added).
 static bool isLiteralIntOperand(NodeToken *changeTypeWrapper)
 {
+    // In an ffloat comparison the literal is a fixed-point constant, not
+    // the raw value an immediate branch would compare against.
+    if (changeTypeWrapper->_vartype == __ffloat__)
+        return false;
     return changeTypeWrapper->children_size() == 1 &&
            changeTypeWrapper->getChildPtr(0)->_nodetype == numberNode &&
            changeTypeWrapper->getChildPtr(0)->_vartype != __float__;
@@ -1660,6 +1957,7 @@ void _visitcomparatorNode(NodeToken *nd)
     nd->_total_size = nd->parent->_total_size;
 
     nd->addTargetText(nd->parent->getTargetText());
+    ffloatComparison(nd);
     if (nd->getChildPtr(0)->_vartype == __float__)
         nd->getChildPtr(1)->_vartype = __float__;
     if (nd->getChildPtr(1)->_vartype == __float__)
@@ -2262,6 +2560,7 @@ void _visitforConditionRotated(NodeToken *test, char *bodyLabel, int distance)
 {
     int numl = register_numl.get();
 
+    ffloatComparison(test);
     if (test->getChildPtr(0)->_vartype == __float__)
         test->getChildPtr(1)->_vartype = __float__;
     if (test->getChildPtr(1)->_vartype == __float__)
@@ -2626,7 +2925,7 @@ void _visitextGlobalVariableNode(NodeToken *nd)
                     // r_size = stringToInt((char *)tile[1].c_str());
                 }
                 if (nb > 1)
-                    emitFlatIndex(nd, tile, false);
+                    emitFlatIndex(nd, tile, true);
                 else if (nd->getChildPtr(0)->getVarTypeObj() != NULL)
                     translateType(__int__, nd->getChildPtr(0)->getVarTypeObj()->_varType, register_numl.get());
                 tile.empty();
@@ -3315,9 +3614,9 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
             // r_size = stringToInt((char *)tile[1].c_str());
         }
         if (nb > 1)
-            emitFlatIndex(nd, tile, false);
+            emitFlatIndex(nd, tile, true);
         else
-            emitSingleIndex(nd, false);
+            emitSingleIndex(nd, true);
         tile.empty();
         tile.clear();
     }
@@ -3613,6 +3912,16 @@ void _visitstringNode(NodeToken *nd)
 
 void _visitchangeTypeNode(NodeToken *nd)
 {
+    // Its type was inferred while parsing from whatever came last (a float
+    // literal made `ffloat m = 2.3/4 + 2;` a float computation, an int
+    // literal after an ffloat variable made `m + 1` an int). Computed as
+    // ffloat instead when it holds no float variable or call and either
+    // its context is ffloat (an ffloat assigned to, passed, returned) or
+    // it holds an ffloat value. Not for a cast: its type is the one
+    // written.
+    if (strlen(nd->getText()) == 0 && nd->_vartype != __ffloat__ && !containsValueOfType(nd, __float__) &&
+        (globalType.get() == __ffloat__ || containsValueOfType(nd, __ffloat__)))
+        nd->_vartype = __ffloat__;
 
     globalType.push(nd->getVarTypeObj()->_varType);
     for (int i = 0; i < nd->children_size(); i++)
@@ -3722,6 +4031,7 @@ void _visittestNode(NodeToken *nd)
 
     int numl = register_numl.get();
 
+    ffloatComparison(nd);
     if (nd->getChildPtr(0)->_vartype == __float__)
         nd->getChildPtr(1)->_vartype = __float__;
     if (nd->getChildPtr(1)->_vartype == __float__)
@@ -3959,6 +4269,40 @@ void translateType(varTypeEnum to, varTypeEnum from, int regnum)
     //       to=__int__;
     if (to == __none__ or from == to)
         return;
+    if (to == __ffloat__ || from == __ffloat__)
+    {
+        // The FP conversions' scale is 4 bits (at most 2^15), so the 16th
+        // bit goes through a 1-bit shift -- the lowest fraction bit is
+        // lost converting from/to float at run time (literals are exact).
+        bool fromInt = from != __float__ && from != __none__ && from != __void__ && from != __CRGB__ &&
+                       from != __CRGBW__ && from != __Args__;
+        bool toInt = to != __float__ && to != __void__ && to != __CRGB__ && to != __CRGBW__ && to != __Args__;
+        if (to == __ffloat__ && from == __float__)
+        {
+            bufferText->addAfterNoDouble(string_format("trunc.s a%d,f%d,%d", regnum, regnum, FFLOAT_FRAC_BITS - 1));
+            bufferText->addAfterNoDouble(string_format("slli a%d,a%d,1", regnum, regnum));
+        }
+        else if (to == __ffloat__ && fromInt)
+        {
+            bufferText->addAfterNoDouble(string_format("slli a%d,a%d,%d", regnum, regnum, FFLOAT_FRAC_BITS));
+        }
+        else if (from == __ffloat__ && to == __float__)
+        {
+            bufferText->addAfterNoDouble(string_format("srai a9,a%d,1", regnum));
+            bufferText->addAfterNoDouble(string_format("float.s f%d,a9,%d", regnum, FFLOAT_FRAC_BITS - 1));
+        }
+        else if (from == __ffloat__ && toInt)
+        {
+            // Toward zero, as from float: add 2^16-1 first when negative.
+            // (srli takes at most 15: two shifts make the 16.)
+            bufferText->addAfterNoDouble(string_format("srai a9,a%d,31", regnum));
+            bufferText->addAfterNoDouble(string_format("srli a9,a9,%d", 32 - FFLOAT_FRAC_BITS - 1));
+            bufferText->addAfterNoDouble(string_format("srli a9,a9,%d", 1));
+            bufferText->addAfterNoDouble(string_format("add a%d,a%d,a9", regnum, regnum));
+            bufferText->addAfterNoDouble(string_format("srai a%d,a%d,%d", regnum, regnum, FFLOAT_FRAC_BITS));
+        }
+        return;
+    }
     switch (to)
     {
     case __float__:

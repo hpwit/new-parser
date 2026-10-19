@@ -149,6 +149,7 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     PARSER_LOG("optimize speed")
     optimizeSpeed(&content);
     removeBlankLines(&content);
+    appendFfloatDivision(&content); // hand-written: after the optimizer
     PARSER_LOG("preserve across calls")
     preserveAcrossCalls(&content);
     // Global initializers run as one more function, @__footer.
@@ -989,7 +990,7 @@ void Parser::parseFactor()
             {
                 if (_castType == __float__ || _castType == __uint32_t__ || _castType == __int__ ||
                     _castType == __uint8_t__ || _castType == __uint16_t__ || _castType == __s_int__ ||
-                    _castType == __bool__)
+                    _castType == __bool__ || _castType == __ffloat__)
                 {
                     change_type.back()->_vartype = _castType;
                 }
@@ -1042,7 +1043,7 @@ void Parser::parseFactor()
                 if (tmp_sav->_vartype == __float__ || tmp_sav->_vartype == __uint32_t__ ||
                     tmp_sav->_vartype == __int__ || tmp_sav->_vartype == __uint8_t__ ||
                     tmp_sav->_vartype == __uint16_t__ || tmp_sav->_vartype == __s_int__ ||
-                    tmp_sav->_vartype == __bool__ ||
+                    tmp_sav->_vartype == __bool__ || tmp_sav->_vartype == __ffloat__ ||
                     // A char * (a string) as an argument: without its type
                     // the call's signature said "none*", so no function
                     // taking a char * matched (only a string literal, which
@@ -1417,7 +1418,7 @@ void Parser::parseFunctionCall()
             if (search_result->getChildPtr(0)->_vartype == __float__ || search_result->getChildPtr(0)->_vartype == __uint32_t__ ||
                 search_result->getChildPtr(0)->_vartype == __int__ || search_result->getChildPtr(0)->_vartype == __uint8_t__ ||
                 search_result->getChildPtr(0)->_vartype == __uint16_t__ || search_result->getChildPtr(0)->_vartype == __s_int__ ||
-                search_result->getChildPtr(0)->_vartype == __bool__ ||
+                search_result->getChildPtr(0)->_vartype == __bool__ || search_result->getChildPtr(0)->_vartype == __ffloat__ ||
                 // A function returning char *, as for a char * variable in
                 // parseFactor().
                 (search_result->getChildPtr(0)->_vartype == __char__ && change_type.back()->isPointer))

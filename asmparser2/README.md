@@ -519,9 +519,32 @@ s_int     : 16-bit signed
 uint16_t
 uint32_t
 float
+ffloat    : 32-bit fixed point, written like a float -- see below
 CRGB
 CRGBW
 ```
+
+## Fixed point: `ffloat`
+
+`ffloat` is a number with 16 integer bits and 16 fraction bits -- about ±32768, in steps of 1/65536 (0.000015) -- that you write exactly like a float. The compiler turns the arithmetic into integer instructions:
+
+```c
+ffloat m = 2.3 / 4 + 2;     // one constant: 2.575, computed at compile time
+ffloat k = m * 0.5;         // a fixed-point multiply, no float instruction
+if (k > 1.25)               // an integer comparison against 1.25 * 65536
+   k = k / 3;
+int i = m;                  // 2 (toward zero, as from a float)
+```
+
+- Literals and all-constant subexpressions become fixed-point constants at compile time (`2.3 / 4 + 2` is the single value 168755).
+- `+`, `-`, `%`, the comparisons, `++`/`--` (by 1.0) and `abs` are plain integer instructions.
+- `*` takes the 64-bit product and shifts it back by 16 (`mulsh`/`mull`, then `ssai`/`src`); `/` calls a small fixed-point division routine added to the script only if it divides (truncated toward zero; dividing by zero gives the largest value of the result's sign).
+- Conversions: an `int` meeting an `ffloat` is shifted in; an `ffloat` assigned to an `int` truncates toward zero; to and from `float` they convert with `float.s`/`trunc.s`, keeping 15 of the 16 fraction bits.
+- An expression is computed as `ffloat` when that is its type -- an `ffloat` variable assigned to, an `ffloat` argument or return value -- or when it holds an `ffloat` value and no `float` variable or call. As with every type in this language, the type of the result decides how the arithmetic is done: `ffloat r = 7 / 2;` is 3.5, and `int k = m * 2;` converts `m` to an int first.
+- Results outside ±32768 wrap around, like an int overflowing.
+- `printfln` passes an `ffloat` as its raw 32-bit value; print `(int)(x * 100)` or convert it to a `float` first.
+
+See [MandelbrotFfloat](examples/MandelbrotFfloat): the float Mandelbrot with `float` replaced by `ffloat`, next to [MandelbrotFixedPoint](examples/MandelbrotFixedPoint), the same picture with the scaling done by hand. ffloat's picture differs from the float one on 107 of 12,288 pixels, the hand-written 12-bit one on 341.
 
 ## Arrays and multidimensional arrays
 
@@ -799,6 +822,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `MultiEffectController` | A real, several-hundred-line multi-effect script actually compiled and run, every host binding real. |
 | `GameOfLife` | Conway's Game of Life on a 2D `external CRGB leds[h, w]` matrix -- `hsv()`-coloured generations, `CRGB(0,0,0)` for dead cells, a small self-contained automaton. |
 | `ProceduralEffects` | Five separately compiled procedural effects for a 128x96 matrix -- a table-driven integer plasma, a fire simulation, an animated Voronoi pattern, a six-fold mandala and spinning gradient squares -- run in turn from `loop()`. [Frames of each](examples/ProceduralEffects/README.md). |
+| `MandelbrotFfloat` | The float Mandelbrot with `float` replaced by `ffloat`: the compiler does the fixed-point arithmetic. |
 | `MandelbrotFixedPoint` | The Mandelbrot set on a 128x96 matrix computed with integers only -- the classic float script rewritten in 12-bit fixed-point arithmetic, with the conversion rules explained. |
 | `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently, and `pause()`/`restart()`/`kill()`/`state()` on that task. ESP32-only. |
 | `PinInterrupt` | A GPIO interrupt calling back into the running script: `pinInterrupt(_handle_, "increase", 23)`. ESP32-only. |

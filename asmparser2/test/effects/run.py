@@ -28,6 +28,7 @@ BUILD = os.path.join(HERE, "build")
 
 PROCEDURAL = os.path.join(REPO, "examples", "ProceduralEffects", "ProceduralEffects.ino")
 MANDELBROT = os.path.join(REPO, "examples", "MandelbrotFixedPoint", "MandelbrotFixedPoint.ino")
+MANDELBROT_FFLOAT = os.path.join(REPO, "examples", "MandelbrotFfloat", "MandelbrotFfloat.ino")
 
 # name: (where the script comes from, ms per frame, dump every n frames)
 EFFECTS = {
@@ -37,6 +38,7 @@ EFFECTS = {
     "mandala": ((PROCEDURAL, "mandalaScript"), 400, 10),
     "squares": ((PROCEDURAL, "squaresScript"), 400, 10),
     "mandelbrot": ((MANDELBROT, "script"), 100, 40),
+    "mandelbrot_ffloat": ((MANDELBROT_FFLOAT, "script"), 100, 40),
     "fixes": (os.path.join(HERE, "scripts", "fixes.sc"), 100, 40),
 }
 
@@ -50,7 +52,7 @@ def script_text(source):
     if not m:
         sys.exit("script %s not found in %s" % (name, path))
     text = m.group(1)
-    if name == "script" and path == MANDELBROT:
+    if name == "script" and path in (MANDELBROT, MANDELBROT_FFLOAT):
         # The sketch redraws forever; one frame is enough to compare.
         text = text.replace("while (true)", "for (int frame = 0; frame < 1; frame++)")
     return text

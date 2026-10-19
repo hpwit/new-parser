@@ -1,7 +1,7 @@
 #pragma once
 #ifndef __PARSER_ENUM__
 #define __PARSER_ENUM__
-#define nb_keywords 42
+#define nb_keywords 43
 #define nb_typeVariables 13
 enum asmInstruction
 {
@@ -92,8 +92,13 @@ enum varTypeEnum
   __Args__,
   __bool__,
   __userDefined__,
-  __unknown__
+  __unknown__,
+  // 32-bit fixed point, FFLOAT_FRAC_BITS fraction bits: written like a
+  // float, computed with integer instructions (visitnode.cpp). Last, so
+  // that no other type's value -- nor EOF_VARTYPE (14) -- moves.
+  __ffloat__
 };
+#define FFLOAT_FRAC_BITS 16
 
 enum tokenType
 {

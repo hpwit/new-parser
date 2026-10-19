@@ -226,6 +226,16 @@ uint32_t bin_beqz(uint32_t *values)
 {
     return 0x16 + (((values[0] << 8) & 0xF00));
 }
+// Same BRI12 form as beqz/bnez (m field 2 and 3), checked against
+// xtensa-esp32-elf-as.
+uint32_t bin_bltz(uint32_t *values)
+{
+    return 0x96 + (((values[0] << 8) & 0xF00));
+}
+uint32_t bin_bgez(uint32_t *values)
+{
+    return 0xd6 + (((values[0] << 8) & 0xF00));
+}
 uint32_t jump_bnez(uint32_t value, uint32_t current_address, uint32_t destination_address)
 {
     uint32_t dif = destination_address - current_address - 4;
@@ -315,6 +325,38 @@ uint32_t bin_slli(uint32_t *values)
 {
     return ((((32 - values[2]) << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) +
            (((values[0]) << 12) & 0x0F000) + 0x10000 + ((((32 - values[2]) << 16) & 0x100000));
+}
+
+// Shifts by a constant, the funnel shift, xor and the high half of a
+// signed product -- used by ffloat arithmetic (visitnode.cpp). Encodings
+// checked against xtensa-esp32-elf-as.
+operandeType op_srai[3] = {operandeType::registers, operandeType::registers, operandeType::l0_31};
+uint32_t bin_srai(uint32_t *values) // srai ar, at, sa
+{
+    return 0x210000 + ((values[2] & 0x10) << 16) + ((values[0] << 12) & 0xF000) + ((values[2] << 8) & 0xF00) +
+           ((values[1] << 4) & 0xF0);
+}
+operandeType op_srli[3] = {operandeType::registers, operandeType::registers, operandeType::l0_15};
+uint32_t bin_srli(uint32_t *values) // srli ar, at, sa
+{
+    return 0x410000 + ((values[0] << 12) & 0xF000) + ((values[2] << 8) & 0xF00) + ((values[1] << 4) & 0xF0);
+}
+operandeType op_ssai[1] = {operandeType::l0_31};
+uint32_t bin_ssai(uint32_t *values) // ssai sa
+{
+    return 0x404000 + ((values[0] << 8) & 0xF00) + ((values[0] & 0x10) << 0);
+}
+uint32_t bin_src(uint32_t *values) // src ar, as, at
+{
+    return 0x810000 + ((values[0] << 12) & 0xF000) + ((values[1] << 8) & 0xF00) + ((values[2] << 4) & 0xF0);
+}
+uint32_t bin_xor(uint32_t *values)
+{
+    return 0x300000 + ((values[0] << 12) & 0xF000) + ((values[1] << 8) & 0xF00) + ((values[2] << 4) & 0xF0);
+}
+uint32_t bin_mulsh(uint32_t *values)
+{
+    return 0xb20000 + ((values[0] << 12) & 0xF000) + ((values[1] << 8) & 0xF00) + ((values[2] << 4) & 0xF0);
 }
 
 operandeType op_movi[2] = {operandeType::registers, operandeType::lm2048_2047};

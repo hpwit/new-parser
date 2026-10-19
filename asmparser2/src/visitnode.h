@@ -45,6 +45,7 @@ void _visitimportNode(NodeToken *nd);
 void _visitcontinueNode(NodeToken *nd);
 void _visitbreakNode(NodeToken *nd);
 void _visitswitchNode(NodeToken *nd);
+void appendFfloatDivision(Text *text);
 void _visitcaseNode(NodeToken *nd);
 void _visittestNode(NodeToken *nd);
 void _visitternaryIfNode(NodeToken *nd);

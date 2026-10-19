@@ -122,6 +122,16 @@ static bool writtenRegister(const char *line, char *out, size_t n);
 static void blankCopyIfDead(Text *text, int defPos, const char *reg, int usePos)
 {
     char line[160];
+    // Every read of aY between the copy and this use that Pass 4 knows how
+    // to rewrite has been rewritten already; one still reading aY there is
+    // an instruction it doesn't rewrite (srai/slli/mulsh/src... in ffloat
+    // arithmetic), which still needs the copy.
+    for (int j = defPos + 1; j < usePos; j++)
+    {
+        trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+        if (regRole(line, reg) == REG_READ)
+            return;
+    }
     // The line being rewritten may itself overwrite aY
     // (`mull a15,a15,a11` -> `mull a15,a3,a11`): the copy is dead right
     // there, whatever reads a15 afterwards reads the new value.
@@ -941,7 +951,7 @@ static bool writesFirstOperandOnly(const char *op)
     static const char *ops[] = {
         "movi", "mov", "movr", "fill", "pop", "mov.s", "l32i", "l16i", "l16ui", "l16si", "l8ui", "lsi", "l32r", "movExt",
         "add", "addi", "sub", "mull", "quos", "quou", "remu", "rems", "and", "or", "xor", "extui",
-        "slli", "srli", "srai", "addx2", "addx4", "addx8", "subx8", "neg", "neg.s", "abs.s",
+        "slli", "srli", "srai", "addx2", "addx4", "addx8", "subx8", "neg", "neg.s", "abs.s", "abs", "mulsh", "src",
         "float.s", "ufloat.s", "trunc.s", "wfr", "rfr", "add.s", "sub.s", "mul.s", "const.s",
         "nexp01.s", "div0.s"};
     for (size_t i = 0; i < sizeof(ops) / sizeof(ops[0]); i++)

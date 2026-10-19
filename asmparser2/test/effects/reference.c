@@ -243,11 +243,44 @@ static void mandel(void)
     }
     target_show();
 }
+/* examples/MandelbrotFfloat: the same picture computed in ffloat (Q16.16),
+   modelled operation by operation as the compiler does it: int operands
+   shifted in, products (int64 >> 16), divisions (int64 << 16, truncated),
+   literals rounded to the nearest 1/65536. */
+typedef int32_t ffl;
+static ffl ff_lit(double v) { double f = v * 65536.0; f = f < 0 ? f - 0.5 : f + 0.5; return (ffl)f; }
+static ffl ff_int(int x) { return (ffl)((uint32_t)x << 16); }
+static ffl ff_mul(ffl a, ffl b) { return (ffl)(((int64_t)a * b) >> 16); }
+static ffl ff_div(ffl a, ffl b) { return (ffl)(((int64_t)a << 16) / b); }
+static void mandel_ffloat(void)
+{
+    for (int i = 0; i < width; i++) for (int j = 0; j < height; j++)
+    {
+        ffl x0 = ff_div(ff_mul(ff_int(i), ff_lit(2.7)), ff_lit(width)) - ff_lit(2.1);
+        ffl y0 = ff_div(ff_mul(ff_int(j), ff_lit(2.2)), ff_lit(height)) - ff_lit(1.1);
+        ffl x = 0, y = 0, x2 = 0, y2 = 0;
+        int iter = 0;
+        while (iter < 50 && x2 + y2 <= ff_lit(4))
+        {
+            ffl fX = x2 - y2 + x0;
+            y = ff_mul(ff_mul(ff_lit(2), x), y) + y0;
+            x = fX;
+            x2 = ff_mul(x, x);
+            y2 = ff_mul(y, y);
+            iter++;
+        }
+        CRGB c = {0, 0, 0};
+        if (iter < 50) c = target_hsv(iter * 255 / 50, 255, 255);
+        leds[j * width + i] = c;
+    }
+    target_show();
+}
 int main(int argc, char **argv)
 {
     leds = buf;
     const char *w = argc > 1 ? argv[1] : "";
     if (!strcmp(w, "mandelbrot")) mandel();
+    else if (!strcmp(w, "mandelbrot_ffloat")) mandel_ffloat();
     else if (!strcmp(w, "squares")) squares();
     else if (!strcmp(w, "mandala")) mandala();
     else if (!strcmp(w, "voronoi")) voronoi();

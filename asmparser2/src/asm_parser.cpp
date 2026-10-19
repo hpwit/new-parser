@@ -423,6 +423,27 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         ps.calculateOfssetJump = jump_bnez;
         return ps;
     }
+    if (strcmp(op, "bltz") == 0 || strcmp(op, "bgez") == 0)
+    {
+        result_parse_line ps = parseOperandes(sp.operandes, 2, op_bnez, 3, op[1] == 'l' ? bin_bltz : bin_bgez);
+        ps.op = opCodeType::jump;
+        ps.calculateOfssetJump = jump_bnez;
+        return ps;
+    }
+    if (strcmp(op, "slli") == 0)
+        return parseOperandes(sp.operandes, 3, op_slli, 3, bin_slli);
+    if (strcmp(op, "srai") == 0)
+        return parseOperandes(sp.operandes, 3, op_srai, 3, bin_srai);
+    if (strcmp(op, "srli") == 0)
+        return parseOperandes(sp.operandes, 3, op_srli, 3, bin_srli);
+    if (strcmp(op, "ssai") == 0)
+        return parseOperandes(sp.operandes, 1, op_ssai, 3, bin_ssai);
+    if (strcmp(op, "src") == 0)
+        return parseOperandes(sp.operandes, 3, op_and, 3, bin_src);
+    if (strcmp(op, "xor") == 0)
+        return parseOperandes(sp.operandes, 3, op_and, 3, bin_xor);
+    if (strcmp(op, "mulsh") == 0)
+        return parseOperandes(sp.operandes, 3, op_and, 3, bin_mulsh);
     if (strcmp(op, "j") == 0)
     {
         result_parse_line ps = parseOperandes(sp.operandes, 1, op_j, 3, bin_j);
@@ -1224,7 +1245,7 @@ static const BranchForm kBranchForms[] = {
     {"blt", "bge", 8}, {"bge", "blt", 8}, {"bltu", "bgeu", 8}, {"bgeu", "bltu", 8},
     {"beq", "bne", 8}, {"bne", "beq", 8}, {"blti", "bgei", 8}, {"bgei", "blti", 8},
     {"beqi", "bnei", 8}, {"bnei", "beqi", 8}, {"bt", "bf", 8}, {"bf", "bt", 8},
-    {"beqz", "bnez", 12}, {"bnez", "beqz", 12}};
+    {"beqz", "bnez", 12}, {"bnez", "beqz", 12}, {"bltz", "bgez", 12}, {"bgez", "bltz", 12}};
 
 static const BranchForm *branchFormOf(const char *line)
 {
