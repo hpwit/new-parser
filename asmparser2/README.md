@@ -637,6 +637,26 @@ Like any normal language:
 - loops (`while`, `for`)
 - `break`, `continue`
 - testing: `if`/`else`, the ternary `cond ? a : b`
+- `switch`/`case`/`default`, as in C: the value is evaluated once, execution jumps to the matching `case` (else to `default`, else past the end) and runs on through the following cases until a `break`. `break` leaves the switch; `continue` still goes to the enclosing loop. Case values are integer constants (a number, negative, hex, or a `#define`d constant); the value can be any integer expression, not a float.
+
+  ```c
+  switch (mode)
+  {
+  case MODE_FIRE:
+     drawFire();
+     break;
+  case 1:
+  case 2:            // either 1 or 2
+     drawStars(mode);
+     break;
+  default:
+  {
+     int t = millis() / 100;   // a braced body can declare its own variables
+     drawPlasma(t);
+  }
+  }
+  ```
+- blocks on their own, `{ ... }`, with their own local variables
 - `++`/`--` for integers and pointers
 - `+=`, `-=`, `/=`, `*=`
 - pointers
@@ -783,6 +803,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently, and `pause()`/`restart()`/`kill()`/`state()` on that task. ESP32-only. |
 | `PinInterrupt` | A GPIO interrupt calling back into the running script: `pinInterrupt(_handle_, "increase", 23)`. ESP32-only. |
 | `DirectGPIO` | Setting up and driving pins from a script by writing the GPIO and IO_MUX registers directly, bound as variables; one sketch for ESP32 and ESP32-S3. |
+| `SwitchCase` | `switch`/`case`/`break`/`default`: a state machine, cases sharing a body, a deliberate fall-through, and `break` vs `continue` inside a loop. |
 | `StringFunctions` | `char *` in and out of functions: script and host functions returning strings, `char *` parameters, `%s`. |
 | `MemoryAllocator` | `alloc()`/`free()`/`writeInt()`/`readInt()`, the built-in dynamic-memory design covering this DSL's lack of pointer-dereference syntax. |
 | `SafeMode` | `safe_mode` bounds checking: an out-of-range write stops the script, reports which array and index, and `execute()` returns false. |

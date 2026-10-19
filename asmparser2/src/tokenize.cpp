@@ -46,7 +46,10 @@ tokenType __keywordTypes[] = {
     TokenKeywordStruct,
     TokenOverride,
     TokenKeywordJson,
-    TokenKeywordAs
+    TokenKeywordAs,
+    TokenKeywordSwitch,
+    TokenKeywordCase,
+    TokenKeywordDefault
 
 };
 const char* keywordTypeNames[] = {
@@ -163,7 +166,10 @@ const char * tokenNames[] = {
     "TokenSlashEqual",
     "TokenOverride",
     "TokenKeywordJson",
-    "TokenKeywordAs"
+    "TokenKeywordAs",
+    "TokenKeywordSwitch",
+    "TokenKeywordCase",
+    "TokenKeywordDefault"
 
 #endif
 };
@@ -194,7 +200,7 @@ const char * keyword_array[] =
      "import", "from", "__ASM__",
      "define", "safe_mode", "_header_", "_content_", "and", "or", "continue",
      "break", "fabs", "abs", "save_reg",
-     "save_reg_abs", "struct","override","json","as"};
+     "save_reg_abs", "struct","override","json","as","switch","case","default"};
 
 bool _for_display = false;
 

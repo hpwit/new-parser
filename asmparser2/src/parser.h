@@ -45,7 +45,7 @@ public:
     Tokens *_tks;
 };
 
-char * findForWhile();
+char * findForWhile(bool forBreak = false);
 NodeToken createNodeLocalVariableForCreation(NodeToken var, NodeToken nd);
 void createNodeVariable(Token *_var, bool isStore);
 varTypeEnum finduint32_t(NodeToken *nd);

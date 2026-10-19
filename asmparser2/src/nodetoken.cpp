@@ -79,6 +79,8 @@ const char *nodeTypeNames[] =
 		"defInputArgumentsNode",
 		"declarationFunctionNode",
 		"jsonBindingNode",
+		"switchNode",
+		"caseNode",
 		"UnknownNode"
 
 #endif
@@ -727,6 +729,12 @@ void NodeToken::visitNode()
 		break;
 	case jsonBindingNode:
 		_visitjsonBindingNode(this);
+		break;
+	case switchNode:
+		_visitswitchNode(this);
+		break;
+	case caseNode:
+		_visitcaseNode(this);
 		break;
 	case UnknownNode:
 		_visitUnknownNode(this);

@@ -1483,7 +1483,7 @@ void Parser::parseStatement()
     }
     else if (Match(TokenKeywordBreak))
     {
-        char *c = findForWhile();
+        char *c = findForWhile(true);
         if (c == NULL)
             RETURN_ERROR(noWhileorForFound)
         next();
@@ -1785,6 +1785,126 @@ void Parser::parseStatement()
         current_cntx = current_cntx->parent;
         current_node = current_node->parent;
 
+        return;
+    }
+    else if (Match(TokenOpenCurlyBracket))
+    {
+        // A block on its own, `{ ... }`, as in C -- e.g. a case body with
+        // its own local variables: `case 1: { int t = f(); x = t; break; }`.
+        parseBlockStatement();
+        RETURN_IF_ERROR
+        Error.error = 0;
+        return;
+    }
+    else if (Match(TokenKeywordSwitch))
+    {
+        // switch (value) { case K: ... default: ... } -- as in C: the value
+        // is evaluated once, execution jumps to the matching case (or to
+        // default, or past the end) and runs on from there through the
+        // following cases until a break. See _visitswitchNode().
+        sav_t.push_back(*current());
+        current_cntx = current_cntx->addChild(NodeToken());
+        targetList.push(all_text.addText(string_format(_label_underscore_d, for_if_num)));
+        for_if_num++;
+        next();
+        if (!Match(TokenOpenParenthesis))
+            RETURN_ERROR(expectingOpenparenthesis)
+        next();
+        current_node = current_node->addChild(NodeToken(sav_t.backptr(), switchNode, targetList.get()));
+
+        NodeToken nd = NodeToken(changeTypeNode);
+        nd._nodetype = changeTypeNode;
+        nd.type = TokenKeywordVarType;
+        nd._vartype = __int__;
+        current_node = current_node->addChild(nd);
+        change_type.push_back(current_node);
+        parseExpr();
+        RETURN_IF_ERROR
+        change_type.pop_back();
+        if (current_node->_vartype == __float__)
+            RETURN_ERROR(switchNeedsInteger)
+        current_node = current_node->parent;
+
+        if (!Match(TokenCloseParenthesis))
+            RETURN_ERROR(expectingClosingparenthesis)
+        next();
+        if (!Match(TokenOpenCurlyBracket))
+            RETURN_ERROR(expectingOpenCurlyBracket)
+        parseBlockStatement();
+        RETURN_IF_ERROR
+
+        Error.error = 0;
+        current_cntx = current_cntx->parent;
+        current_node = current_node->parent;
+        sav_t.pop_back();
+        return;
+    }
+    else if (Match(TokenKeywordCase) || Match(TokenKeywordDefault))
+    {
+        // A label in the body of a switch (directly: not inside a nested
+        // block). Its value is an integer constant -- a number, possibly
+        // negative, which is what a #define'd constant is too.
+        bool isDefault = Match(TokenKeywordDefault);
+        NodeToken *body = current_node;
+        if (body->_nodetype != blockStatementNode || body->parent == NULL || body->parent->_nodetype != switchNode)
+            RETURN_ERROR(caseOutsideSwitch)
+        NodeToken *sw = body->parent;
+        next();
+
+        int cases = 0;
+        bool haveDefault = false;
+        for (int i = 0; i < body->children_size(); i++)
+        {
+            NodeToken *c = body->getChildPtr(i);
+            if (c->_nodetype != caseNode)
+                continue;
+            if (c->children_size() == 0)
+                haveDefault = true;
+            else
+                cases++;
+        }
+
+        char *label;
+        NodeToken value;
+        if (isDefault)
+        {
+            if (haveDefault)
+                RETURN_ERROR(duplicateDefault)
+            label = string_format("%s_default", sw->getTargetText());
+        }
+        else
+        {
+            bool negative = false;
+            if (Match(TokenSubstraction))
+            {
+                negative = true;
+                next();
+            }
+            if (!Match(TokenNumber) || strchr(current()->getText(), '.') != NULL)
+                RETURN_ERROR(expectingCaseConstant)
+            long k = strtol(current()->getText(), NULL, 0);
+            if (negative)
+                k = -k;
+            for (int i = 0; i < body->children_size(); i++)
+            {
+                NodeToken *c = body->getChildPtr(i);
+                if (c->_nodetype == caseNode && c->children_size() > 0 &&
+                    strtol(c->getChildPtr(0)->getText(), NULL, 10) == k)
+                    RETURN_ERROR(duplicateCase)
+            }
+            value = NodeToken(current(), numberNode);
+            value._vartype = __int__;
+            value.setText(string_format("%ld", k)); // the text pool keeps the string
+            label = string_format("%s_case%d", sw->getTargetText(), cases);
+            next();
+        }
+        if (!Match(TokenColon))
+            RETURN_ERROR(expectingColon)
+        next();
+        NodeToken *c = current_node->addChild(NodeToken(label, caseNode)); // keeps label
+        if (!isDefault)
+            c->addChild(value);
+        Error.error = 0;
         return;
     }
     else if (Match(TokenKeywordWhile))
@@ -2824,11 +2944,13 @@ void Parser::parseCreateArguments()
     return;
 }
 
-char *findForWhile()
+// The label of the loop -- or, for a break, the switch -- that a break or
+// continue at the current position belongs to: the innermost one.
+char *findForWhile(bool forBreak)
 {
 
     NodeToken *p = current_node;
-    while (p->_nodetype != forNode and p->_nodetype != whileNode)
+    while (p->_nodetype != forNode and p->_nodetype != whileNode and !(forBreak and p->_nodetype == switchNode))
     {
         p = p->parent;
         if (p == NULL)

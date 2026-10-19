@@ -38,6 +38,12 @@ wrongnumberofarguments,
 expectingsemicolonorcloseparenthesis,
 expectingJsonPathString,
 expectingAs,
+caseOutsideSwitch,
+expectingCaseConstant,
+duplicateCase,
+duplicateDefault,
+expectingColon,
+switchNeedsInteger,
 };
 struct error_message_struct
 {

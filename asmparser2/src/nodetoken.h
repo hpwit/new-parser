@@ -71,6 +71,8 @@ enum nodeType
 	// before the loop, instead of once per iteration -- ported from v1's
 	// identical onlyNode/nbofextern/extvariablestore mechanism.
 	onlyNode,
+	switchNode, // children: the value (changeTypeNode), the body (blockStatementNode)
+	caseNode,	// `case K:` (child: K's numberNode) or `default:` (no child); target: its label
 	UnknownNode
 
 };

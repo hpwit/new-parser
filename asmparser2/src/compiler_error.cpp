@@ -37,7 +37,13 @@ const char *error_messages[]=
 "Wrong number of arguments",
 "Expecting ; or )",
 "Expecting a string literal json path after json",
-"Expecting as"
+"Expecting as",
+"case or default outside a switch",
+"Expecting an integer constant after case",
+"Duplicate case value",
+"More than one default in a switch",
+"Expecting :",
+"switch needs an integer value"
 
 };
 void display_error(error_message_struct *err){

@@ -1127,6 +1127,74 @@ static void runCharPointerArgumentsTest()
     }
 }
 
+// switch/case/default: misuse is reported with its own message (running
+// switches is checked under QEMU against C, test/fuzz/regressions/switch_*).
+static void runSwitchErrorsTest()
+{
+    const char *name = "switch: case/default misuse reported with its own error";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        struct
+        {
+            const char *script;
+            int error;
+        } cases[] = {
+            {"void main()\n{\n   int x = 1;\ncase 1:\n   x = 2;\n}\n", caseOutsideSwitch},
+            {"void main()\n{\n   int x = 1;\n   switch (x)\n   {\n   case 1:\n   {\n   case 2:\n      break;\n   }\n   }\n}\n", caseOutsideSwitch},
+            {"void main()\n{\n   int x = 1;\n   switch (x)\n   {\n   case 1:\n      break;\n   case 1:\n      break;\n   }\n}\n", duplicateCase},
+            {"void main()\n{\n   int x = 1;\n   switch (x)\n   {\n   default:\n      break;\n   default:\n      break;\n   }\n}\n", duplicateDefault},
+            {"void main()\n{\n   float x = 1.5;\n   switch (x)\n   {\n   case 1:\n      break;\n   }\n}\n", switchNeedsInteger},
+            {"void main()\n{\n   int x = 1;\n   int y = 2;\n   switch (x)\n   {\n   case y:\n      break;\n   }\n}\n", expectingCaseConstant},
+            {"void main()\n{\n   int x = 1;\n   switch (x)\n   {\n   case 1\n      break;\n   }\n}\n", expectingColon},
+            {"void main()\n{\n   int x = 1;\n   switch (x)\n   {\n   case 1:\n      continue;\n   }\n}\n", noWhileorForFound},
+            {"void main()\n{\n   int x = 1;\n   switch (x)\n   {\n   case 1:\n      break;\n   }\n}\n", noError},
+        };
+        bool ok = true;
+        for (int i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++)
+        {
+            Parser p;
+            p.clean();
+            content.clear();
+            header.clear();
+            footer.clear();
+            Script sc;
+            sc.addContent(strdup(cases[i].script));
+            sc.init();
+            p.parse(&sc, &__allTokens);
+            if (Error.error != cases[i].error)
+            {
+                printf("       case %d: error %d (%s), expected %d (%s)\n", i, Error.error, error_messages[Error.error],
+                       cases[i].error, error_messages[cases[i].error]);
+                ok = false;
+            }
+        }
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 static void runVarargsOrderTest()
 {
     const char *name = "printfln: arguments loaded after calls nested in later arguments";
@@ -2499,6 +2567,7 @@ int main()
     runBuiltinHandleTest();
     runVarargsOrderTest();
     runCharPointerArgumentsTest();
+    runSwitchErrorsTest();
     runGenerateBinaryTest(
         "generates executable binary: empty function",
         "void main(){}");

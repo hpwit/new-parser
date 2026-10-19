@@ -3653,6 +3653,70 @@ void _visitbreakNode(NodeToken *nd)
 
     bufferText->addAfter(string_format("j %s_end", nd->getTargetText()));
 }
+
+// switch (value) { case K: ... }: the value is evaluated once, compared
+// with each case in order -- one beqi when K is in the B4CONST table,
+// otherwise K loaded into the next temporary and a beq -- and execution
+// jumps to the first match's label, else to default's, else past the end.
+// The body then runs from there like any block: the case labels are just
+// labels in it (_visitcaseNode()), so cases fall through until a break,
+// which jumps to <label>_end (parser.cpp's findForWhile(true)).
+void _visitswitchNode(NodeToken *nd)
+{
+    NodeToken *body = nd->getChildPtr(1);
+    int spDepthAtEntry = bufferText->sp._stack.size();
+
+    globalType.push(__int__);
+    register_numl.duplicate();
+    nd->getChildPtr(0)->visitNode();
+    register_numl.pop();
+    translateType(__int__, nd->getChildPtr(0)->getVarTypeObj()->_varType, register_numl.get());
+    globalType.pop();
+    int value = register_numl.get();
+
+    const char *otherwise = NULL;
+    register_numl.decrease();
+    for (int i = 0; i < body->children_size(); i++)
+    {
+        NodeToken *c = body->getChildPtr(i);
+        if (c->_nodetype != caseNode)
+            continue;
+        if (c->children_size() == 0)
+        {
+            otherwise = c->getTargetText();
+            continue;
+        }
+        int k = 0;
+        sscanf(c->getChildPtr(0)->getText(), "%d", &k);
+        if (isBranchImmediate(k, false))
+        {
+            bufferText->addAfter(string_format(beqi, value, valBranchImmediate(k), c->getTargetText(), ""));
+        }
+        else
+        {
+            register_numl.duplicate();
+            c->getChildPtr(0)->visitNode();
+            register_numl.pop();
+            bufferText->addAfter(string_format(beq, "", value, register_numl.get(), c->getTargetText(), ""));
+        }
+    }
+    register_numl.increase();
+    if (otherwise != NULL)
+        bufferText->addAfter(string_format("j %s", otherwise));
+    else
+        bufferText->addAfter(string_format("j %s_end", nd->getTargetText()));
+
+    body->visitNode();
+    bufferText->addAfter(string_format("%s_end:", nd->getTargetText()));
+
+    while (bufferText->sp._stack.size() > spDepthAtEntry)
+        bufferText->sp.pop();
+}
+
+void _visitcaseNode(NodeToken *nd)
+{
+    bufferText->addAfter(string_format("%s:", nd->getTargetText()));
+}
 void _visittestNode(NodeToken *nd)
 {
 
