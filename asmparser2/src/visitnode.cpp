@@ -4055,7 +4055,8 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
     // 8; `ix(895 + g1, 1)` deep inside an index passed g1 for the 1.
     //
     // So, for the first four arguments (the rest go through the stack as
-    // before), unless one is a CRGB or a vararg:
+    // before), unless one is a CRGB, or a vararg (printfln's Args) that is
+    // a float or a CRGB:
     //  - a trivial argument (number, plain variable) that has a
     //    non-trivial one to its left is deferred: once everything else
     //    is in place, it is loaded directly into its own register, which
@@ -4082,9 +4083,22 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
         // Unknown (NULL) parameter types -- struct method calls among
         // others -- keep the previous behaviour too.
         varType *ptObj = func->getChildPtr(1)->getChildPtr(k)->getVarTypeObj();
-        if (ptObj == NULL || ptObj->_varType == __Args__ || ptObj->_varType == __CRGB__ ||
-            ptObj->_varType == __CRGBW__)
+        if (ptObj == NULL || ptObj->_varType == __CRGB__ || ptObj->_varType == __CRGBW__)
             orderedArgs = false;
+        else if (ptObj->_varType == __Args__)
+        {
+            // Varargs (printfln) are plain 32-bit values in their
+            // registers, except floats and CRGBs, which take other paths
+            // below. Without the ordering, `printfln("%d %d", f(1), x)`
+            // loaded x into a12 before calling f, whose own a4 is our a12
+            // (a loop counter in f printed 3 for x).
+            for (int j = k; j < nargs; j++)
+            {
+                varType *a = nd->getChildPtr(2)->getChildPtr(j)->getVarTypeObj();
+                if (a == NULL || a->_varType == __float__ || a->_varType == __CRGB__ || a->_varType == __CRGBW__)
+                    orderedArgs = false;
+            }
+        }
     }
     bool trivialArg[6];
     int nonTrivial = 0;
@@ -4417,8 +4431,10 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
     {
         if (!deferred[i])
             continue;
+        // A vararg has no parameter type to convert to: passed as is.
         bool typed = i < func->getChildPtr(1)->children_size() &&
-                     func->getChildPtr(1)->getChildPtr(i)->getVarTypeObj() != NULL;
+                     func->getChildPtr(1)->getChildPtr(i)->getVarTypeObj() != NULL &&
+                     func->getChildPtr(1)->getChildPtr(i)->getVarTypeObj()->_varType != __Args__;
         if (typed)
             globalType.push(func->getChildPtr(1)->getChildPtr(i)->getVarTypeObj()->_varType);
         register_numl.push(regbase + i);

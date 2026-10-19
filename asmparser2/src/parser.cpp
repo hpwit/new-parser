@@ -1042,7 +1042,12 @@ void Parser::parseFactor()
                 if (tmp_sav->_vartype == __float__ || tmp_sav->_vartype == __uint32_t__ ||
                     tmp_sav->_vartype == __int__ || tmp_sav->_vartype == __uint8_t__ ||
                     tmp_sav->_vartype == __uint16_t__ || tmp_sav->_vartype == __s_int__ ||
-                    tmp_sav->_vartype == __bool__)
+                    tmp_sav->_vartype == __bool__ ||
+                    // A char * (a string) as an argument: without its type
+                    // the call's signature said "none*", so no function
+                    // taking a char * matched (only a string literal, which
+                    // sets the type itself, did).
+                    (tmp_sav->_vartype == __char__ && change_type.back()->isPointer))
                 {
                     change_type.back()->_vartype = tmp_sav->_vartype;
                 }
@@ -1412,7 +1417,10 @@ void Parser::parseFunctionCall()
             if (search_result->getChildPtr(0)->_vartype == __float__ || search_result->getChildPtr(0)->_vartype == __uint32_t__ ||
                 search_result->getChildPtr(0)->_vartype == __int__ || search_result->getChildPtr(0)->_vartype == __uint8_t__ ||
                 search_result->getChildPtr(0)->_vartype == __uint16_t__ || search_result->getChildPtr(0)->_vartype == __s_int__ ||
-                search_result->getChildPtr(0)->_vartype == __bool__)
+                search_result->getChildPtr(0)->_vartype == __bool__ ||
+                // A function returning char *, as for a char * variable in
+                // parseFactor().
+                (search_result->getChildPtr(0)->_vartype == __char__ && change_type.back()->isPointer))
             {
                 change_type.back()->_vartype = search_result->getChildPtr(0)->_vartype;
             }

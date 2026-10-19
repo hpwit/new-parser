@@ -1004,6 +1004,198 @@ static void runSafeModeTest()
     }
 }
 
+// printfln's arguments after the format are varargs (Args). Calls with an
+// Args parameter used to skip the argument ordering every other call gets,
+// so `printfln("%d %d", busy(1), x)` loaded x into a12 before calling
+// busy(), whose a4 -- busy's inner loop counter here -- is our a12: x
+// printed as 3 (checked under QEMU). Same with a char* returned by a
+// script function. Each of the call's argument registers a11..lastArgReg
+// must be written after the last call nested in the arguments.
+static bool argsLoadedAfterNestedCalls(const char *call, int lastArgReg)
+{
+    int callAt = -1;
+    for (int i = 0; i < content.size(); i++)
+        if (strstr(content.getText(i), call) != NULL)
+            callAt = i;
+    if (callAt < 0)
+    {
+        printf("       no %s in the generated code\n", call);
+        return false;
+    }
+    // Only the function the call is in: from its label on.
+    int start = 0;
+    for (int i = 0; i < callAt; i++)
+        if (strncmp(content.getText(i), "@_", 2) == 0)
+            start = i;
+    int lastNested = -1;
+    for (int i = start; i < callAt; i++)
+        if (strstr(content.getText(i), "call8 ") != NULL || strstr(content.getText(i), "callExt ") != NULL)
+            lastNested = i;
+    bool ok = true;
+    for (int i = start; i <= lastNested; i++)
+    {
+        char line[64];
+        strncpy(line, content.getText(i), sizeof(line) - 1);
+        line[sizeof(line) - 1] = 0;
+        char *t = line;
+        while (*t == ' ' || *t == '\t')
+            t++;
+        // "op aR,..." writes aR (stores don't: their first operand is
+        // read).
+        char *sp = strchr(t, ' ');
+        if (sp == NULL || strncmp(t, "s32i", 4) == 0 || strncmp(t, "s8i", 3) == 0 || strncmp(t, "s16i", 4) == 0)
+            continue;
+        int r = -1;
+        if (sscanf(sp + 1, "a%d,", &r) == 1 && r >= 11 && r <= lastArgReg)
+        {
+            // Fine if no nested call follows it (it is then that call's
+            // own argument, or the value the outer call gets), or if the
+            // register is written again once the nested calls are done.
+            bool callAfter = false;
+            for (int k = i + 1; k <= lastNested; k++)
+                if (strstr(content.getText(k), "call8 ") != NULL || strstr(content.getText(k), "callExt ") != NULL)
+                    callAfter = true;
+            bool reloadedLater = false;
+            for (int k = lastNested + 1; k < callAt; k++)
+            {
+                char want[8];
+                snprintf(want, sizeof(want), "a%d,", r);
+                const char *u = content.getText(k);
+                while (*u == ' ' || *u == '\t')
+                    u++;
+                const char *usp = strchr(u, ' ');
+                if (usp != NULL && strncmp(usp + 1, want, strlen(want)) == 0 && strncmp(u, "s32i", 4) != 0)
+                    reloadedLater = true;
+            }
+            if (callAfter && !reloadedLater)
+            {
+                printf("       a%d set up before a later nested call: %s\n", r, content.getText(i));
+                ok = false;
+            }
+        }
+    }
+    return ok;
+}
+
+// A char * variable, parameter or array, or a call returning char *, as a
+// call argument: its type (char) never reached the call's signature, which
+// said "none*", so no function taking a char * matched -- only a string
+// literal, which sets its type itself, did ("Function not found").
+static void runCharPointerArgumentsTest()
+{
+    const char *name = "char * variables, parameters, arrays and results as arguments";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        const char *scripts[] = {
+            "void show(char *t)\n{\n}\nvoid main()\n{\n   char *s = \"hi\";\n   show(s);\n}\n",
+            "char str[6];\nvoid show(char *t)\n{\n}\nvoid main()\n{\n   show(str);\n}\n",
+            "char *g;\nvoid show(char *t)\n{\n}\nvoid main()\n{\n   show(g);\n}\n",
+            "void inner(char *t)\n{\n}\nvoid outer(char *t)\n{\n   inner(t);\n}\nvoid main()\n{\n   outer(\"x\");\n}\n",
+            "external void showText(char *t);\nchar *name(int i)\n{\n   return \"x\";\n}\nvoid main()\n{\n   showText(name(1));\n}\n",
+        };
+        bool ok = true;
+        for (int i = 0; i < (int)(sizeof(scripts) / sizeof(scripts[0])); i++)
+            if (!compileForTest(scripts[i]))
+            {
+                printf("       case %d does not compile\n", i);
+                ok = false;
+            }
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
+static void runVarargsOrderTest()
+{
+    const char *name = "printfln: arguments loaded after calls nested in later arguments";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        bool ok = true;
+        const char *ints =
+            "int total;\n"
+            "int busy(int i)\n"
+            "{\n"
+            "   for (int a = 0; a < 3; a++)\n"
+            "      for (int b = 0; b < 3; b++)\n"
+            "         total = total + a * b;\n"
+            "   return i + 100;\n"
+            "}\n"
+            "void main()\n"
+            "{\n"
+            "   int x = 42;\n"
+            "   printfln(\"%d %d\", busy(1), x);\n"
+            "}\n";
+        if (!compileForTest(ints) || !argsLoadedAfterNestedCalls("callExt a8,@_printfln", 12))
+            ok = false;
+
+        const char *strings =
+            "int total;\n"
+            "char *pick(int i)\n"
+            "{\n"
+            "   for (int a = 0; a < 3; a++)\n"
+            "      for (int b = 0; b < 3; b++)\n"
+            "         total = total + a * b;\n"
+            "   if (i == 0)\n"
+            "      return \"zero\";\n"
+            "   return \"other\";\n"
+            "}\n"
+            "void main()\n"
+            "{\n"
+            "   char *s = pick(1);\n"
+            "   printfln(\"%s %s\", pick(0), s);\n"
+            "}\n";
+        if (!compileForTest(strings) || !argsLoadedAfterNestedCalls("callExt a8,@_printfln", 12))
+            ok = false;
+
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 // _handle_ (the executable's address, filled in on every entry) is
 // declared by Parser::parse() itself, so it exists however a script is
 // compiled -- the raw Parser path included, which used to reject it as
@@ -2305,6 +2497,8 @@ int main()
     runOptimizeUnitTest();
     runSafeModeTest();
     runBuiltinHandleTest();
+    runVarargsOrderTest();
+    runCharPointerArgumentsTest();
     runGenerateBinaryTest(
         "generates executable binary: empty function",
         "void main(){}");

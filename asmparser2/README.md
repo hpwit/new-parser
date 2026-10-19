@@ -640,6 +640,24 @@ Like any normal language:
 - `++`/`--` for integers and pointers
 - `+=`, `-=`, `/=`, `*=`
 - pointers
+- strings as `char *`: functions returning one -- a script function or a bound host function (`external char *name(int i);`) -- `char *` parameters, and any `char *` (a string literal, variable, `char` array or a call's result) passed as an argument, e.g. to `printfln`'s `%s` or to a host function. See [StringFunctions](examples/StringFunctions):
+
+  ```c
+  char *dayName(int d)
+  {
+     if (d == 0)
+        return "Sunday";
+     return "weekday";
+  }
+
+  void main()
+  {
+     char *s = dayName(1);
+     printfln("%s / %s", dayName(0), s);   // Sunday / weekday
+  }
+  ```
+
+  The string itself is not copied: a returned literal lives in the script's data for as long as the script is loaded. Indexing a `char *` local (`s[0]`) is not supported yet.
 - `^` for power (not XOR -- `x^2` is `x` squared)
 - `>>` and `<<`
 - explicit casts: `(int)(expr)`, `(float)(expr)` -- the parens around `expr` are required, `(int)x` alone is a parse error. int<->float conversion elsewhere is automatic.
@@ -762,7 +780,10 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `GameOfLife` | Conway's Game of Life on a 2D `external CRGB leds[h, w]` matrix -- `hsv()`-coloured generations, `CRGB(0,0,0)` for dead cells, a small self-contained automaton. |
 | `ProceduralEffects` | Five separately compiled procedural effects for a 128x96 matrix -- a table-driven integer plasma, a fire simulation, an animated Voronoi pattern, a six-fold mandala and spinning gradient squares -- run in turn from `loop()`. [Frames of each](examples/ProceduralEffects/README.md). |
 | `MandelbrotFixedPoint` | The Mandelbrot set on a 128x96 matrix computed with integers only -- the classic float script rewritten in 12-bit fixed-point arithmetic, with the conversion rules explained. |
-| `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently. ESP32-only. |
+| `ExecuteAsTask` | A script's `main()` on its own FreeRTOS task, so `loop()` keeps running concurrently, and `pause()`/`restart()`/`kill()`/`state()` on that task. ESP32-only. |
+| `PinInterrupt` | A GPIO interrupt calling back into the running script: `pinInterrupt(_handle_, "increase", 23)`. ESP32-only. |
+| `DirectGPIO` | Setting up and driving pins from a script by writing the GPIO and IO_MUX registers directly, bound as variables; one sketch for ESP32 and ESP32-S3. |
+| `StringFunctions` | `char *` in and out of functions: script and host functions returning strings, `char *` parameters, `%s`. |
 | `MemoryAllocator` | `alloc()`/`free()`/`writeInt()`/`readInt()`, the built-in dynamic-memory design covering this DSL's lack of pointer-dereference syntax. |
 | `SafeMode` | `safe_mode` bounds checking: an out-of-range write stops the script, reports which array and index, and `execute()` returns false. |
 
