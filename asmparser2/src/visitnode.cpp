@@ -346,8 +346,13 @@ static bool isValueNode(NodeToken *nd)
 // A variable or call of type t somewhere in nd (literals don't count).
 static bool containsValueOfType(NodeToken *nd, varTypeEnum t)
 {
-    if (isValueNode(nd) && nd->_vartype == t)
-        return true;
+    // The resolved type: for a struct member, _vartype is the struct's.
+    if (isValueNode(nd))
+    {
+        varType *vt = nd->getVarTypeObj();
+        if (vt != NULL && vt->_varType == t)
+            return true;
+    }
     for (int i = 0; i < nd->children_size(); i++)
         if (containsValueOfType(nd->getChildPtr(i), t))
             return true;
@@ -684,6 +689,15 @@ void _visitunitaryOpNode(NodeToken *nd)
     }
 }
 
+// Whether ++/-- on this operand steps a pointer (by the element size)
+// rather than adding 1. A struct member read through `this` inside a
+// method is marked isPointer too, with asPointer set: `hits++` on an int
+// member used to add 4.
+static bool steppedAsPointer(NodeToken *operand)
+{
+    return operand->isPointer && !operand->asPointer && operand->children_size() == 0;
+}
+
 void _visitoperatorNode(NodeToken *nd)
 {
     // printf("operator %s\n",tokenNames[nd->type].c_str());
@@ -932,7 +946,7 @@ void _visitoperatorNode(NodeToken *nd)
         break;
     case TokenPlusPlus:
     case TokenMinusMinus:
-        if (globalType.get() == __ffloat__ && !nd->getChildPtr(0)->isPointer)
+        if (globalType.get() == __ffloat__ && !steppedAsPointer(nd->getChildPtr(0)))
         {
             // +-1.0: 65536, beyond addi's range
             bufferText->addAfter(string_format(movi, 9, 1));
@@ -942,13 +956,13 @@ void _visitoperatorNode(NodeToken *nd)
         }
         if (nd->type == TokenMinusMinus)
         {
-            if (nd->getChildPtr(0)->isPointer && nd->getChildPtr(0)->children_size() == 0)
+            if (steppedAsPointer(nd->getChildPtr(0)))
                 bufferText->addAfter(string_format(addi, register_numl.get(), register_numl.get(), 0 - nd->getChildPtr(0)->getVarTypeObj()->total_size));
             else
                 bufferText->addAfter(string_format(addi, register_numl.get(), register_numl.get(), -1));
             break;
         }
-        if (nd->getChildPtr(0)->isPointer && nd->getChildPtr(0)->children_size() == 0)
+        if (steppedAsPointer(nd->getChildPtr(0)))
         {
             bufferText->addAfter(string_format(addi, register_numl.get(), register_numl.get(), nd->getChildPtr(0)->getVarTypeObj()->total_size));
         }
