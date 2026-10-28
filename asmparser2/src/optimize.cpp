@@ -135,17 +135,24 @@ static void blankCopyIfDead(Text *text, int defPos, const char *reg, int usePos)
     // The line being rewritten may itself overwrite aY
     // (`mull a15,a15,a11` -> `mull a15,a3,a11`): the copy is dead right
     // there, whatever reads a15 afterwards reads the new value.
+    // A later write ends the search only on straight-line code: past a
+    // branch or a label it may be on one path only (`bnez a13,L / movi
+    // a13,-1 / ... / L: quos a14,a14,a13`), so the rest of the function
+    // is searched for a read.
     trimmedLine(*text->getChildAtPos(usePos), line, sizeof(line));
     bool overwritten = lineWritesRegister(line, reg);
+    bool straight = line[0] != 'b' && strncmp(line, "j ", 2) != 0;
     for (int j = usePos + 1; !overwritten && j < text->size(); j++)
     {
         trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
         if (isFunctionLabel(line))
             break;
+        if (strchr(line, ':') != NULL || line[0] == 'b' || strncmp(line, "j ", 2) == 0)
+            straight = false;
         RegRole role = regRole(line, reg);
         if (role == REG_READ)
             return;
-        if (role == REG_WRITTEN)
+        if (role == REG_WRITTEN && straight)
             break;
     }
     text->replaceText(defPos, " ");
@@ -891,6 +898,37 @@ void optimizeSpeed(Text *text)
         {
             sawRetw = false;
         }
+    }
+
+    // Pass 3: an `ssai N` while SAR is already known to hold N is
+    // redundant -- every ffloat multiply ends in "ssai 16 / src", so a
+    // run of them sets SAR over and over. SAR is known from an ssai until
+    // a label (a jump may come in with any SAR), a function start, a call
+    // (the callee may shift), or any other instruction that writes SAR.
+    int sar = -1;
+    for (int i = 0; i < text->size(); i++)
+    {
+        char *tmp = *text->getChildAtPos(i);
+        if (tmp == NULL || strcmp(tmp, " ") == 0 || strcmp(tmp, "") == 0)
+            continue;
+        char line[64];
+        trimmedLine(tmp, line, sizeof(line));
+        if (strncmp(line, "@_", 2) == 0 || strchr(line, ':') != NULL || strncmp(line, "call", 4) == 0)
+        {
+            sar = -1;
+            continue;
+        }
+        if (strncmp(line, "ssai ", 5) == 0)
+        {
+            int n = atoi(line + 5);
+            if (n == sar)
+                text->replaceText(i, " ");
+            sar = n;
+        }
+        else if (strncmp(line, "ssl ", 4) == 0 || strncmp(line, "ssr ", 4) == 0 ||
+                 strncmp(line, "ssa8", 4) == 0 || strncmp(line, "wsr", 3) == 0 ||
+                 strncmp(line, "xsr", 3) == 0)
+            sar = -1;
     }
 }
 

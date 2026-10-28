@@ -395,7 +395,8 @@ uint32_t bin_entry(uint32_t *values)
 operandeType op_word[1] = {operandeType::l0_FFFFFFFF};
 uint32_t bin_word(uint32_t *values) { return values[0]; }
 
-operandeType op_extui[4] = {operandeType::registers, operandeType::registers, operandeType::l0_31, operandeType::l0_15};
+// extui ar, at, shift, width: the width field holds width - 1, so 1..16.
+operandeType op_extui[4] = {operandeType::registers, operandeType::registers, operandeType::l0_31, operandeType::l1_16};
 uint32_t bin_extui(uint32_t *values)
 {
     return (values[1] << 4) + (values[0] << 12) + (2 << 17) +

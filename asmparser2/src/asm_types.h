@@ -28,6 +28,7 @@ enum class operandeType
     lm128_127,
     lm32768_32512,
     l1_31,
+    l1_16,
     l7_22,
     l0_60,
     lm64_m4,

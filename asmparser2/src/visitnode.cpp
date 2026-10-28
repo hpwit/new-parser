@@ -178,6 +178,8 @@ void _visittypeNode(NodeToken *nd) {}
 //   - * is the 64-bit product shifted right by 16 (mulsh/mull, then a
 //     funnel shift: ssai 16, src);
 //   - / calls ___ffdiv below, which divides without a 64-bit dividend;
+//     by an integer (literal, int variable...) it is a quos, with a check
+//     for 0 unless the divisor is a nonzero literal;
 //   - conversions (translateType): int <-> ffloat are shifts (to int
 //     truncates toward zero, as from float), float <-> ffloat use
 //     trunc.s/float.s with their scale.
@@ -254,9 +256,19 @@ char *_numToBytes(uint32_t __num);
 // integer literal (same side effects on register_numl and the sp stack).
 static void emitIntConstant(int32_t v)
 {
+    int shift = 0;
+    while (shift < 31 && v != 0 && ((v >> shift) & 1) == 0)
+        shift++;
     if (v >= -2048 && v <= 2047)
     {
         bufferText->addAfter(string_format(movi, register_numl.get(), v));
+    }
+    else if ((v >> shift) >= -2048 && (v >> shift) <= 2047)
+    {
+        // m << s with m in movi's range (4.0, 0.5, -1.5...): two
+        // instructions and no memory access, instead of l32r + l32i.
+        bufferText->addAfter(string_format(movi, register_numl.get(), v >> shift));
+        bufferText->addAfter(string_format("slli a%d,a%d,%d", register_numl.get(), register_numl.get(), shift));
     }
     else
     {
@@ -380,10 +392,10 @@ static bool isFfloatExpression(NodeToken *nd)
 
 // An operand of * or / in an ffloat expression that is a plain integer --
 // an integer literal, an int variable/array element/call, or minus one of
-// those -- is used as it is: a * n is just mull, and a / n (n a nonzero
-// literal) just quos, both bit for bit what the fixed-point forms give
-// (a * (n << 16) >> 16, (a << 16) / (n << 16)). Not / by an int variable:
-// it may be 0, where quos traps and ___ffdiv saturates.
+// those -- is used as it is: a * n is just mull, and a / n just quos, both
+// bit for bit what the fixed-point forms give (a * (n << 16) >> 16,
+// (a << 16) / (n << 16)). Unless n is a nonzero literal, a / n checks for
+// 0 first, where quos would trap: it saturates as ___ffdiv does.
 static bool isIntegerLiteral(NodeToken *nd, bool nonzero)
 {
     if ((nd->_nodetype == unitaryOpNode) && (nd->type == TokenSubstraction || nd->type == TokenNegation) &&
@@ -422,7 +434,7 @@ static bool isIntegerOperand(NodeToken *nd)
 
 // Set by _visitbinOpNode() for the _visitoperatorNode() call it makes: an
 // operand of an ffloat * or / evaluated as a plain integer (see above).
-static bool ffIntLeft = false, ffIntRight = false;
+static bool ffIntLeft = false, ffIntRight = false, ffDivMaybeZero = false;
 
 // a = a * b in Q16.16: the 64-bit product's bits 16..47.
 static void emitFfloatMultiply(int a, int b)
@@ -627,7 +639,8 @@ void _visitbinOpNode(NodeToken *nd)
     bool ffContext = globalType.get() == __ffloat__;
     bool intRight = ffContext && nd->children_size() >= 2 &&
                     ((nd->type == TokenStar && isIntegerOperand(nd->getChildPtr(1))) ||
-                     (nd->type == TokenSlash && isIntegerLiteral(nd->getChildPtr(1), true)));
+                     (nd->type == TokenSlash && isIntegerOperand(nd->getChildPtr(1))));
+    bool divMaybeZero = intRight && nd->type == TokenSlash && !isIntegerLiteral(nd->getChildPtr(1), true);
     bool intLeft = ffContext && nd->type == TokenStar && !intRight && isIntegerOperand(nd->getChildPtr(0));
     bool intRightOperand = intRight || (ffContext && (nd->type == TokenShiftLeft || nd->type == TokenShiftRight));
 
@@ -668,8 +681,9 @@ void _visitbinOpNode(NodeToken *nd)
     // nd->getChildPtr(1)->visitNode();
     ffIntLeft = intLeft;
     ffIntRight = intRight;
+    ffDivMaybeZero = divMaybeZero;
     _visitoperatorNode(nd);
-    ffIntLeft = ffIntRight = false;
+    ffIntLeft = ffIntRight = ffDivMaybeZero = false;
     register_numl.pop();
     if (nd->type == TokenAddition || nd->type == TokenSubstraction)
     {
@@ -823,8 +837,8 @@ void _visitoperatorNode(NodeToken *nd)
         nd->_vartype = __ffloat__;
     // //printf("kk5\n");
     asmInstruction asmInstr;
-    bool intLeft = ffIntLeft, intRight = ffIntRight;
-    ffIntLeft = ffIntRight = false; // only for this operator, not nested ones
+    bool intLeft = ffIntLeft, intRight = ffIntRight, divMaybeZero = ffDivMaybeZero;
+    ffIntLeft = ffIntRight = ffDivMaybeZero = false; // only for this operator, not nested ones
     if (nd->children_size() >= 2 && !intRight && !(globalType.get() == __ffloat__ && (nd->type == TokenShiftLeft || nd->type == TokenShiftRight)))
         translateType(globalType.get(), r, register_numr.get());
     if (!intLeft)
@@ -837,9 +851,34 @@ void _visitoperatorNode(NodeToken *nd)
             emitFfloatMultiply(register_numl.get(), register_numr.get());
         return;
     }
+    if (globalType.get() == __ffloat__ && nd->type == TokenSlash && intRight &&
+        divMaybeZero && (register_numl.get() == 9 || register_numr.get() == 9))
+    {
+        // The check below needs a9: back to ffloat and ___ffdiv.
+        bufferText->addAfter(string_format("slli a%d,a%d,%d", register_numr.get(), register_numr.get(), FFLOAT_FRAC_BITS));
+        intRight = false;
+    }
     if (globalType.get() == __ffloat__ && nd->type == TokenSlash && intRight)
     {
-        bufferText->addAfter(string_format(quos, register_numl.get(), register_numl.get(), register_numr.get()));
+        int a = register_numl.get(), b = register_numr.get();
+        if (!divMaybeZero)
+        {
+            bufferText->addAfter(string_format(quos, a, a, b));
+            return;
+        }
+        // b == 0: the largest value of a's sign, 0x7fffffff ^ s - s with
+        // s = a >> 31, built in b (dead after the division).
+        bufferText->addAfter(string_format("bnez a%d,__ffdiv_nz_%d", b, for_if_num2));
+        bufferText->addAfter(string_format("movi a%d,-1", b));
+        bufferText->addAfter(string_format("srli a%d,a%d,1", b, b));
+        bufferText->addAfter(string_format("srai a9,a%d,31", a));
+        bufferText->addAfter(string_format("xor a%d,a%d,a9", a, b));
+        bufferText->addAfter(string_format("sub a%d,a%d,a9", a, a));
+        bufferText->addAfter(string_format("j __ffdiv_end_%d", for_if_num2));
+        bufferText->addAfter(string_format("__ffdiv_nz_%d:", for_if_num2));
+        bufferText->addAfter(string_format(quos, a, a, b));
+        bufferText->addAfter(string_format("__ffdiv_end_%d:", for_if_num2));
+        for_if_num2++;
         return;
     }
     if (globalType.get() == __ffloat__ && nd->type == TokenSlash)
@@ -4388,11 +4427,10 @@ void translateType(varTypeEnum to, varTypeEnum from, int regnum)
         }
         else if (from == __ffloat__ && toInt)
         {
-            // Toward zero, as from float: add 2^16-1 first when negative.
-            // (srli takes at most 15: two shifts make the 16.)
+            // Toward zero, as from float: add 2^16-1 first when negative
+            // (the sign mask's low 16 bits).
             bufferText->addAfterNoDouble(string_format("srai a9,a%d,31", regnum));
-            bufferText->addAfterNoDouble(string_format("srli a9,a9,%d", 32 - FFLOAT_FRAC_BITS - 1));
-            bufferText->addAfterNoDouble(string_format("srli a9,a9,%d", 1));
+            bufferText->addAfterNoDouble(string_format("extui a9,a9,0,%d", FFLOAT_FRAC_BITS));
             bufferText->addAfterNoDouble(string_format("add a%d,a%d,a9", regnum, regnum));
             bufferText->addAfterNoDouble(string_format("srai a%d,a%d,%d", regnum, regnum, FFLOAT_FRAC_BITS));
         }

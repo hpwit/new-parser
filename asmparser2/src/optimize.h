@@ -32,6 +32,10 @@ void optimize(Text *text);
 // own closing retw.n after a function's body regardless of whether the
 // body's last statement was already a `return`, so every function ending
 // in `return` compiles with one dead retw.n.
+//
+// And removes an `ssai N` when SAR already holds N (consecutive ffloat
+// multiplies each set it to 16), forgetting SAR at labels, calls and any
+// other SAR write.
 void optimizeSpeed(Text *text);
 
 // Physically deletes every blanked-out line optimize()/optimizeSpeed()

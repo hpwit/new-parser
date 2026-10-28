@@ -234,6 +234,8 @@ static result_parse_operande operandeParse(char *s, operandeType optype)
         return parseNumberRange(s, -32768, 35512);
     case operandeType::l1_31:
         return parseNumberRange(s, 1, 31);
+    case operandeType::l1_16:
+        return parseNumberRange(s, 1, 16);
     case operandeType::l7_22:
         return parseNumberRange(s, 7, 22);
     case operandeType::l0_60:
