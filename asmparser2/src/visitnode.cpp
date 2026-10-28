@@ -185,9 +185,10 @@ void _visittypeNode(NodeToken *nd) {}
 bool addffloatdivision = false;
 
 // a2 / a3 as Q16.16, truncated toward zero; division by zero gives the
-// largest value of the result's sign. The integer part comes from quou,
-// the 16 fraction bits from binary long division of the remainder, so no
-// 64-bit dividend is needed.
+// largest value of the result's sign. The integer part comes from quou;
+// the 16 fraction bits from two more 8-bit quou rounds of the remainder
+// when |a3| < 128.0, else from binary long division of it -- no 64-bit
+// dividend needed either way.
 static const char *_ffdiv[] = {
     "@___ffdiv(num|num):", "entry a1,32",
     "xor a4,a2,a3", "abs a2,a2", "abs a3,a3",
@@ -195,7 +196,15 @@ static const char *_ffdiv[] = {
     "movi a2,-1", "srli a2,a2,1",
     "bgez a4,___ffdiv_ret", "neg a2,a2", "j ___ffdiv_ret",
     "___ffdiv_nz:",
-    "quou a5,a2,a3", "remu a6,a2,a3", "movi a7,16",
+    "quou a5,a2,a3", "remu a6,a2,a3",
+    // |b| < 2^23 (128.0): the remainder (< |b|) shifted by 8 still fits,
+    // so the 16 fraction bits come from two 8-bit hardware divisions.
+    "extui a7,a3,23,9", "bnez a7,___ffdiv_slow",
+    "slli a6,a6,8", "quou a7,a6,a3", "remu a6,a6,a3", "slli a5,a5,8", "add a5,a5,a7",
+    "slli a6,a6,8", "quou a7,a6,a3", "slli a5,a5,8", "add a5,a5,a7",
+    "j ___ffdiv_done",
+    "___ffdiv_slow:",
+    "movi a7,16",
     "___ffdiv_loop:",
     "slli a5,a5,1",
     "bltz a6,___ffdiv_big",
@@ -207,6 +216,7 @@ static const char *_ffdiv[] = {
     "slli a6,a6,1", "j ___ffdiv_sub",
     "___ffdiv_next:",
     "addi a7,a7,-1", "bnez a7,___ffdiv_loop",
+    "___ffdiv_done:",
     "mov a2,a5",
     "bgez a4,___ffdiv_ret", "neg a2,a2",
     "___ffdiv_ret:",
@@ -334,6 +344,7 @@ static bool isValueNode(NodeToken *nd)
     {
     case globalVariableNode:
     case localVariableNode:
+    case localVariableNodeAsRegister:
     case extGlobalVariableNode:
     case callFunctionNode:
     case extCallFunctionNode:
@@ -366,6 +377,52 @@ static bool isFfloatExpression(NodeToken *nd)
 {
     return containsValueOfType(nd, __ffloat__) && !containsValueOfType(nd, __float__);
 }
+
+// An operand of * or / in an ffloat expression that is a plain integer --
+// an integer literal, an int variable/array element/call, or minus one of
+// those -- is used as it is: a * n is just mull, and a / n (n a nonzero
+// literal) just quos, both bit for bit what the fixed-point forms give
+// (a * (n << 16) >> 16, (a << 16) / (n << 16)). Not / by an int variable:
+// it may be 0, where quos traps and ___ffdiv saturates.
+static bool isIntegerLiteral(NodeToken *nd, bool nonzero)
+{
+    if ((nd->_nodetype == unitaryOpNode) && (nd->type == TokenSubstraction || nd->type == TokenNegation) &&
+        nd->children_size() == 1)
+        return isIntegerLiteral(nd->getChildPtr(0), nonzero);
+    if (nd->_nodetype == changeTypeNode && strlen(nd->getText()) == 0 && nd->children_size() == 1)
+        return isIntegerLiteral(nd->getChildPtr(0), nonzero);
+    if (nd->_nodetype != numberNode || nd->children_size() > 0 || strchr(nd->getText(), '.') != NULL)
+        return false;
+    return !nonzero || strtol(nd->getText(), NULL, 0) != 0;
+}
+
+static bool isIntegerOperand(NodeToken *nd)
+{
+    if (isIntegerLiteral(nd, false))
+        return true;
+    if (nd->_nodetype == changeTypeNode && strlen(nd->getText()) == 0 && nd->children_size() == 1)
+        return isIntegerOperand(nd->getChildPtr(0));
+    if (!isValueNode(nd))
+        return false;
+    varType *vt = nd->getVarTypeObj();
+    if (vt == NULL || (nd->isPointer && !nd->asPointer && nd->children_size() == 0))
+        return false;
+    switch (vt->_varType)
+    {
+    case __int__:
+    case __uint8_t__:
+    case __uint16_t__:
+    case __s_int__:
+    case __bool__:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Set by _visitbinOpNode() for the _visitoperatorNode() call it makes: an
+// operand of an ffloat * or / evaluated as a plain integer (see above).
+static bool ffIntLeft = false, ffIntRight = false;
 
 // a = a * b in Q16.16: the 64-bit product's bits 16..47.
 static void emitFfloatMultiply(int a, int b)
@@ -565,15 +622,25 @@ void _visitbinOpNode(NodeToken *nd)
             return;
         }
     }
-    // A shift amount is a plain count, whatever the expression's type.
-    bool intRightOperand = globalType.get() == __ffloat__ && (nd->type == TokenShiftLeft || nd->type == TokenShiftRight);
+    // A shift amount is a plain count, whatever the expression's type; so
+    // is an integer operand of an ffloat * or / (see isIntegerOperand()).
+    bool ffContext = globalType.get() == __ffloat__;
+    bool intRight = ffContext && nd->children_size() >= 2 &&
+                    ((nd->type == TokenStar && isIntegerOperand(nd->getChildPtr(1))) ||
+                     (nd->type == TokenSlash && isIntegerLiteral(nd->getChildPtr(1), true)));
+    bool intLeft = ffContext && nd->type == TokenStar && !intRight && isIntegerOperand(nd->getChildPtr(0));
+    bool intRightOperand = intRight || (ffContext && (nd->type == TokenShiftLeft || nd->type == TokenShiftRight));
 
     // printf("bin operator\n");
     // register_numl.displaystack();
     register_numl.duplicate();
     // register_numr.duplicate();
     // if (nd->getChildPtr(0)->visitNode != NULL)
+    if (intLeft)
+        globalType.push(__int__);
     nd->getChildPtr(0)->visitNode();
+    if (intLeft)
+        globalType.pop();
     // printf("ddd %s\n",bufferText->back().c_str());
     //  register_numl.displaystack();
     register_numl.duplicate();
@@ -599,7 +666,10 @@ void _visitbinOpNode(NodeToken *nd)
     // register_numl.displaystack();
     // if (nd->getChildPtr(1)->visitNode != NULL)
     // nd->getChildPtr(1)->visitNode();
+    ffIntLeft = intLeft;
+    ffIntRight = intRight;
     _visitoperatorNode(nd);
+    ffIntLeft = ffIntRight = false;
     register_numl.pop();
     if (nd->type == TokenAddition || nd->type == TokenSubstraction)
     {
@@ -753,12 +823,23 @@ void _visitoperatorNode(NodeToken *nd)
         nd->_vartype = __ffloat__;
     // //printf("kk5\n");
     asmInstruction asmInstr;
-    if (nd->children_size() >= 2 && !(globalType.get() == __ffloat__ && (nd->type == TokenShiftLeft || nd->type == TokenShiftRight)))
+    bool intLeft = ffIntLeft, intRight = ffIntRight;
+    ffIntLeft = ffIntRight = false; // only for this operator, not nested ones
+    if (nd->children_size() >= 2 && !intRight && !(globalType.get() == __ffloat__ && (nd->type == TokenShiftLeft || nd->type == TokenShiftRight)))
         translateType(globalType.get(), r, register_numr.get());
-    translateType(globalType.get(), l, register_numl.get());
+    if (!intLeft)
+        translateType(globalType.get(), l, register_numl.get());
     if (globalType.get() == __ffloat__ && nd->type == TokenStar)
     {
-        emitFfloatMultiply(register_numl.get(), register_numr.get());
+        if (intLeft || intRight)
+            bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(), register_numr.get()));
+        else
+            emitFfloatMultiply(register_numl.get(), register_numr.get());
+        return;
+    }
+    if (globalType.get() == __ffloat__ && nd->type == TokenSlash && intRight)
+    {
+        bufferText->addAfter(string_format(quos, register_numl.get(), register_numl.get(), register_numr.get()));
         return;
     }
     if (globalType.get() == __ffloat__ && nd->type == TokenSlash)

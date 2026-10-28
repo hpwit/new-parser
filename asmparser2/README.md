@@ -822,6 +822,7 @@ This is the part that's actually new relative to v1, and the whole reason for th
 | `MultiEffectController` | A real, several-hundred-line multi-effect script actually compiled and run, every host binding real. |
 | `GameOfLife` | Conway's Game of Life on a 2D `external CRGB leds[h, w]` matrix -- `hsv()`-coloured generations, `CRGB(0,0,0)` for dead cells, a small self-contained automaton. |
 | `ProceduralEffects` | Five separately compiled procedural effects for a 128x96 matrix -- a table-driven integer plasma, a fire simulation, an animated Voronoi pattern, a six-fold mandala and spinning gradient squares -- run in turn from `loop()`. [Frames of each](examples/ProceduralEffects/README.md). |
+| `FloatVsFfloat` | The same calculation (particles, energy, Newton square root, polynomial) written with `float` and with `ffloat`, each run 100 times and timed: speed and results side by side. |
 | `BouncingBallsFfloat` | The bouncing-balls script with the ball state in `ffloat`, on a 128x96 matrix -- and how to keep shading terms within ffloat's ±32768. |
 | `MandelbrotFfloat` | The float Mandelbrot with `float` replaced by `ffloat`: the compiler does the fixed-point arithmetic. |
 | `MandelbrotFixedPoint` | The Mandelbrot set on a 128x96 matrix computed with integers only -- the classic float script rewritten in 12-bit fixed-point arithmetic, with the conversion rules explained. |
