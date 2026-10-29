@@ -1298,3 +1298,425 @@ void preserveAcrossCalls(Text *text)
         i = end;
     }
 }
+
+// ---------------------------------------------------------------------
+// promoteFrameSlots() -- see optimize.h.
+// ---------------------------------------------------------------------
+
+#define PROMOTE_MAX_SLOTS 64
+
+// Splits "op a,b,c" into op and up to 4 operands (in place in `buf`).
+static int splitInstruction(char *buf, char **op, char **ops)
+{
+    *op = buf;
+    char *sp = strchr(buf, ' ');
+    if (sp == NULL)
+        return 0;
+    *sp = 0;
+    int n = 0;
+    char *p = sp + 1;
+    while (n < 4 && p != NULL && *p)
+    {
+        ops[n++] = p;
+        char *c = strchr(p, ',');
+        if (c == NULL)
+            break;
+        *c = 0;
+        p = c + 1;
+    }
+    return n;
+}
+
+static bool isLabelLine(const char *line)
+{
+    size_t len = strlen(line);
+    return len > 1 && line[len - 1] == ':' && strncmp(line, "@_", 2) != 0;
+}
+
+// Whether `line` names register `reg` as one of its operands.
+static bool mentionsRegister(const char *line, const char *reg)
+{
+    size_t n = strlen(reg);
+    for (const char *p = line; (p = strstr(p, reg)) != NULL; p += n)
+    {
+        bool startOk = p == line || p[-1] == ' ' || p[-1] == ',';
+        bool endOk = p[n] == 0 || p[n] == ',' || p[n] == ' ';
+        if (startOk && endOk)
+            return true;
+    }
+    return false;
+}
+
+static bool isBlockBoundary(const char *line)
+{
+    return strchr(line, ':') != NULL || line[0] == 'b' || strncmp(line, "j ", 2) == 0 ||
+           strncmp(line, "call", 4) == 0 || strncmp(line, "ret", 3) == 0;
+}
+
+static bool isPromotedFloat(const char *reg, const char **promoted, int n)
+{
+    for (int k = 0; k < n; k++)
+        if (strcmp(reg, promoted[k]) == 0)
+            return true;
+    return false;
+}
+
+// Rebuilds "op o0,o1,..." into `out`.
+static void joinInstruction(char *out, size_t size, const char *op, char **ops, int n)
+{
+    snprintf(out, size, "%s", op);
+    for (int k = 0; k < n; k++)
+    {
+        size_t l = strlen(out);
+        snprintf(out + l, size - l, "%s%s", k == 0 ? " " : ",", ops[k]);
+    }
+}
+
+// The copies promotion leaves around the float registers it hands out:
+// `mov.s fT,fN` (a load) has its later reads of fT read fN instead, up to
+// the first label, branch or call, and goes once fT is overwritten;
+// `op fT,...` followed by `mov.s fN,fT` (a store) writes fN directly when
+// fT is overwritten before being read again.
+static void foldFloatCopies(Text *text, int start, int end, const char **promoted, int npf)
+{
+    char line[160], buf[160], other[160], out[160];
+    char *op, *ops[4], *op2, *ops2[4];
+    for (int i = start; i < end; i++)
+    {
+        trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+        strcpy(buf, line);
+        if (splitInstruction(buf, &op, ops) != 2 || strcmp(op, "mov.s") != 0 ||
+            isPromotedFloat(ops[0], promoted, npf) || !isPromotedFloat(ops[1], promoted, npf))
+            continue;
+        const char *ft = ops[0], *fn = ops[1];
+        bool dead = false;
+        for (int j = i + 1; j < end; j++)
+        {
+            trimmedLine(*text->getChildAtPos(j), other, sizeof(other));
+            if (other[0] == 0)
+                continue;
+            if (isBlockBoundary(other) || lineWritesRegister(other, fn))
+                break;
+            RegRole role = regRole(other, ft);
+            if (role == REG_UNTOUCHED)
+                continue;
+            char tmp[160];
+            strcpy(tmp, other);
+            int n = splitInstruction(tmp, &op2, ops2);
+            bool writesFirst = writesFirstOperandOnly(op2);
+            if (n > 0 && strcmp(ops2[0], ft) == 0 && !writesFirst)
+                break; // reads and writes fT (madd.s...): leave it
+            for (int k = writesFirst ? 1 : 0; k < n; k++)
+                if (strcmp(ops2[k], ft) == 0)
+                    ops2[k] = (char *)fn;
+            joinInstruction(out, sizeof(out), op2, ops2, n);
+            text->replaceText(j, string_format("%s", out));
+            if (n > 0 && strcmp(ops2[0], ft) == 0 && writesFirst)
+            {
+                dead = true;
+                break;
+            }
+        }
+        if (dead)
+            text->replaceText(i, " ");
+    }
+
+    for (int i = start + 1; i < end; i++)
+    {
+        trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+        strcpy(buf, line);
+        if (splitInstruction(buf, &op, ops) != 2 || strcmp(op, "mov.s") != 0 ||
+            !isPromotedFloat(ops[0], promoted, npf) || isPromotedFloat(ops[1], promoted, npf))
+            continue;
+        const char *fn = ops[0], *ft = ops[1];
+        int p = i - 1;
+        while (p >= start)
+        {
+            trimmedLine(*text->getChildAtPos(p), other, sizeof(other));
+            if (other[0] != 0)
+                break;
+            p--;
+        }
+        if (p < start || isBlockBoundary(other))
+            continue;
+        int n = splitInstruction(other, &op2, ops2);
+        if (n < 2 || strcmp(ops2[0], ft) != 0 || !writesFirstOperandOnly(op2) || strchr(op2, '.') == NULL)
+            continue;
+        bool dead = false;
+        for (int j = i + 1; j < end; j++)
+        {
+            char next[160];
+            trimmedLine(*text->getChildAtPos(j), next, sizeof(next));
+            if (next[0] == 0)
+                continue;
+            if (isBlockBoundary(next))
+                break;
+            RegRole role = regRole(next, ft);
+            if (role == REG_READ)
+                break;
+            if (role == REG_WRITTEN)
+            {
+                dead = true;
+                break;
+            }
+        }
+        if (!dead)
+            continue;
+        ops2[0] = (char *)fn;
+        joinInstruction(out, sizeof(out), op2, ops2, n);
+        text->replaceText(p, string_format("%s", out));
+        text->replaceText(i, " ");
+    }
+}
+
+// Returns how many lines it inserted (the float saves around calls).
+static int promoteFunction(Text *text, int start, int end)
+{
+    char line[160], buf[160];
+    char *op, *ops[4];
+    int offsets[PROMOTE_MAX_SLOTS];
+    int weights[PROMOTE_MAX_SLOTS];
+    bool bad[PROMOTE_MAX_SLOTS];
+    bool floatOnly[PROMOTE_MAX_SLOTS];
+    int nslots = 0;
+    int badLo[PROMOTE_MAX_SLOTS], badHi[PROMOTE_MAX_SLOTS];
+    int nbad = 0;
+
+    // Loop weight of each line: x8 per enclosing backward jump.
+    int len = end - start;
+    int *weight = (int *)malloc(sizeof(int) * (len > 0 ? len : 1));
+    if (weight == NULL)
+        return 0;
+    for (int i = 0; i < len; i++)
+        weight[i] = 1;
+    for (int i = start; i < end; i++)
+    {
+        trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+        if (!(line[0] == 'b' || strncmp(line, "j ", 2) == 0))
+            continue;
+        const char *target = strrchr(line, ',');
+        target = target ? target + 1 : strchr(line, ' ') + 1;
+        for (int k = start; k < i; k++)
+        {
+            trimmedLine(*text->getChildAtPos(k), buf, sizeof(buf));
+            size_t tl = strlen(target);
+            if (isLabelLine(buf) && strncmp(buf, target, tl) == 0 && buf[tl] == ':')
+            {
+                for (int m = k; m <= i; m++)
+                    if (weight[m - start] < (1 << 20))
+                        weight[m - start] *= 8;
+                break;
+            }
+        }
+    }
+
+    for (int i = start; i < end; i++)
+    {
+        trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+        if (line[0] == 0 || !mentionsRegister(line, "a1"))
+            continue;
+        strcpy(buf, line);
+        int n = splitInstruction(buf, &op, ops);
+        if (strcmp(op, "entry") == 0)
+            continue;
+        bool word = strcmp(op, "l32i") == 0 || strcmp(op, "s32i") == 0 || strcmp(op, "lsi") == 0 || strcmp(op, "ssi") == 0;
+        bool narrow = strcmp(op, "l8ui") == 0 || strcmp(op, "s8i") == 0 || strcmp(op, "l16ui") == 0 ||
+                      strcmp(op, "l16si") == 0 || strcmp(op, "s16i") == 0;
+        if (n != 3 || strcmp(ops[1], "a1") != 0 || strcmp(ops[0], "a1") == 0 || (!word && !narrow))
+        {
+            // the frame's address is used some other way: leave it alone
+            free(weight);
+            return 0;
+        }
+        int off = atoi(ops[2]);
+        if (narrow)
+        {
+            if (nbad < PROMOTE_MAX_SLOTS)
+            {
+                badLo[nbad] = off;
+                badHi[nbad++] = off + (op[1] == '8' || op[2] == '8' ? 1 : 2);
+            }
+            else
+            {
+                free(weight);
+                return 0;
+            }
+            continue;
+        }
+        int s = 0;
+        while (s < nslots && offsets[s] != off)
+            s++;
+        if (s == nslots)
+        {
+            if (nslots == PROMOTE_MAX_SLOTS)
+            {
+                free(weight);
+                return 0;
+            }
+            offsets[s] = off;
+            weights[s] = 0;
+            bad[s] = false;
+            floatOnly[s] = true;
+            nslots++;
+        }
+        weights[s] += weight[i - start];
+        if (op[0] != 'l' || op[1] != 's') // not lsi
+            floatOnly[s] = floatOnly[s] && strcmp(op, "ssi") == 0;
+    }
+    // What one float register costs at calls: a save and a restore each.
+    int callWeight = 0;
+    for (int i = start; i < end; i++)
+    {
+        trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+        if (strncmp(line, "call", 4) == 0)
+            callWeight += weight[i - start];
+    }
+    free(weight);
+
+    // Slots overlapping each other or a narrow access stay in memory.
+    for (int s = 0; s < nslots; s++)
+    {
+        for (int t = 0; t < nslots; t++)
+            if (t != s && offsets[t] > offsets[s] - 4 && offsets[t] < offsets[s] + 4)
+                bad[s] = true;
+        for (int b = 0; b < nbad; b++)
+            if (badLo[b] < offsets[s] + 4 && badHi[b] > offsets[s])
+                bad[s] = true;
+    }
+
+    // Float-only slots first: float registers the function never names
+    // (f0..f2 carry ___div's arguments and result). Calls clobber them, so
+    // each is stored back to its slot before every call and reloaded after:
+    // only worth it for a slot used more than that costs.
+    const char *promotedF[10];
+    int promotedOff[10];
+    int npf = 0;
+    for (int r = 3; r <= 12; r++)
+    {
+        char reg[4];
+        snprintf(reg, sizeof(reg), "f%d", r);
+        bool used = false;
+        for (int i = start; i < end && !used; i++)
+        {
+            trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+            used = mentionsRegister(line, reg);
+        }
+        if (used)
+            continue;
+        int best = -1;
+        for (int t = 0; t < nslots; t++)
+            if (!bad[t] && floatOnly[t] && weights[t] > 2 * callWeight && (best < 0 || weights[t] > weights[best]))
+                best = t;
+        if (best < 0)
+            break;
+        promotedF[npf] = r == 3 ? "f3" : r == 4 ? "f4" : r == 5 ? "f5" : r == 6 ? "f6" : r == 7 ? "f7" : r == 8 ? "f8" : r == 9 ? "f9" : r == 10 ? "f10" : r == 11 ? "f11" : "f12";
+        promotedOff[npf++] = offsets[best];
+        for (int i = start; i < end; i++)
+        {
+            trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+            if (!mentionsRegister(line, "a1"))
+                continue;
+            strcpy(buf, line);
+            int n = splitInstruction(buf, &op, ops);
+            if (n != 3 || strcmp(ops[1], "a1") != 0 || atoi(ops[2]) != offsets[best])
+                continue;
+            if (strcmp(op, "lsi") == 0)
+                text->replaceText(i, string_format("mov.s %s,%s", ops[0], reg));
+            else
+                text->replaceText(i, string_format("mov.s %s,%s", reg, ops[0]));
+        }
+        weights[best] = 0;
+    }
+
+    // a4..a7 survive call8/callExt (the callee's window starts at a8);
+    // only those the function never names are free.
+    const char *candidates[] = {"a4", "a5", "a6", "a7"};
+    const char *freeRegs[4];
+    int nfree = 0;
+    for (int r = 0; r < 4; r++)
+    {
+        bool used = false;
+        for (int i = start; i < end && !used; i++)
+        {
+            trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+            used = mentionsRegister(line, candidates[r]);
+        }
+        if (!used)
+            freeRegs[nfree++] = candidates[r];
+    }
+
+    for (int k = 0; k < nfree; k++)
+    {
+        int best = -1;
+        for (int t = 0; t < nslots; t++)
+            if (!bad[t] && weights[t] > 0 && (best < 0 || weights[t] > weights[best]))
+                best = t;
+        if (best < 0)
+            break;
+        const char *reg = freeRegs[k];
+        for (int i = start; i < end; i++)
+        {
+            trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+            if (!mentionsRegister(line, "a1"))
+                continue;
+            strcpy(buf, line);
+            int n = splitInstruction(buf, &op, ops);
+            if (n != 3 || strcmp(ops[1], "a1") != 0 || atoi(ops[2]) != offsets[best])
+                continue;
+            if (strcmp(op, "l32i") == 0)
+                text->replaceText(i, string_format("movr %s,%s", ops[0], reg));
+            else if (strcmp(op, "s32i") == 0)
+                text->replaceText(i, string_format("mov %s,%s", reg, ops[0]));
+            else if (strcmp(op, "lsi") == 0)
+                text->replaceText(i, string_format("wfr %s,%s", ops[0], reg));
+            else if (strcmp(op, "ssi") == 0)
+                text->replaceText(i, string_format("rfr %s,%s", reg, ops[0]));
+        }
+        weights[best] = 0;
+    }
+
+    int inserted = 0;
+    if (npf == 0)
+        return 0;
+    foldFloatCopies(text, start, end, promotedF, npf);
+    for (int i = end - 1; i >= start; i--)
+    {
+        trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+        if (strncmp(line, "call", 4) != 0)
+            continue;
+        for (int k = 0; k < npf; k++)
+            text->addAfter(i, string_format("lsi %s,a1,%d", promotedF[k], promotedOff[k]));
+        for (int k = 0; k < npf; k++)
+            text->addAfter(i - 1, string_format("ssi %s,a1,%d", promotedF[k], promotedOff[k]));
+        inserted += 2 * npf;
+    }
+    return inserted;
+}
+
+bool promoteFrameSlotsEnabled = true;
+
+void promoteFrameSlots(Text *text)
+{
+    if (!promoteFrameSlotsEnabled)
+        return;
+    char line[160];
+    int i = 0;
+    while (i < text->size())
+    {
+        trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+        if (!isFunctionLabel(line))
+        {
+            i++;
+            continue;
+        }
+        int end = i + 1;
+        while (end < text->size())
+        {
+            trimmedLine(*text->getChildAtPos(end), line, sizeof(line));
+            if (isFunctionLabel(line))
+                break;
+            end++;
+        }
+        i = end + promoteFunction(text, i + 1, end);
+    }
+}

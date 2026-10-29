@@ -3,6 +3,19 @@
 #define __SCRIPT_OPTIMIZE_H__
 #include "stackfunctions.h"
 
+// Keeps the most used 32-bit locals of each function in a4..a7 instead of
+// the stack frame, before the peephole passes: a slot only ever read and
+// written whole (l32i/s32i/lsi/ssi at a1+offset) gets one of those the
+// function never names -- they survive call8/callExt, the callee's window
+// starting at a8 -- and its loads/stores become movr/wfr and mov/rfr, the
+// same lines a register local compiles to. Accesses inside loops count
+// eight times per loop level. A function whose frame address is used any
+// other way (a local array or struct) is left as it is.
+void promoteFrameSlots(Text *text);
+// On by default. Test harnesses that read a local's result straight from
+// its frame slot turn it off, since a promoted local is never stored there.
+extern bool promoteFrameSlotsEnabled;
+
 // Peephole-optimizes a buffer of generated assembly lines in place:
 // eliminates redundant reloads of a register that already holds the value
 // (per register a3..a10), drops dead float reloads, folds "op ...; mov

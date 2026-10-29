@@ -546,6 +546,7 @@ static void runCorrectnessTest(const char *name, const char *script, int memOffs
         content.clear();
         header.clear();
         footer.clear();
+        promoteFrameSlotsEnabled = false; // the result is read from its frame slot
 
         Script s;
         char *buf = strdup(script);

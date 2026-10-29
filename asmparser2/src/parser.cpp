@@ -129,6 +129,8 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     buildParents(&program);
     PARSER_LOG("visit parents")
     program.visitNode();
+    PARSER_LOG("promote frame slots")
+    promoteFrameSlots(&content);
     PARSER_LOG("optimize")
     optimize(&content);
     removeBlankLines(&content);

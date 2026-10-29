@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 #include "parser.h"
+#include "optimize.h"
 #include "compiler_error.h"
 #include "asm_parser.h"
 
@@ -24,6 +25,7 @@ int main()
 {
     Parser p;
     p.clean();
+    promoteFrameSlotsEnabled = false; // the runner reads the result from its frame slot
     Script s;
     char *buf = strdup(
         "void main(){int a; int r1; int r2; r1=0; r2=0; "
