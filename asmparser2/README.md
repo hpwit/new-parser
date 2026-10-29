@@ -781,8 +781,10 @@ Measured on an esp32 at 240MHz on a 128x96 matrix (12288 leds), computing one fr
 
 |Script|`float`|`ffloat`|
 |:----|:----:|:----:|
-|Mandelbrot (50 iterations)|85.2ms (11.7fps)|82.8ms (12.1fps)|
-|60 bouncing balls|7.80ms|6.51ms|
+|Mandelbrot (50 iterations)|66.9ms (14.9fps)|72.4ms (13.8fps)|
+|60 bouncing balls|7.83ms|6.48ms|
+
+The same Mandelbrot written in C++ and compiled by the Arduino IDE (gcc `-Os`) takes 32.4ms with `float` and 28.9ms with the same fixed-point arithmetic as `ffloat`. So the script is about 2 times slower than precompiled code here, and it gives exactly the same picture.
 
 v1's README measured the same Mandelbrot at 11fps, including `show()`, on my panel.
 
