@@ -1,0 +1,163 @@
+{
+ "funcs": [
+  {
+   "name": "f0",
+   "params": [
+    "p0"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": false
+  },
+  {
+   "name": "f1",
+   "params": [
+    "p0",
+    "p1"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": false
+  },
+  {
+   "name": "f2",
+   "params": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4"
+   ],
+   "body": [
+    {
+     "kind": "assign",
+     "target": [
+      "var",
+      "p4"
+     ],
+     "op": "+=",
+     "expr": [
+      "call",
+      "nn",
+      [
+       [
+        "call",
+        "nn",
+        [
+         [
+          "var",
+          "p3"
+         ]
+        ]
+       ]
+      ]
+     ]
+    }
+   ],
+   "ret": [
+    "var",
+    "p4"
+   ],
+   "pure": true
+  }
+ ],
+ "main": [
+  {
+   "kind": "decl",
+   "name": "l8",
+   "expr": [
+    "call",
+    "ext1",
+    [
+     [
+      "lit",
+      1
+     ]
+    ]
+   ]
+  },
+  {
+   "kind": "decl",
+   "name": "l9",
+   "expr": [
+    "lit",
+    1
+   ]
+  },
+  {
+   "kind": "assign",
+   "target": [
+    "idx",
+    "N",
+    [
+     [
+      "call",
+      "ix",
+      [
+       [
+        "bin",
+        "/",
+        [
+         "var",
+         "l8"
+        ],
+        [
+         "call",
+         "dv",
+         [
+          [
+           "call",
+           "f2",
+           [
+            [
+             "var",
+             "l9"
+            ],
+            [
+             "var",
+             "l9"
+            ],
+            [
+             "var",
+             "g2"
+            ],
+            [
+             "lit",
+             1867
+            ],
+            [
+             "lit",
+             959
+            ]
+           ]
+          ]
+         ]
+        ]
+       ],
+       [
+        "lit",
+        4
+       ]
+      ]
+     ],
+     [
+      "lit",
+      1
+     ]
+    ]
+   ],
+   "op": "=",
+   "expr": [
+    "lit",
+    1
+   ]
+  }
+ ],
+ "description": "A promoted local passed as an argument after a constant one: the code generator loads each argument through a scratch register that can already hold an earlier argument (movi a13,1867 then movr a13,a7 / mov a11,a13) -- Pass 3 must fold movr like l32i or a13 is overwritten (seed 7032)."
+}

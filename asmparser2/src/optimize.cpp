@@ -300,7 +300,13 @@ void optimize(Text *text)
     }
 
     // Pass 3: fold "<op> aX,...; mov aY,aX" into "<op> aY,..." when aX is
-    // otherwise dead right after the mov.
+    // otherwise dead right after the mov. movr (a register local read) is
+    // folded as l32i (a stack local read) is: the code generator loads a
+    // call's arguments one by one into a scratch register that can already
+    // hold an earlier argument (`movi a13,1867` for the 4th, then `movr
+    // a13,a7 / mov a11,a13` for the 2nd) and relies on this fold to never
+    // actually write it. Only the destination is rewritten, never the
+    // register local itself.
     free(before);
     before = ownedCopy(" ");
     indexbefore = 0;
@@ -323,7 +329,7 @@ void optimize(Text *text)
                  strcmp(op, "sub") == 0 || strcmp(op, "add") == 0 || strcmp(op, "mov") == 0 ||
                  strcmp(op, "movi") == 0 || strcmp(op, "l32i") == 0 || strcmp(op, "l32r") == 0 ||
                  strcmp(op, "l16i") == 0 || strcmp(op, "l16ui") == 0 || strcmp(op, "l8ui") == 0 ||
-                 strcmp(op, "addi") == 0))
+                 strcmp(op, "addi") == 0 || strcmp(op, "movr") == 0))
             {
                 SplitResult p(d.get(1), ",");
                 SplitResult p2(d2.get(1), ",");

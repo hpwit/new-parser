@@ -94,6 +94,14 @@ static void addInstr(result_parse_line operande, parsedLines *asm_parsed)
             }
             operande.address += add_size;
         }
+        else if (operande.noCross && _address_instr % ALIGN_INSTR >= 2)
+        {
+            // at +2 or +3 a 3-byte instruction straddles the word; a nop.n
+            // moves it to +0 or +1
+            uint32_t nop_n = 0xF03D;
+            memcpy(tmp_exec + operande.address, &nop_n, 2);
+            operande.address += 2;
+        }
         memcpy(tmp_exec + operande.address, &operande.bincode, operande.size);
         _address_instr = operande.address + operande.size;
         asm_parsed->push_back(operande);
@@ -357,6 +365,92 @@ static asm_line splitOpcodeOperande(char *s)
 // The big mnemonic dispatch table -- one branch per instruction this
 // codebase's codegen (visitnode.cpp / asmInstructionsName) can emit, plus
 // the pseudo-ops (labels, .bytes, callExt) the assembler itself needs.
+// Labels kept from straddling a 4-byte boundary: the ESP32 loses a cycle
+// fetching a taken branch's target when its first instruction does. Those
+// are the loop heads (some later branch or jump goes back to them: taken
+// on every iteration, while the padding before them runs once, on entry)
+// and the targets of unconditional jumps (`j` lands there every time; the
+// padding only runs on the path falling into the label). A nop.n before
+// the label is enough: a target at +0 or +1 doesn't straddle.
+// Filled by parseASM() before assembling.
+static vect<char *> _loopHeads;
+
+static bool isLoopHead(const char *name)
+{
+    for (int i = 0; i < _loopHeads.size(); i++)
+        if (strcmp(_loopHeads.get(i), name) == 0)
+            return true;
+    return false;
+}
+
+// The label a branch or jump line goes to, or NULL: the last operand of
+// a line starting with 'b' or "j ".
+static const char *branchTarget(const char *line, char *buf, size_t n)
+{
+    while (*line == ' ')
+        line++;
+    if (!(line[0] == 'b' || strncmp(line, "j ", 2) == 0))
+        return NULL;
+    const char *t = strrchr(line, ',');
+    if (t == NULL)
+        t = strchr(line, ' ');
+    if (t == NULL)
+        return NULL;
+    t++;
+    while (*t == ' ')
+        t++;
+    size_t len = strcspn(t, " ");
+    if (len == 0 || len >= n)
+        return NULL;
+    memcpy(buf, t, len);
+    buf[len] = 0;
+    return buf;
+}
+
+static void findLoopHeads(Text *t)
+{
+    char name[96], target[96];
+    vect<char *> jumpTargets;
+    for (int i = 0; i < t->size(); i++)
+    {
+        const char *str = t->getText(i);
+        while (*str == ' ')
+            str++;
+        if (strncmp(str, "j ", 2) == 0 && branchTarget(str, target, sizeof(target)) != NULL)
+            jumpTargets.push_back(strdup(target));
+    }
+    for (int i = 0; i < t->size(); i++)
+    {
+        const char *str = t->getText(i);
+        while (*str == ' ')
+            str++;
+        const char *colon = strchr(str, ':');
+        if (colon == NULL || strncmp(str, "@_", 2) == 0 || (size_t)(colon - str) >= sizeof(name))
+            continue;
+        memcpy(name, str, colon - str);
+        name[colon - str] = 0;
+        bool jumpTarget = false;
+        for (int k = 0; k < jumpTargets.size() && !jumpTarget; k++)
+            jumpTarget = strcmp(jumpTargets.get(k), name) == 0;
+        if (jumpTarget)
+        {
+            _loopHeads.push_back(strdup(name));
+            continue;
+        }
+        for (int j = i + 1; j < t->size(); j++)
+        {
+            const char *tg = branchTarget(t->getText(j), target, sizeof(target));
+            if (tg != NULL && strcmp(tg, name) == 0)
+            {
+                _loopHeads.push_back(strdup(name));
+                break;
+            }
+        }
+    }
+    for (int k = 0; k < jumpTargets.size(); k++)
+        free(jumpTargets.get(k));
+}
+
 static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
 {
     if (strchr(sp.opcde, ':') != NULL)
@@ -380,6 +474,8 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         }
         if (strncmp(sp.opcde, "@_", 2) == 0)
             res.align = true;
+        else if (isLoopHead(res.getText()))
+            res.noCross = true;
         return res;
     }
 
@@ -916,6 +1012,11 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
     // function's tail -- up to and including its own retw.n, so execution
     // runs off the end of the copied buffer into whatever memory follows.
     int nb_callExt = 0;
+    for (int i = 0; i < _loopHeads.size(); i++)
+        free(_loopHeads.get(i));
+    _loopHeads.clear();
+    findLoopHeads(_content);
+    findLoopHeads(_footer);
     for (int pass = 0; pass < 2; pass++)
     {
         Text *t = pass == 0 ? _content : _footer;
@@ -968,7 +1069,7 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
 
     _instr_size = (uint16_t)((nb_align_label + 1) * ALIGN_INSTR +
                               (_content->size() + _footer->size() - nb_not_aligned_label) * 3 +
-                              header_reservations * 4 + nb_callExt * 3);
+                              header_reservations * 4 + nb_callExt * 3 + _loopHeads.size() * 2);
     _instr_size = (_instr_size / 8) * 8 + 8;
     tmp_instr_size = (uint16_t)(_instr_size + (tmp_data_size / 4) * 4 + 4);
 

@@ -408,6 +408,17 @@ static bool isIntegerLiteral(NodeToken *nd, bool nonzero)
     return !nonzero || strtol(nd->getText(), NULL, 0) != 0;
 }
 
+// The value of an integer literal accepted by isIntegerLiteral(), minus
+// signs and empty casts included.
+static long integerLiteralValue(NodeToken *nd)
+{
+    if (nd->_nodetype == unitaryOpNode && nd->children_size() == 1)
+        return -integerLiteralValue(nd->getChildPtr(0));
+    if (nd->_nodetype == changeTypeNode && nd->children_size() == 1)
+        return integerLiteralValue(nd->getChildPtr(0));
+    return strtol(nd->getText(), NULL, 0);
+}
+
 static bool isIntegerOperand(NodeToken *nd)
 {
     if (isIntegerLiteral(nd, false))
@@ -863,6 +874,29 @@ void _visitoperatorNode(NodeToken *nd)
         int a = register_numl.get(), b = register_numr.get();
         if (!divMaybeZero)
         {
+            // By +-2^k: a shift, truncated toward zero like quos -- add
+            // 2^k - 1 first when a is negative (the sign mask's low k bits).
+            long n = integerLiteralValue(nd->getChildPtr(1));
+            long m = n < 0 ? -n : n;
+            if (m > 0 && (m & (m - 1)) == 0 && a != 9)
+            {
+                int k = 0;
+                while ((1L << k) < m)
+                    k++;
+                if (k > 0)
+                {
+                    bufferText->addAfter(string_format("srai a9,a%d,31", a));
+                    if (k <= 16)
+                        bufferText->addAfter(string_format("extui a9,a9,0,%d", k));
+                    else
+                        bufferText->addAfter(string_format("srli a9,a9,%d", 32 - k));
+                    bufferText->addAfter(string_format("add a%d,a%d,a9", a, a));
+                    bufferText->addAfter(string_format("srai a%d,a%d,%d", a, a, k));
+                }
+                if (n < 0)
+                    bufferText->addAfter(string_format("neg a%d,a%d", a, a));
+                return;
+            }
             bufferText->addAfter(string_format(quos, a, a, b));
             return;
         }

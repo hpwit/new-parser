@@ -102,6 +102,9 @@ public:
     int16_t nameref = EOF_TEXTARRAY;
     uint32_t address = 0;
     bool align = false;
+    // A branch target: padded with a nop.n when needed so that its first
+    // instruction doesn't straddle a 4-byte boundary (see asm_parser.cpp).
+    bool noCross = false;
     int line = 0;
     uint32_t (*calculateOfssetJump)(uint32_t value, uint32_t current_address,
                                      uint32_t destination_address) = NULL;
