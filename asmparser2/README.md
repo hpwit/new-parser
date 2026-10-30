@@ -853,6 +853,7 @@ This is the part that is really new compared to v1:
 | `FloatVsFfloat` | The same calculations in `float` and in `ffloat`, timed side by side. |
 | `BouncingBallsFfloat` | The bouncing balls with `ffloat`, and how to stay within ±32768. |
 | `MandelbrotFfloat` | The float Mandelbrot with `float` replaced by `ffloat`. |
+| `MandelbrotCompare` | The Mandelbrot set four ways -- native C++ float and fixed point, script `float` and `ffloat` -- timed, with a checksum showing they draw the same picture. |
 | `MandelbrotFixedPoint` | The Mandelbrot set with integers only, fixed point done by hand. |
 | `ExecuteAsTask` | `main()` on its own FreeRTOS task, with `pause()`/`restart()`/`kill()`/`state()`. esp32 only. |
 | `PinInterrupt` | A GPIO interrupt calling back into the running script. esp32 only. |
