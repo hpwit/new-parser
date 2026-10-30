@@ -30,7 +30,7 @@
 
 
 #define __TEST_DEBUG
-#define __MEM_PARSER
+// #define __MEM_PARSER
 
 #define EOF_TEXT 0
 #define EOF_TEXTARRAY 9999

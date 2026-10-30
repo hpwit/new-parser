@@ -189,6 +189,68 @@ NodeToken::NodeToken(NodeToken nd, nodeType tt, uint16_t _target)
 	children = NULL;
 	_c_size = 0;
 }
+// Syntax-tree nodes come from a pool: a script of a few hundred lines
+// makes thousands of them, and on the ESP32 every heap block costs 16
+// bytes on top of its size -- more than half of a node again. The pool
+// takes them 64 at a time and keeps freed ones on a free list; its chunks
+// go back to the heap once no node is left (nodePoolRelease()).
+#define NODE_POOL_CHUNK 64
+union PoolNode
+{
+	PoolNode *next;
+	char storage[sizeof(NodeToken)];
+};
+struct NodeChunk
+{
+	NodeChunk *next;
+	PoolNode nodes[NODE_POOL_CHUNK];
+};
+static NodeChunk *nodeChunks = NULL;
+static PoolNode *freeNodes = NULL;
+static int liveNodes = 0;
+
+static NodeToken *nodeAlloc()
+{
+	if (freeNodes == NULL)
+	{
+		NodeChunk *c = (NodeChunk *)malloc(sizeof(NodeChunk));
+		assert(c != NULL);
+		c->next = nodeChunks;
+		nodeChunks = c;
+		for (int i = NODE_POOL_CHUNK - 1; i >= 0; i--)
+		{
+			c->nodes[i].next = freeNodes;
+			freeNodes = &c->nodes[i];
+		}
+	}
+	PoolNode *n = freeNodes;
+	freeNodes = n->next;
+	liveNodes++;
+	return (NodeToken *)n;
+}
+
+static void nodeFree(NodeToken *nd)
+{
+	PoolNode *n = (PoolNode *)nd;
+	n->next = freeNodes;
+	freeNodes = n;
+	liveNodes--;
+}
+
+bool nodePoolRelease()
+{
+	if (liveNodes != 0)
+		return false;
+	while (nodeChunks != NULL)
+	{
+		NodeChunk *c = nodeChunks;
+		nodeChunks = c->next;
+		free(c);
+	}
+	freeNodes = NULL;
+	return true;
+}
+
 void NodeToken::clear()
 {
 	// PARSER_LOG(" on efface :%s",all_text.getText(textref));
@@ -203,7 +265,7 @@ void NodeToken::clear()
 		// `children` block freed every child's storage at once, since
 		// they were all inline values within it.
 		children[i]->clear();
-		free(children[i]);
+		nodeFree(children[i]);
 	}
 	free(children);
 	children = NULL;
@@ -249,7 +311,7 @@ NodeToken NodeToken::children_pop()
 	// its own `children` sub-array pointer (ownership of that subtree
 	// transfers to tmp, matching the original behavior) -- so only the
 	// now-unreferenced struct itself needs freeing here, not its subtree.
-	free(children[_c_size - 1]);
+	nodeFree(children[_c_size - 1]);
 	if (_c_size == 1)
 	{
 		free(children);
@@ -287,7 +349,7 @@ NodeToken *NodeToken::addChildFront(NodeToken nd)
 	}
 	if (_c_size > 0)
 		memmove(children + 1, children, _c_size * sizeof(NodeToken *));
-	NodeToken *new_object = (NodeToken *)malloc(sizeof(NodeToken));
+	NodeToken *new_object = nodeAlloc();
 	memcpy(new_object, &nd, sizeof(NodeToken));
 	children[0] = new_object;
 	new_object->children = NULL;
@@ -315,7 +377,7 @@ NodeToken *NodeToken::addChild(NodeToken nd)
 		NodeToken **tmp = (NodeToken **)p_realloc(children, (_c_size + 1) * sizeof(NodeToken *));
 		children = tmp;
 	}
-	NodeToken *new_object = (NodeToken *)malloc(sizeof(NodeToken));
+	NodeToken *new_object = nodeAlloc();
 	memcpy(new_object, &nd, sizeof(NodeToken));
 	children[_c_size] = new_object;
 	new_object->parent = this;
@@ -344,7 +406,7 @@ NodeToken *NodeToken::addChild(NodeToken *nd)
 		tmp = (NodeToken **)p_realloc(children, (_c_size + 1) * sizeof(NodeToken *));
 	}
 	children = tmp;
-	NodeToken *new_object = (NodeToken *)malloc(sizeof(NodeToken));
+	NodeToken *new_object = nodeAlloc();
 	memcpy(new_object, nd, sizeof(NodeToken));
 	children[_c_size] = new_object;
 	new_object->children = NULL;
@@ -393,7 +455,7 @@ void NodeToken::erase(NodeToken *asset)
 	}
 	assert(diff >= 0);
 	asset->clear();
-	free(asset);
+	nodeFree(asset);
 	memmove(children + diff, children + diff + 1, sizeof(NodeToken *) * (_c_size - diff - 1));
 	children = (NodeToken **)p_realloc(children, (_c_size - 1) * sizeof(NodeToken *));
 	_c_size--;

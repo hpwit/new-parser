@@ -10,6 +10,11 @@
 // checks the resulting binary against a documented resource budget for
 // an ESP32 *without* PSRAM.
 //
+// It also measures the compiler's own heap while compiling -- the limit a
+// PSRAM-less ESP32 actually runs into -- and checks its peak against a
+// budget (kMaxCompileHeapEsp32), printing the live heap after each stage
+// with the allocation sites holding the most (see alloc_tracker.cpp).
+//
 // Why a budget check, not just "did it compile": this compiler's own
 // output -- instruction bytes (destined for IRAM) and the executable's
 // data region (the script's globals/struct-arrays/buffers, destined for
@@ -46,8 +51,9 @@
 #include "optimize.h"
 #include "asm_parser.h"
 #include "asm_execute.h"
+#include "alloc_tracker.h"
 
-static const char *kScriptPath = "fixtures/multi_effect_controller.sc";
+static const char *kScriptPath = "fixtures/multi_effect_controller.sc"; // or argv[1]
 
 // Same boilerplate v1's real compile entrypoints always prepend before a
 // user script (see test_sc_examples.cpp's kPrelude for the full
@@ -67,6 +73,33 @@ static const char *kPrelude =
 // tautological check that can never fail.
 static const uint32_t kMaxInstructionBytes = 32 * 1024;
 static const uint32_t kMaxDataBytes = 96 * 1024;
+
+// The compiler's own heap while compiling, as the ESP32 heap would count
+// it (alloc_tracker.cpp: each block's size rounded up to 4, plus 16 bytes,
+// measured on a board), is the limit a PSRAM-less ESP32 actually hits:
+// about 230 KB are free when an Arduino sketch starts, and the compile has
+// to fit in that with the sketch's own data. Calibrated on a board with
+// examples/MultiEffectController's 730-line script: this model gives
+// ~238 KB, the board used ~207 KB (its low-water mark) -- the model errs
+// on the safe side by ~15%. Before the memory work of 2026-10 the same
+// script needed ~453 KB here and ran out of memory on the board.
+static const size_t kMaxCompileHeapEsp32 = 256 * 1024;
+
+static size_t phaseStartBytes = 0, phaseStartEsp = 0;
+
+// Live compiler heap at each stage of Parser::parse(), with where it is.
+static void onPhase(const char *phase)
+{
+    printf("  heap after %-15s %7zu B live in %6zu blocks, ~%zu B on an ESP32 (peak so far %zu B, ~%zu B)\n", phase,
+           allocLiveBytes() - phaseStartBytes, allocLiveBlocks(), allocLiveEsp32() - phaseStartEsp,
+           allocPeakBytes() - phaseStartBytes, allocPeakEsp32() - phaseStartEsp);
+    allocPrintLiveBySite(6);
+    if (strcmp(phase, "assembler lines") == 0)
+    {
+        printf("    largest blocks:\n");
+        allocPrintLargestBlocks(8);
+    }
+}
 
 static std::string readFile(const char *path)
 {
@@ -97,8 +130,10 @@ static void registerBindings()
     bindFunction((char *)"void", (char *)"pinInterrupt", (char *)"uint32_t,char*,int", NULL);
 }
 
-int main()
+int main(int argc, char **argv)
 {
+    if (argc > 1)
+        kScriptPath = argv[1];
     printf("Compiling %s against an ESP32-without-PSRAM budget "
            "(instructions <= %u bytes, data <= %u bytes)\n",
            kScriptPath, kMaxInstructionBytes, kMaxDataBytes);
@@ -115,6 +150,11 @@ int main()
     registerBindings();
 
     std::string processed = std::string(kPrelude) + raw;
+    phaseStartBytes = allocLiveBytes();
+    phaseStartEsp = allocLiveEsp32();
+    allocResetPeak();
+    parserPhaseHook = onPhase;
+    allocTrackPeakSites(true);
     Parser p;
     p.clean();
     content.clear();
@@ -149,6 +189,14 @@ int main()
     }
     printf("  assemble: OK (%u instruction bytes, %u data bytes declared)\n",
            bin.instruction_size, bin.data_size);
+    onPhase("assembled");
+    size_t compilePeak = allocPeakBytes() - phaseStartBytes;
+    size_t compilePeakEsp = allocPeakEsp32() - phaseStartEsp;
+    allocTrackPeakSites(false);
+    printf("  compiler heap peak: %zu B (host sizes, 8-byte pointers; %zu allocations in all), held near the peak by:\n",
+           compilePeak, allocTotal());
+    allocPrintPeakBySite(10);
+    printf("  as the ESP32 heap would count it: ~%zu B\n", compilePeakEsp);
 
     executable exe = createExecutableFromBinary(&bin);
     if (exe.error.error)
@@ -166,6 +214,12 @@ int main()
            exe.functions.size(), exe.data_size);
 
     bool ok = true;
+    if (compilePeakEsp > kMaxCompileHeapEsp32)
+    {
+        printf("FAIL: the compiler's heap peaked at ~%zu B (ESP32 count), over the %zu B budget\n", compilePeakEsp,
+               kMaxCompileHeapEsp32);
+        ok = false;
+    }
     if (bin.instruction_size > kMaxInstructionBytes)
     {
         printf("FAIL: instruction_size %u exceeds the %u byte budget\n",
@@ -180,12 +234,16 @@ int main()
     }
 
     freeExecutable(&exe);
+    printf("  after freeing the executable: %zu B still allocated by the compiler (~%zu B on an ESP32), held by:\n",
+           allocLiveBytes() - phaseStartBytes, allocLiveEsp32() - phaseStartEsp);
+    allocPrintLiveBySite(8);
 
     if (ok)
     {
-        printf("PASS: compiles to a binary within the ESP32-without-PSRAM budget "
-               "(%u/%u instruction bytes, %u/%u data bytes)\n",
-               bin.instruction_size, kMaxInstructionBytes, exe.data_size, kMaxDataBytes);
+        printf("PASS: compiles within the ESP32-without-PSRAM budget "
+               "(heap ~%zu/%zu B, %u/%u instruction bytes, %u/%u data bytes)\n",
+               compilePeakEsp, kMaxCompileHeapEsp32, bin.instruction_size, kMaxInstructionBytes, exe.data_size,
+               kMaxDataBytes);
     }
     return ok ? 0 : 1;
 }

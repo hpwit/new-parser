@@ -91,6 +91,11 @@ bool Parser::Match(tokenType tt, int index)
     return _tks->Match(tt, index);
 }
 
+void (*parserPhaseHook)(const char *phase) = NULL;
+#define PARSER_PHASE(name) \
+    if (parserPhaseHook != NULL) \
+        parserPhaseHook(name);
+
 void Parser::parse(Script *main_script, Tokens *__tks)
 {
     // Always-available built-ins (printf/printfln -- see
@@ -125,10 +130,26 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     parseProgram();
     if(Error.error)
     return;
+    PARSER_PHASE("parsed")
  PARSER_LOG("build parents")
     buildParents(&program);
     PARSER_LOG("visit parents")
     program.visitNode();
+    // The syntax tree is not read again once the code is generated, and on
+    // a large script it is the biggest thing in memory -- the optimizer and
+    // the assembler, which come next, need room of their own. Parser::clean()
+    // frees it too, at the start of the next compile; doing it here instead
+    // keeps it from being alive at the same time as the assembler's data.
+    program.clear();
+    functions.clear();
+    main_context.clear();
+    function_cntx.clear();
+    ext_function_cntx.clear();
+    for (int i = 0; i < nodeTokenList.size(); i++)
+        nodeTokenList[i].clear();
+    nodeTokenList.clear();
+    nodePoolRelease();
+    PARSER_PHASE("code generated")
     PARSER_LOG("promote frame slots")
     promoteFrameSlots(&content);
     PARSER_LOG("optimize")
@@ -156,6 +177,7 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     preserveAcrossCalls(&content);
     // Global initializers run as one more function, @__footer.
     preserveAcrossCalls(&footer);
+    PARSER_PHASE("optimized")
 }
 
 void Parser::parseProgram()

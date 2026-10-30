@@ -75,7 +75,11 @@ $(SC_BUILD_DIR):
 # an ESP32-without-PSRAM size budget. Separate binary/build dir, same
 # reasoning as run-json/run-sc above.
 LARGE_BUILD_DIR := build-large
-LARGE_SRCS := $(wildcard $(SRC_DIR)/*.cpp) test_large_script.cpp
+LARGE_SRCS := $(wildcard $(SRC_DIR)/*.cpp) test_large_script.cpp alloc_tracker.cpp
+# The compiler's own allocations go through alloc_tracker.cpp (built
+# without these) so the test can measure its heap use.
+TRACK_FLAGS := -Dmalloc=trk_malloc -Dcalloc=trk_calloc -Drealloc=trk_realloc -Dfree=trk_free \
+               -Dstrdup=trk_strdup -Dstrndup=trk_strndup
 LARGE_OBJS := $(addprefix $(LARGE_BUILD_DIR)/,$(notdir $(LARGE_SRCS:.cpp=.o)))
 
 run-large: $(LARGE_BUILD_DIR)/test_large_script
@@ -85,10 +89,13 @@ $(LARGE_BUILD_DIR)/test_large_script: $(LARGE_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $(LARGE_OBJS)
 
 $(LARGE_BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(LARGE_BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(TRACK_FLAGS) -c $< -o $@
+
+$(LARGE_BUILD_DIR)/alloc_tracker.o: alloc_tracker.cpp alloc_tracker.h | $(LARGE_BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(LARGE_BUILD_DIR)/%.o: %.cpp | $(LARGE_BUILD_DIR)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(TRACK_FLAGS) -c $< -o $@
 
 $(LARGE_BUILD_DIR):
 	mkdir -p $(LARGE_BUILD_DIR)

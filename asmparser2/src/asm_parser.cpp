@@ -2,6 +2,7 @@
 #include "asm_encoders.h"
 #include "string_functions.h"
 #include "vect.h"
+#include "parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -946,6 +947,29 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
 
 // ---- driver ----
 
+struct BranchForm
+{
+    const char *op;
+    const char *inverse;
+    int bits;
+};
+static const BranchForm kBranchForms[] = {
+    {"blt", "bge", 8}, {"bge", "blt", 8}, {"bltu", "bgeu", 8}, {"bgeu", "bltu", 8},
+    {"beq", "bne", 8}, {"bne", "beq", 8}, {"blti", "bgei", 8}, {"bgei", "blti", 8},
+    {"beqi", "bnei", 8}, {"bnei", "beqi", 8}, {"bt", "bf", 8}, {"bf", "bt", 8},
+    {"beqz", "bnez", 12}, {"bnez", "beqz", 12}, {"bltz", "bgez", 12}, {"bgez", "bltz", 12}};
+
+static const BranchForm *branchFormOf(const char *line)
+{
+    while (*line == ' ')
+        line++;
+    size_t len = strcspn(line, " ");
+    for (size_t k = 0; k < sizeof(kBranchForms) / sizeof(kBranchForms[0]); k++)
+        if (strlen(kBranchForms[k].op) == len && strncmp(line, kBranchForms[k].op, len) == 0)
+            return &kBranchForms[k];
+    return NULL;
+}
+
 static void assembleBuffer(Text *text, int lineOffset, parsedLines *asm_parsed, asm_error_message_struct *main_error)
 {
     int size = text->size();
@@ -959,6 +983,9 @@ static void assembleBuffer(Text *text, int lineOffset, parsedLines *asm_parsed, 
             {
                 result_parse_line re_sparse = parseline(res, asm_parsed);
                 re_sparse.line = i + 1;
+                const BranchForm *form = branchFormOf(front);
+                if (form != NULL)
+                    re_sparse.branchBits = (uint8_t)form->bits;
                 if (asm_Error.error)
                 {
                     main_error->error = 1;
@@ -1079,9 +1106,14 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
 
     int tmp_size = _header->size();
     int tmp_size2 = _content->size() + _header->size();
+    // One entry per line, two for a callExt: reserved up front so that the
+    // array is allocated once and pointers into it stay valid.
+    asm_parsed->reserve(_header->size() + _content->size() + _footer->size() + nb_callExt + 8);
     assembleBuffer(_header, 0, asm_parsed, &main_error);
     assembleBuffer(_content, tmp_size, asm_parsed, &main_error);
     assembleBuffer(_footer, tmp_size2, asm_parsed, &main_error);
+    if (parserPhaseHook != NULL)
+        parserPhaseHook("assembler lines");
 
     if (main_error.error == 1)
         free(tmp_exec);
@@ -1338,148 +1370,128 @@ static uint8_t *createBinaryHeader(parsedLines *asm_parsed)
 // and the whole thing is assembled again, until everything fits (each
 // rewrite only adds bytes, so this converges).
 // ---------------------------------------------------------------------
-struct BranchForm
-{
-    const char *op;
-    const char *inverse;
-    int bits;
-};
-static const BranchForm kBranchForms[] = {
-    {"blt", "bge", 8}, {"bge", "blt", 8}, {"bltu", "bgeu", 8}, {"bgeu", "bltu", 8},
-    {"beq", "bne", 8}, {"bne", "beq", 8}, {"blti", "bgei", 8}, {"bgei", "blti", 8},
-    {"beqi", "bnei", 8}, {"bnei", "beqi", 8}, {"bt", "bf", 8}, {"bf", "bt", 8},
-    {"beqz", "bnez", 12}, {"bnez", "beqz", 12}, {"bltz", "bgez", 12}, {"bgez", "bltz", 12}};
-
-static const BranchForm *branchFormOf(const char *line)
+// Upper bound on the bytes a line of assembly text assembles to: 3 per
+// instruction (2 for the narrow ones), 6 for callExt (l32r + callx8), the
+// padding a label can get (up to 5 to align a function entry, 2 for a
+// branch target, see addInstr()), and a generous allowance for a data line.
+static int maxLineBytes(const char *line)
 {
     while (*line == ' ')
         line++;
-    size_t len = strcspn(line, " ");
-    for (size_t k = 0; k < sizeof(kBranchForms) / sizeof(kBranchForms[0]); k++)
-        if (strlen(kBranchForms[k].op) == len && strncmp(line, kBranchForms[k].op, len) == 0)
-            return &kBranchForms[k];
-    return NULL;
+    if (*line == 0)
+        return 0;
+    if (strchr(line, ':') != NULL)
+        return strncmp(line, "@_", 2) == 0 ? 5 : 2;
+    if (strncmp(line, "callExt", 7) == 0)
+        return 6;
+    if (*line == '.')
+        return 64;
+    return 3;
 }
 
-static void snapshotText(Text *t, vect<char *> *out)
-{
-    for (int i = 0; i < t->size(); i++)
-        out->push_back(strdup(t->getText(i)));
-}
-
-static void restoreText(Text *t, vect<char *> &lines)
-{
-    t->clear();
-    for (int i = 0; i < lines.size(); i++)
-        t->_texts.push_back(strdup(lines.get(i)));
-    t->end();
-}
-
-static void freeLines(vect<char *> &lines)
-{
-    for (int i = 0; i < lines.size(); i++)
-        free(lines.get(i));
-    lines.clear();
-}
-
-// Rewrites, in `lines`, the branch at index `idx` as inverse + j + label.
-static void relaxBranchLine(vect<char *> &lines, int idx, const BranchForm *form)
+// Rewrites the branch at line `idx` of `t` as inverse + j + label, so that
+// only the unconditional j (range +-128 KB) has to reach the target.
+static void relaxBranch(Text *t, int idx, const BranchForm *form)
 {
     static int relaxCount = 0;
-    char *line = lines.get(idx);
+    char *line = strdup(t->getText(idx));
     char *operands = line + strspn(line, " ");
     operands += strcspn(operands, " ");
     operands += strspn(operands, " ");
     char *lastComma = strrchr(operands, ',');
-    if (lastComma == NULL)
-        return;
-    char *target = strdup(lastComma + 1);
-    *lastComma = 0;
-    char *skip = string_format("__relax_%d", relaxCount++);
-    char *branch = string_format("%s %s,%s", form->inverse, operands, skip);
-    char *jump = string_format("j %s", target);
-    char *label = string_format("%s:", skip);
-    free(lines.get(idx));
-    lines.getptr(idx)[0] = branch;
-    lines.insertAfter(lines.getptr(idx), jump);
-    lines.insertAfter(lines.getptr(idx + 1), label);
-    free(skip);
-    free(target);
+    if (lastComma != NULL)
+    {
+        *lastComma = 0;
+        char *skip = string_format("__relax_%d", relaxCount++);
+        t->replaceText(idx, string_format("%s %s,%s", form->inverse, operands, skip));
+        t->addAfter(idx, string_format("j %s", lastComma + 1));
+        t->addAfter(idx + 1, string_format("%s:", skip));
+        free(skip);
+    }
+    free(line);
 }
 
-// Assembles, relaxing out-of-range branches as needed. On return the
-// three Texts are consumed, as parseASM() leaves them.
-static asm_error_message_struct parseASMRelaxed(Text *_footer, Text *_header, Text *_content, parsedLines *asm_parsed)
+// Relaxes, before assembling, every short branch in `t` that might not
+// reach its label: the distance is bounded from above with maxLineBytes(),
+// so a branch is only kept when it surely fits. Repeats until nothing
+// changes, since each relaxation adds a jump and a label. Branches to a
+// label outside `t` are left to the check after assembling.
+static void relaxBranches(Text *t)
 {
-    vect<char *> header, content, footer;
-    snapshotText(_header, &header);
-    snapshotText(_content, &content);
-    snapshotText(_footer, &footer);
-
-    asm_error_message_struct err;
-    for (int attempt = 0;; attempt++)
+    for (bool changed = true; changed;)
     {
-        asm_parsed->clear();
-        err = parseASM(_footer, _header, _content, asm_parsed);
-        if (err.error || attempt >= 16)
-            break;
-
-        // Out-of-range short branches, by their line in the snapshot.
-        // parseline() numbers lines header first, then content, then
-        // footer (assembleBuffer()'s lineOffset).
-        vect<int> badContent, badFooter;
-        for (int i = 0; i < asm_parsed->size(); i++)
+        changed = false;
+        int n = t->size();
+        int *offset = (int *)malloc((n + 1) * sizeof(int));
+        assert(offset != NULL);
+        offset[0] = 0;
+        for (int i = 0; i < n; i++)
+            offset[i + 1] = offset[i] + maxLineBytes(t->getText(i));
+        for (int i = n - 1; i >= 0; i--)
         {
-            result_parse_line *pl = asm_parsed->getChildAtPos(i);
-            if (pl->op != opCodeType::jump || pl->calculateOfssetJump == NULL)
-                continue;
-            int global = pl->line - 1;
-            char *src = NULL;
-            bool inContent = false;
-            if (global >= header.size() && global < header.size() + content.size())
-            {
-                src = content.get(global - header.size());
-                inContent = true;
-            }
-            else if (global >= header.size() + content.size() && global < header.size() + content.size() + footer.size())
-                src = footer.get(global - header.size() - content.size());
-            const BranchForm *form = src ? branchFormOf(src) : NULL;
+            const char *line = t->getText(i);
+            const BranchForm *form = branchFormOf(line);
             if (form == NULL)
                 continue;
-            int index = findLabel(pl->getText(), asm_parsed);
-            if (index < 0)
+            const char *target = strrchr(line, ',');
+            if (target == NULL)
                 continue;
-            int32_t dif = (int32_t)getInstrAtPos(index)->address - (int32_t)pl->address - 4;
-            int32_t limit = 1 << (form->bits - 1);
-            if (dif >= -limit && dif < limit)
-                continue;
-            if (inContent)
-                badContent.push_back(global - header.size());
-            else
-                badFooter.push_back(global - header.size() - content.size());
+            target++;
+            size_t len = strlen(target);
+            for (int k = 0; k < n; k++)
+            {
+                const char *l = t->getText(k);
+                while (*l == ' ')
+                    l++;
+                if (strncmp(l, target, len) != 0 || l[len] != ':')
+                    continue;
+                // the label's own padding and the branch's pc + 4 base
+                int distance = offset[k] - offset[i];
+                if (distance < 0)
+                    distance = -distance;
+                if (distance + 12 >= (1 << (form->bits - 1)))
+                {
+                    relaxBranch(t, i, form);
+                    changed = true;
+                }
+                break;
+            }
         }
-        if (badContent.size() == 0 && badFooter.size() == 0)
-            break;
-
-        // Rewrite from the last line up, so earlier indexes stay valid.
-        for (int k = badContent.size() - 1; k >= 0; k--)
-            relaxBranchLine(content, badContent.get(k), branchFormOf(content.get(badContent.get(k))));
-        for (int k = badFooter.size() - 1; k >= 0; k--)
-            relaxBranchLine(footer, badFooter.get(k), branchFormOf(footer.get(badFooter.get(k))));
-
-        if (tmp_exec != NULL)
-        {
-            free(tmp_exec);
-            tmp_exec = NULL;
-        }
-        asm_text.clear();
-        restoreText(_header, header);
-        restoreText(_content, content);
-        restoreText(_footer, footer);
+        free(offset);
     }
-    freeLines(header);
-    freeLines(content);
-    freeLines(footer);
+}
+
+// Assembles in one pass: branches that might be out of range are relaxed
+// first (relaxBranches()), so the text can be consumed as it is assembled
+// instead of kept, or copied, for a second pass -- on a large script the
+// text is one of the biggest things in memory. A short branch still found
+// out of range afterwards is reported as an error. On return the three
+// Texts are consumed.
+static asm_error_message_struct parseASMRelaxed(Text *_footer, Text *_header, Text *_content, parsedLines *asm_parsed)
+{
+    relaxBranches(_content);
+    relaxBranches(_footer);
+    asm_parsed->clear();
+    asm_error_message_struct err = parseASM(_footer, _header, _content, asm_parsed);
+    if (err.error)
+        return err;
+    for (int i = 0; i < asm_parsed->size(); i++)
+    {
+        result_parse_line *pl = asm_parsed->getChildAtPos(i);
+        if (pl->op != opCodeType::jump || pl->calculateOfssetJump == NULL || pl->branchBits == 0)
+            continue;
+        int index = findLabel(pl->getText(), asm_parsed);
+        if (index < 0)
+            continue;
+        int32_t dif = (int32_t)getInstrAtPos(index)->address - (int32_t)pl->address - 4;
+        int32_t limit = 1 << (pl->branchBits - 1);
+        if (dif < -limit || dif >= limit)
+        {
+            err.error = 1;
+            err.error_message = string_format("line %d: branch to %s out of range\n", pl->line, pl->getText());
+            return err;
+        }
+    }
     return err;
 }
 

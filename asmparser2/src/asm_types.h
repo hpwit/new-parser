@@ -1,4 +1,5 @@
 #pragma once
+#include <assert.h>
 #ifndef __ASM_TYPES__
 #define __ASM_TYPES__
 // Types shared by the assembler (asm_encoders.h / asm_parser.h): operand
@@ -39,7 +40,7 @@ enum class operandeType
     l0_FFFFFFFF,
 };
 
-enum class opCodeType
+enum class opCodeType : uint8_t
 {
     standard,
     call,
@@ -96,46 +97,69 @@ public:
     char *getText() { return asm_text.getText(nameref); }
     void addText(char *t) { nameref = asm_text.addText(t); }
     void addText(char *t, uint16_t si) { nameref = asm_text.addText(t, si); }
+    // Ordered by size so that the struct packs to 24 bytes on the ESP32:
+    // a large script assembles to thousands of these, all alive at once.
     uint32_t bincode = 0;
-    uint16_t size = 0;
-    opCodeType op = opCodeType::standard;
-    int16_t nameref = EOF_TEXTARRAY;
     uint32_t address = 0;
+    uint32_t (*calculateOfssetJump)(uint32_t value, uint32_t current_address,
+                                     uint32_t destination_address) = NULL;
+    uint16_t size = 0;
+    int16_t nameref = EOF_TEXTARRAY;
+    uint16_t line = 0;
+    opCodeType op = opCodeType::standard;
     bool align = false;
     // A branch target: padded with a nop.n when needed so that its first
     // instruction doesn't straddle a 4-byte boundary (see asm_parser.cpp).
     bool noCross = false;
-    int line = 0;
-    uint32_t (*calculateOfssetJump)(uint32_t value, uint32_t current_address,
-                                     uint32_t destination_address) = NULL;
+    // For a short conditional branch, the bits of its offset (8 or 12), so
+    // that the assembler can check it reached; 0 otherwise.
+    uint8_t branchBits = 0;
 };
 
+// The assembled lines, in one array (not one heap block each: on the ESP32
+// every block costs 16 bytes on top of its size, more than half a line).
+// Pointers into it are only valid until the next push_back() -- reserve()
+// the expected count first to keep them stable.
 class parsedLines
 {
 public:
     parsedLines() {}
-    int size() { return parsed_lines.size(); }
+    int size() { return count; }
     result_parse_line *getChildAtPos(int pos)
     {
-        if (pos >= 0 && pos < parsed_lines.size())
-            return parsed_lines.get(pos);
+        if (pos >= 0 && pos < count)
+            return &items[pos];
         return NULL;
+    }
+    void reserve(int n)
+    {
+        if (n <= capacity)
+            return;
+        result_parse_line *grown = (result_parse_line *)realloc(items, n * sizeof(result_parse_line));
+        assert(grown != NULL);
+        items = grown;
+        capacity = n;
     }
     result_parse_line *push_back(result_parse_line res)
     {
-        result_parse_line *tmp = (result_parse_line *)malloc(sizeof(result_parse_line));
-        memcpy(tmp, &res, sizeof(result_parse_line));
-        parsed_lines.push_back(tmp);
-        return parsed_lines.get(parsed_lines.size() - 1);
+        if (count == capacity)
+            reserve(capacity < 16 ? 16 : capacity + capacity / 2);
+        memcpy(&items[count], &res, sizeof(result_parse_line));
+        return &items[count++];
     }
-    result_parse_line *last() { return parsed_lines.get(parsed_lines.size() - 1); }
+    result_parse_line *last() { return &items[count - 1]; }
     void clear()
     {
-        for (int i = 0; i < parsed_lines.size(); i++)
-            free(parsed_lines.get(i));
-        parsed_lines.clear();
+        free(items);
+        items = NULL;
+        count = 0;
+        capacity = 0;
     }
-    vect<result_parse_line *> parsed_lines;
+
+private:
+    result_parse_line *items = NULL;
+    int count = 0;
+    int capacity = 0;
 };
 
 struct Binary

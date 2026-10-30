@@ -160,6 +160,9 @@ extern const char *nodeTypeNames[];
 extern NodeToken *search_result;
 extern int search_result_index;
 extern Stack<int> _for_depth_reg;
+// Frees the syntax-tree node pool's memory if no node is alive any more;
+// false (nothing freed) otherwise. See nodetoken.cpp.
+bool nodePoolRelease();
 extern Stack<bool> _is_variable_as_register;
 extern NodeToken *lasttype;
 extern vect<NodeToken *> sav_token;

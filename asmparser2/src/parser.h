@@ -51,6 +51,9 @@ void createNodeVariable(Token *_var, bool isStore);
 varTypeEnum finduint32_t(NodeToken *nd);
 varTypeEnum findfloat(NodeToken *nd);
 extern NodeToken program, extra_parser;
+// Called with a phase name between the stages of Parser::parse() when set
+// (NULL by default): lets a caller watch memory use while compiling.
+extern void (*parserPhaseHook)(const char *phase);
 extern NodeToken main_context,ext_function_cntx,*sav_current_cntx;
 extern NodeToken functions;
 extern bool isExtra;

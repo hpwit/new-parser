@@ -106,10 +106,19 @@ static uint32_t declaredElementCount(NodeToken *nd)
     return count;
 }
 
+extern NodeToken main_context; // parser.cpp: the global declarations
+
 static void declareSafeArray(NodeToken *nd)
 {
     uint32_t count = declaredElementCount(nd);
     if (count == 0)
+        return;
+    // Declared already, from a function using the array before the
+    // global's own declaration was visited (see emitSafeBoundsCheck()).
+    char *sizeLabel = string_format("@_size_%s:", nd->getText());
+    bool done = header.findText(sizeLabel) > -1;
+    free(sizeLabel);
+    if (done)
         return;
     header.addAfter(string_format("@_size_%s:", nd->getText()));
     header.addAfter(_numToBytes(count));
@@ -134,6 +143,23 @@ static void emitSafeBoundsCheck(NodeToken *nd, int sizeReg)
     // known bound and is left unchecked.
     char *sizeLabel = string_format("@_size_%s:", nd->getText());
     bool declared = header.findText(sizeLabel) > -1;
+    if (!declared)
+    {
+        // Functions are compiled as soon as they are parsed, before the
+        // global declarations are visited (at the end of the program): a
+        // global array used here may have no size entry yet. Its
+        // declaration is in main_context, which still exists while the
+        // function compiles.
+        for (int i = 0; i < main_context.children_size() && !declared; i++)
+        {
+            NodeToken *decl = main_context.getChildPtr(i);
+            if (strcmp(decl->getText(), nd->getText()) == 0 && declaredElementCount(decl) > 0)
+            {
+                declareSafeArray(decl);
+                declared = true;
+            }
+        }
+    }
     free(sizeLabel);
     if (!declared)
         return;
