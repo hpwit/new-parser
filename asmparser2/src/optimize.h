@@ -82,4 +82,19 @@ void removeBlankLines(Text *text);
 // extra loads and stores. Run on `content` and on `footer` (the global
 // initializers' function).
 void preserveAcrossCalls(Text *text);
+
+// Runs after preserveAcrossCalls(), on `content`: gives what is left in
+// memory or reloaded inside loops a register of its own, wherever one is
+// free (no line names it or needs its value) over the lines involved --
+// a8..a15 too over stretches without a call, now that the final text
+// shows where those are.
+// - Frame slots promoteFrameSlots() had no a4..a7 for (8- and 16-bit
+//   ones too, stores becoming extui), heaviest in loops first.
+// - `l32r aX,@sym` inside a loop (an array's address, a constant): loaded
+//   once into the register before the loop, which every way into it
+//   passes through, and read from there.
+// Then tidies up with liveness: copies folded into the line computing
+// their source or the line reading them, dead computations removed,
+// `movi`+`addi` folded.
+void allocateLoopRegisters(Text *text);
 #endif

@@ -175,6 +175,8 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     appendFfloatDivision(&content); // hand-written: after the optimizer
     PARSER_LOG("preserve across calls")
     preserveAcrossCalls(&content);
+    PARSER_LOG("loop registers")
+    allocateLoopRegisters(&content);
     // Global initializers run as one more function, @__footer.
     preserveAcrossCalls(&footer);
     PARSER_PHASE("optimized")

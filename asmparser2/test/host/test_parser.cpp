@@ -931,7 +931,9 @@ static void runSafeModeTest()
                 printf("       expected 3 bounds checks, found %d\n", checks);
                 ok = false;
             }
-            const char *expectedChecks[] = {"l32r a10,@_name_buf", "l32r a10,@_name_grid", "l32r a10,@_name_ext",
+            // (buf's check is in a loop: its name may be loaded once
+            // before it, into a register other than a10)
+            const char *expectedChecks[] = {",@_name_buf", "l32r a10,@_name_grid", "l32r a10,@_name_ext",
                                             "callExt a8,@_safeModeError(char*|num|num|num)", "l32r a13,@__handle_"};
             for (int i = 0; i < 5; i++)
                 if (!textContains(content, expectedChecks[i]))
