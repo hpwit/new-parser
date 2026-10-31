@@ -1850,6 +1850,11 @@ void _visitprogramNode(NodeToken *nd)
 
     header.addBefore(string_format(arrobase_label, _handle_));
     header.addBefore(string_format(bytes, 4));
+    // Globals go right after _handle_. addBefore() leaves the cursor on
+    // the header's old first line, which with per-function compile is the
+    // first function's ".global" -- inserting after it would separate it
+    // from its ".var" line, which createBinaryHeader() reads as i + 1.
+    header.putIteratorAtPos(1);
 
     register_numr.clear();
     register_numl.clear();

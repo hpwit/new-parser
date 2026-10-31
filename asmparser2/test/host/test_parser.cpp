@@ -1808,9 +1808,13 @@ static void runLoadAndRelocateTest()
 // would crash immediately regardless. Real execution is QEMU-verified:
 // test/qemu/gen_fibonacci_arg.cpp runs this exact script with n=10 and
 // confirms fib(10)==55 on a real Xtensa CPU emulation.
-static void runArgumentPassingLoadTest()
+//
+// The string-literal variant: a literal becomes a global, emitted into
+// the header after the function was already compiled (per-function
+// compile). It once landed between the function's ".global" and ".var"
+// lines, and the record decoded with args_num 0.
+static void runArgumentPassingLoadTest(const char *name, const char *script)
 {
-    const char *name = "load a with-argument function and find its one function record (execution itself is QEMU-verified, see test/qemu/)";
     printf("RUNNING: %s\n", name);
     fflush(stdout);
 
@@ -1824,9 +1828,7 @@ static void runArgumentPassingLoadTest()
         footer.clear();
 
         Script s;
-        char *buf = strdup(
-            "void main(int n){int a; a=0; int b; b=1; int i; "
-            "for (i=0;i<n;i++) { int t; t=a+b; a=b; b=t; } int fib; fib=a;}");
+        char *buf = strdup(script);
         s.addContent(buf);
         s.init();
         p.parse(&s, &__allTokens);
@@ -2825,7 +2827,13 @@ int main()
         "void main(int n){int a; a=0; int b; b=1; int i; "
         "for (i=0;i<n;i++) { int t; t=a+b; a=b; b=t; } int fib; fib=a;}";
     runGenerateBinaryTest("generates executable binary: fibonacci (n as argument)", fibonacciArgScript);
-    runArgumentPassingLoadTest();
+    runArgumentPassingLoadTest(
+        "load a with-argument function and find its one function record (execution itself is QEMU-verified, see test/qemu/)",
+        "void main(int n){int a; a=0; int b; b=1; int i; "
+        "for (i=0;i<n;i++) { int t; t=a+b; a=b; b=t; } int fib; fib=a;}");
+    runArgumentPassingLoadTest(
+        "with-argument function containing a string literal keeps args_num",
+        "void main(int n){char *s; s=\"hi\"; int a; a=n;}");
     runNamedFunctionLoadTest();
     runSaveLoadBinaryTest();
     runArgumentsClassTest();
