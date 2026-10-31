@@ -8,15 +8,13 @@
 // overhead, not just a quick sanity check. Timed with micros() around the
 // callFunction() call, the same way you'd time any other on-device work.
 //
-// Measured (not guessed): reading Xtensa's CCOUNT special register
-// (`rsr.ccount`, the same technique the sc_examples corpus's own
-// millis()/elapseMillis() __ASM__ functions use) around calls to the
-// *actual* compiled fib() bytes under QEMU gives ~6.1 cycles/call,
-// confirmed consistent between fib(25) (242,785 calls, 6.13 cycles/call)
-// and fib(30) (2,692,537 calls -- 11x more -- 6.10 cycles/call). At
-// 331,160,281 calls for fib(40) and the ESP32's default 240 MHz clock,
-// that projects to (331,160,281 * 6.1) / 240,000,000 ~= 8.4 seconds on
-// real hardware -- expect single-digit seconds, not milliseconds.
+// Measured on an ESP32 at 240 MHz: 21.7 s, about 15.7 cycles per call.
+// The same function compiled natively by the Arduino-ESP32 toolchain
+// takes 17.0 s -- gcc turns the second recursive call into a loop, so it
+// makes half as many calls. At this recursion depth most of each call's
+// cost is the register-window overflow/underflow exceptions, which QEMU
+// does not charge for: test/qemu's fib_timing reads ~5 cycles per call
+// there, so don't project real-hardware time from it.
 #include "script_executable.h"
 
 char script[] = R"EOF(
