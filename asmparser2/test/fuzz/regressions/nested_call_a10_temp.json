@@ -1,0 +1,139 @@
+{
+ "funcs": [
+  {
+   "name": "f0",
+   "params": [],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": false
+  },
+  {
+   "name": "f1",
+   "params": [],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": true
+  }
+ ],
+ "main": [
+  {
+   "kind": "decl",
+   "name": "l1",
+   "expr": [
+    "lit",
+    1
+   ]
+  },
+  {
+   "kind": "for",
+   "var": "i2",
+   "count": 3,
+   "body": [
+    {
+     "kind": "emit",
+     "expr": [
+      "var",
+      "l1"
+     ]
+    },
+    {
+     "kind": "assign",
+     "target": [
+      "var",
+      "l1"
+     ],
+     "op": "+=",
+     "expr": [
+      "idx",
+      "M",
+      [
+       [
+        "lit",
+        1
+       ],
+       [
+        "call",
+        "ix",
+        [
+         [
+          "bin",
+          "/",
+          [
+           "bin",
+           "%",
+           [
+            "lit",
+            1
+           ],
+           [
+            "call",
+            "dv",
+            [
+             [
+              "lit",
+              1
+             ]
+            ]
+           ]
+          ],
+          [
+           "call",
+           "dv",
+           [
+            [
+             "bin",
+             "%",
+             [
+              "lit",
+              1
+             ],
+             [
+              "bin",
+              "-",
+              [
+               "lit",
+               0
+              ],
+              [
+               "bin",
+               "+",
+               [
+                "call",
+                "dv",
+                [
+                 [
+                  "lit",
+                  1
+                 ]
+                ]
+               ],
+               [
+                "lit",
+                1
+               ]
+              ]
+             ]
+            ]
+           ]
+          ]
+         ],
+         [
+          "lit",
+          4
+         ]
+        ]
+       ]
+      ]
+     ]
+    }
+   ]
+  }
+ ],
+ "description": "0 - (dv(1) + 1) inside nested call arguments kept the 0 in a10, the inner call's argument and result register"
+}

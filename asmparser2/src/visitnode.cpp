@@ -2607,6 +2607,22 @@ void _visitcomparatorNode(NodeToken *nd)
     free(_add);
 }
 
+// Set by _visitCallFunctionTemplate() when it spilled a10 -- an outer
+// expression's temporary, once they have counted down that far -- which
+// can only be filled back once the caller has read the result out of it
+// (see emitPendingResultFill()).
+static bool resultFillPending = false;
+
+static void emitPendingResultFill()
+{
+    if (!resultFillPending)
+        return;
+    resultFillPending = false;
+    bufferText->addAfter("fill a10");
+    bufferText->sp.pop();
+    bufferText->sp.push(bufferText->get());
+}
+
 void _visitcallFunctionNode(NodeToken *nd)
 {
     // printf("compiling  call function %s\n", nd->getTokenText());
@@ -2774,6 +2790,7 @@ void _visitcallFunctionNode(NodeToken *nd)
         bufferText->sp.push(bufferText->get());
         register_numl.decrease();
     }
+    emitPendingResultFill();
 }
 
 // Emits a bottom-tested for-loop's own condition check: branches
@@ -3287,6 +3304,7 @@ void _visitextCallFunctionNode(NodeToken *nd)
             bufferText->sp.push(bufferText->get());
         }
     }
+    emitPendingResultFill();
     register_numl.decrease();
 }
 
@@ -4775,9 +4793,15 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
     // save them. Spill each one before the arguments are set up and fill
     // it back after the call; preserveAcrossCalls() turns the spill/fill
     // pseudo-instructions into stack stores and loads with nested slots.
-    // a10 is left alone: it carries the result.
+    // a10 too when it is one of them: `0 - (dv(1) + 1)` deep in nested
+    // calls held the 0 in a10 while dv(1) took its argument and returned
+    // there (seed 11268). It carries the result, so its fill waits for
+    // the caller to read that (resultFillPending).
     int spilledRegs[6];
     int spilledCount = 0;
+    bool spillResult = register_numl.get() < regbase;
+    if (spillResult)
+        bufferText->addAfter(string_format("spill a%d", regbase));
     {
         int callArgs = nd->getChildPtr(2)->children_size();
         if (callArgs > 6)
@@ -5137,6 +5161,7 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
     }
     for (int k = spilledCount - 1; k >= 0; k--)
         bufferText->addAfter(string_format("fill a%d", spilledRegs[k]));
+    resultFillPending = spillResult;
     // A call has to leave bufferText->sp the way any other expression
     // does: nothing but the position(s) of its own result on top of what
     // was there before. The store visitors rely on that -- they pop one
