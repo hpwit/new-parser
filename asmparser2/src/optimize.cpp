@@ -996,7 +996,7 @@ static bool writesFirstOperandOnly(const char *op)
     static const char *ops[] = {
         "movi", "mov", "movr", "fill", "pop", "mov.s", "l32i", "l16i", "l16ui", "l16si", "l8ui", "lsi", "l32r", "movExt",
         "add", "addi", "sub", "mull", "quos", "quou", "remu", "rems", "and", "or", "xor", "extui",
-        "slli", "srli", "srai", "addx2", "addx4", "addx8", "subx8", "neg", "neg.s", "abs.s", "abs", "mulsh", "src",
+        "slli", "srli", "srai", "sll", "srl", "sra", "addx2", "addx4", "addx8", "subx8", "neg", "neg.s", "abs.s", "abs", "mulsh", "src",
         "float.s", "ufloat.s", "trunc.s", "wfr", "rfr", "add.s", "sub.s", "mul.s", "const.s",
         "nexp01.s", "div0.s"};
     for (size_t i = 0; i < sizeof(ops) / sizeof(ops[0]); i++)
@@ -1366,6 +1366,76 @@ static int removeUnreadWrites(Text *text, int start, int end)
     return removed;
 }
 
+// Folds `mov(r) aT,aS` into the instructions that read aT, between
+// `start` and `end`: when every read of aT before its next write comes
+// later in the same straight-line run (no label, branch, call or return
+// first) and aS is not rewritten before the last of them, those reads
+// are renamed to aS and the copy is deleted. Promoted locals leave
+// these behind (`movr a14,a3; slli a15,a14,7`). Returns how many lines it
+// removed.
+static int foldCopies(Text *text, int start, int end)
+{
+    int removed = 0;
+    char line[160], op[16], t[16], src[16];
+    for (int j = start; j < end; j++)
+    {
+        trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+        if (sscanf(line, "%15s %15[^,],%15s", op, t, src) != 3 ||
+            (strcmp(op, "mov") != 0 && strcmp(op, "movr") != 0) || t[0] != 'a' || src[0] != 'a' ||
+            strcmp(t, src) == 0 || strcmp(t, "a1") == 0 || strcmp(src, "a1") == 0)
+            continue;
+        int reads[32], nReads = 0;
+        bool srcChanged = false, ok = false;
+        int k;
+        for (k = j + 1; k < end; k++)
+        {
+            trimmedLine(*text->getChildAtPos(k), line, sizeof(line));
+            if (endsStraightLine(line) || isCallLine(line))
+                break;
+            RegRole role = regRole(line, t, true);
+            if (role == REG_READ)
+            {
+                if (srcChanged || nReads == 32)
+                    break;
+                // As a first operand it is only safely a read for a store;
+                // anything else may write it (renaming would move the
+                // write to aS).
+                char lop[16], first[16];
+                if (sscanf(line, "%15s %15[^,]", lop, first) == 2 && strcmp(first, t) == 0 &&
+                    strcmp(lop, "s8i") != 0 && strcmp(lop, "s16i") != 0 && strcmp(lop, "s32i") != 0)
+                    break;
+                reads[nReads++] = k;
+                if (lineWritesRegister(line, t))
+                {
+                    ok = true; // read one last time, then rewritten
+                    break;
+                }
+            }
+            else if (role == REG_WRITTEN)
+            {
+                ok = true;
+                break;
+            }
+            if (regRole(line, src, true) == REG_WRITTEN || lineWritesRegister(line, src))
+                srcChanged = true;
+        }
+        if (!ok)
+            continue;
+        for (int r = 0; r < nReads; r++)
+        {
+            trimmedLine(*text->getChildAtPos(reads[r]), line, sizeof(line));
+            char *renamed = renameRegister(line, t, src, lineWritesRegister(line, t));
+            text->replaceText(reads[r], (const char *)renamed);
+            free(renamed);
+        }
+        text->_texts.erase(j);
+        end--;
+        j--;
+        removed++;
+    }
+    return removed;
+}
+
 void preserveAcrossCalls(Text *text)
 {
     char line[160];
@@ -1525,6 +1595,7 @@ void preserveAcrossCalls(Text *text)
             end += 2 * n;
         }
         end -= removeUnreadWrites(text, entryPos + 1, end);
+        end -= foldCopies(text, entryPos + 1, end);
         i = end;
     }
 }

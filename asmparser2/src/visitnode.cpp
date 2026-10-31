@@ -1090,10 +1090,7 @@ void _visitoperatorNode(NodeToken *nd)
         // style expressions against real xtensa-esp32-elf-gcc's -O1
         // output, which uses exactly this self-referencing addx idiom
         // (confirmed against real hardware encoding -- see asm_encoders.h).
-        // 4/8 have no equally-cheap one-instruction form without a spare
-        // zero register (addx4/addx8 need a real third operand, not an
-        // implicit zero), so they're left as mull; 2/3/5/9 are the only
-        // constants a single self-referencing instruction covers.
+        // Other powers of two become slli; anything else stays mull.
         if (!ff)
         {
             char *_last = bufferText->current();
@@ -1111,6 +1108,17 @@ void _visitoperatorNode(NodeToken *nd)
                 case 5: strengthReduced = addx4; break;
                 case 9: strengthReduced = addx8; break;
                 default: found = false; break;
+                }
+                // Any other positive power of two is a left shift.
+                if (!found && b > 2 && (b & (b - 1)) == 0)
+                {
+                    int shift = 0;
+                    while ((1 << shift) < b)
+                        shift++;
+                    bufferText->blankCurrent();
+                    bufferText->addAfter(string_format("slli a%d,a%d,%d", register_numl.get(), register_numl.get(), shift));
+                    free(tocmp);
+                    break;
                 }
                 if (found)
                 {
@@ -1265,11 +1273,40 @@ void _visitoperatorNode(NodeToken *nd)
 // first argument and returns its result, so `N[ext1(1), 1]` lost the
 // partial sum to the call, and a 2D read inside a 2D index (`M[N[i, j],
 // k]`) overwrote the outer one's sum with its own.
+// dst = src * k for a compile-time constant k >= 1: a shift for a power
+// of two, a single add/addx for 2/3/5/9, movi+mull into `scratch`
+// otherwise.
+static void emitScaleByConstant(int dst, int src, int k, int scratch)
+{
+    if (k == 1)
+    {
+        if (dst != src)
+            bufferText->addAfter(string_format(mov, dst, src));
+        return;
+    }
+    if ((k & (k - 1)) == 0)
+    {
+        int shift = 0;
+        while ((1 << shift) < k)
+            shift++;
+        bufferText->addAfter(string_format("slli a%d,a%d,%d", dst, src, shift));
+        return;
+    }
+    switch (k)
+    {
+    case 3: bufferText->addAfter(string_format(addx2, dst, src, src)); return;
+    case 5: bufferText->addAfter(string_format(addx4, dst, src, src)); return;
+    case 9: bufferText->addAfter(string_format(addx8, dst, src, src)); return;
+    default: break;
+    }
+    bufferText->addAfter(string_format(movi, scratch, k));
+    bufferText->addAfter(string_format(mull, dst, src, scratch));
+}
+
 static void emitFlatIndex(NodeToken *nd, vect<char *> &tile, bool pushIntType)
 {
     int n = nd->children_size();
     int sum = register_numl.get();
-    bufferText->addAfter(string_format(movi, sum, 0));
     register_numl.decrease();
     for (int i = 0; i < n; i++)
     {
@@ -1281,12 +1318,18 @@ static void emitFlatIndex(NodeToken *nd, vect<char *> &tile, bool pushIntType)
         int value = register_numl.get();
         if (nd->getChildPtr(i)->getVarTypeObj() != NULL)
             translateType(__int__, nd->getChildPtr(i)->getVarTypeObj()->_varType, value);
+        // c_i times the product of the dimensions after it, folded into
+        // one constant; the first index goes straight into the sum.
+        int stride = 1;
         for (int h = 1; h < n - i; h++)
+            stride *= stringToInt((char *)tile[i + 1 + h]);
+        if (i == 0)
+            emitScaleByConstant(sum, value, stride, value - 1);
+        else
         {
-            bufferText->addAfter(string_format(movi, value - 1, stringToInt((char *)tile[i + 1 + h])));
-            bufferText->addAfter(string_format(mull, value, value, value - 1));
+            emitScaleByConstant(value, value, stride, value - 1);
+            bufferText->addAfter(string_format(add, sum, sum, value));
         }
-        bufferText->addAfter(string_format(add, sum, sum, value));
         if (pushIntType)
             globalType.pop();
     }
