@@ -1161,6 +1161,18 @@ static asm_error_message_struct calculateJump(uint8_t *exec, parsedLines *asm_pa
     return error;
 }
 
+// A function_declaration's args descriptor: the ".var" line visitnode.cpp
+// emits right after its ".global". Struct member functions, @__footer and
+// the builtin helpers have none -- they get an empty descriptor rather
+// than a copy of whatever line comes next.
+static const char *functionVariables(parsedLines *asm_parsed, int i)
+{
+    result_parse_line *next = asm_parsed->getChildAtPos(i + 1);
+    if (next == NULL || next->op != opCodeType::variable)
+        return "";
+    return next->getText();
+}
+
 static uint8_t *createBinaryHeader(parsedLines *asm_parsed)
 {
     uint16_t nb_data = 0;
@@ -1186,8 +1198,7 @@ static uint8_t *createBinaryHeader(parsedLines *asm_parsed)
         {
             nb_objects++;
             binary_header_size += 1 + 2 + (uint16_t)(strlen(it->getText()) + 1);
-            result_parse_line *it2 = asm_parsed->getChildAtPos(i + 1);
-            binary_header_size += 2 + (uint16_t)(strlen(it2->getText()) + 1);
+            binary_header_size += 2 + (uint16_t)(strlen(functionVariables(asm_parsed, i)) + 1);
             binary_header_size += 2 + 4 + 4;
         }
         else if (it->op == opCodeType::json_binding)
@@ -1280,18 +1291,16 @@ static uint8_t *createBinaryHeader(parsedLines *asm_parsed)
             binary_header[text_size - 1] = 0;
             binary_header += text_size;
 
-            result_parse_line *it2 = asm_parsed->getChildAtPos(i + 1);
-            text_size = (uint16_t)(strlen(it2->getText()) + 1);
+            const char *variables = functionVariables(asm_parsed, i);
+            text_size = (uint16_t)(strlen(variables) + 1);
             memcpy(binary_header, &text_size, 2);
             binary_header += 2;
-            memcpy(binary_header, it2->getText(), text_size - 1);
+            memcpy(binary_header, variables, text_size - 1);
             binary_header[text_size - 1] = 0;
             binary_header += text_size;
 
-            SplitResult args(trim(it2->getText()), " ");
             int num = 0;
-            if (args.size() > 0)
-                sscanf(args.get(0), "%d", &num);
+            sscanf(variables, "%d", &num);
             memcpy(binary_header, &num, 2);
             binary_header += 2;
 
