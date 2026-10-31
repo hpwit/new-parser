@@ -32,6 +32,10 @@ int main()
 {
     int allPass = 1;
 
+    /* Untimed first run: QEMU translates the code on first execution,
+       which would otherwise be charged to the fib(N1) measurement alone. */
+    callFib(script_code + FIB_ENTRY_OFFSET, FIB_N1);
+
     uint32_t before1 = readCcount();
     int32_t r1 = callFib(script_code + FIB_ENTRY_OFFSET, FIB_N1);
     uint32_t cycles1 = readCcount() - before1;

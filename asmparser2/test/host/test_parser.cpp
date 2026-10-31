@@ -346,17 +346,29 @@ static void runOptimizeUnitTest()
         }
 
         // preserveAcrossCalls(): a15 holds a value across the first call
-        // (read by the `add` after it) and has to be saved around it;
-        // around the second call nothing is live (a15 is rewritten before
-        // being read, a10 is the return register). The slot goes where
-        // the frame's reserved top 32 bytes start (96 - 32 = 64) and the
-        // frame grows by 8 so that area stays intact. The read at offset
-        // 100 is past the old frame size (an argument in the caller's
-        // frame) and has to move with it.
+        // (read by the `add` after it) and has to survive it; around the
+        // second call nothing is live (a15 is rewritten before being
+        // read, a10 is the return register).
+        //
+        // In @_f a3..a7 all appear, so there is no spare window register
+        // and a15 is saved to a frame slot. The slot goes where the
+        // frame's reserved top 32 bytes start (96 - 32 = 64) and the frame
+        // grows by 8 so that area stays intact. The read at offset 100 is
+        // past the old frame size (an argument in the caller's frame) and
+        // has to move with it.
+        //
+        // In @_h nothing names a3, so a15's whole life (movi .. add) is
+        // renamed into a3 instead: no slot, no frame growth, no copies.
         Text c;
         c.addAfter("@_f():");
         c.addAfter("entry a1,96");
         c.addAfter("l32i a14,a1,100");
+        c.addAfter("s32i a14,a1,60");
+        c.addAfter("s32i a3,a1,0");
+        c.addAfter("s32i a4,a1,4");
+        c.addAfter("s32i a5,a1,8");
+        c.addAfter("s32i a6,a1,12");
+        c.addAfter("s32i a7,a1,16");
         c.addAfter("movi a15,20");
         c.addAfter("movi a10,200");
         c.addAfter("callExt a8,@_rand(num)");
@@ -364,6 +376,16 @@ static void runOptimizeUnitTest()
         c.addAfter("s32i a15,a1,56");
         c.addAfter("callExt a8,@_show()");
         c.addAfter("mov a15,a10");
+        c.addAfter("retw.n");
+        c.addAfter("@_h():");
+        c.addAfter("entry a1,96");
+        c.addAfter("movi a15,20");
+        c.addAfter("movi a10,200");
+        c.addAfter("callExt a8,@_rand(num)");
+        c.addAfter("add a15,a15,a10");
+        c.addAfter("s32i a15,a1,56");
+        c.addAfter("callExt a8,@_show()");
+        c.addAfter("mov a2,a10");
         c.addAfter("retw.n");
         c.addAfter("@_g():");
         c.addAfter("entry a1,80");
@@ -376,6 +398,12 @@ static void runOptimizeUnitTest()
             "@_f():",
             "entry a1,104",
             "l32i a14,a1,108",
+            "s32i a14,a1,60",
+            "s32i a3,a1,0",
+            "s32i a4,a1,4",
+            "s32i a5,a1,8",
+            "s32i a6,a1,12",
+            "s32i a7,a1,16",
             "movi a15,20",
             "movi a10,200",
             "s32i a15,a1,64",
@@ -386,17 +414,28 @@ static void runOptimizeUnitTest()
             "callExt a8,@_show()",
             "mov a15,a10",
             "retw.n",
+            "@_h():",
+            "entry a1,96",
+            "movi a3,20",
+            "movi a10,200",
+            "callExt a8,@_rand(num)",
+            "add a15,a3,a10",
+            "s32i a15,a1,56",
+            "callExt a8,@_show()",
+            "mov a2,a10",
+            "retw.n",
             "@_g():",
             "entry a1,80",
             "callExt a8,@_show()",
             "retw.n",
         };
-        if (c.size() != 17)
+        const int nExpected = (int)(sizeof(expectedCalls) / sizeof(expectedCalls[0]));
+        if (c.size() != nExpected)
         {
-            printf("       preserveAcrossCalls: expected 17 lines, got %d\n", c.size());
+            printf("       preserveAcrossCalls: expected %d lines, got %d\n", nExpected, c.size());
             ok = false;
         }
-        for (int i = 0; i < 17 && i < c.size(); i++)
+        for (int i = 0; i < nExpected && i < c.size(); i++)
         {
             char *got = *c.getChildAtPos(i);
             if (got == NULL || strcmp(got, expectedCalls[i]) != 0)

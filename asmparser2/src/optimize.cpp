@@ -2,6 +2,7 @@
 #include "parser_define.h"
 #include "string_functions.h"
 #include "vect.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -103,7 +104,7 @@ enum RegRole
     REG_READ,
     REG_WRITTEN
 };
-static RegRole regRole(const char *line, const char *reg);
+static RegRole regRole(const char *line, const char *reg, bool allVarargs = false);
 static void trimmedLine(const char *src, char *dst, size_t n);
 static bool isFunctionLabel(const char *line);
 static bool lineWritesRegister(const char *line, const char *reg);
@@ -1055,21 +1056,32 @@ static bool lineWritesRegister(const char *line, const char *reg)
 }
 
 // What `line` does to `reg` (see the call case inside).
-// Number of arguments a call line passes, from its label's signature:
-// `call8 @_f(num|num)` -> 2, `callExt a8,@_g()` -> 0.
-static int callArgumentCount(const char *line)
+// Number of argument registers (a10..) a call line passes, from its
+// label's signature: `call8 @_f(num|num)` -> 2, `callExt a8,@_g()` -> 0.
+// A struct method (`@_Foo.bump()`) also gets `this` in a10. A variadic
+// one (`@_printfln(char*|Args)`) may use all six: `allVarargs` counts
+// them all, otherwise its signature's count stands (what the liveness
+// scan of preserveAcrossCalls() has always used).
+static int callArgumentCount(const char *line, bool allVarargs = false)
 {
     const char *open = strchr(line, '(');
-    if (open == NULL || open[1] == ')')
+    if (open == NULL)
         return 0;
-    int n = 1;
-    for (const char *p = open + 1; *p && *p != ')'; p++)
-        if (*p == '|')
-            n++;
+    if (allVarargs && strstr(open, "Args") != NULL)
+        return 6;
+    const char *label = strchr(line, '@');
+    int n = label != NULL && memchr(label, '.', (size_t)(open - label)) != NULL ? 1 : 0;
+    if (open[1] != ')')
+    {
+        n++;
+        for (const char *p = open + 1; *p && *p != ')'; p++)
+            if (*p == '|')
+                n++;
+    }
     return n > 6 ? 6 : n;
 }
 
-static RegRole regRole(const char *line, const char *reg)
+static RegRole regRole(const char *line, const char *reg, bool allVarargs)
 {
     if (line[0] == 0 || strchr(line, ':') != NULL)
         return REG_UNTOUCHED;
@@ -1085,7 +1097,7 @@ static RegRole regRole(const char *line, const char *reg)
         if (reg[0] == 'a')
         {
             int r = atoi(reg + 1);
-            if (r >= 10 && r < 10 + callArgumentCount(line))
+            if (r >= 10 && r < 10 + callArgumentCount(line, allVarargs))
                 return REG_READ;
         }
         return REG_UNTOUCHED;
@@ -1171,6 +1183,189 @@ static int liveAcrossCall(Text *text, int callPos, int end, const char *live[])
     return n;
 }
 
+// Registers from a3..a7 that no line of the function between `start` and
+// `end` names. The callee never sees the caller's a0..a7, so one of these
+// keeps a value across a call without a frame slot. A register the
+// function never names is not an argument it reads (arguments arrive in
+// a2..a7) nor a promoted local (see promoteFrameSlots()).
+static int unusedWindowRegisters(Text *text, int start, int end, const char *out[])
+{
+    static const char *const candidates[] = {"a3", "a4", "a5", "a6", "a7"};
+    int n = 0;
+    char line[160];
+    for (int r = 0; r < 5; r++)
+    {
+        bool used = false;
+        for (int j = start; j < end && !used; j++)
+        {
+            trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+            for (const char *p = strstr(line, candidates[r]); p != NULL && !used; p = strstr(p + 1, candidates[r]))
+            {
+                bool startOk = p == line || p[-1] == ' ' || p[-1] == ',';
+                bool endOk = !isalnum((unsigned char)p[2]);
+                used = startOk && endOk;
+            }
+        }
+        if (!used)
+            out[n++] = candidates[r];
+    }
+    return n;
+}
+
+// `line` with every operand naming `from` renamed to `to` -- all but the
+// first one when `skipFirst`.
+static char *renameRegister(const char *line, const char *from, const char *to, bool skipFirst = false)
+{
+    char out[200];
+    size_t o = 0, fl = strlen(from), tl = strlen(to);
+    const char *sp = strchr(line, ' ');
+    const char *firstComma = sp != NULL ? strchr(sp, ',') : NULL;
+    const char *from0 = skipFirst ? firstComma : sp;
+    for (const char *p = line; *p && o + tl < sizeof(out) - 1;)
+    {
+        bool operand = from0 != NULL && p > from0 && (p[-1] == ' ' || p[-1] == ',');
+        if (operand && strncmp(p, from, fl) == 0 && !isalnum((unsigned char)p[fl]) && p[fl] != '.')
+        {
+            memcpy(out + o, to, tl);
+            o += tl;
+            p += fl;
+        }
+        else
+            out[o++] = *p++;
+    }
+    out[o] = 0;
+    return string_format("%s", out);
+}
+
+static bool endsStraightLine(const char *line)
+{
+    return line[0] == 0 || strchr(line, ':') != NULL || line[0] == 'b' || line[0] == 'j' ||
+           strncmp(line, "retw", 4) == 0;
+}
+
+// Moves the value `reg` holds across the call at `callPos` into `spare`
+// for its whole life instead of copying it there and back: from the line
+// that last wrote it before the call to its last read after. Only when
+// that whole stretch is straight-line code (no label, branch or return
+// before the last read) and `reg` is read-only in it, so nothing else can
+// see `reg` while it is renamed. False when it does not apply.
+static bool renameAcrossCall(Text *text, int callPos, int start, int end, const char *reg, const char *spare)
+{
+    char line[160];
+    int def = -1;
+    for (int j = callPos - 1; j > start; j--)
+    {
+        trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+        if (endsStraightLine(line) || isCallLine(line))
+            return false;
+        RegRole role = regRole(line, reg);
+        if (role == REG_WRITTEN)
+        {
+            def = j;
+            break;
+        }
+        if (role == REG_READ && lineWritesRegister(line, reg))
+            return false;
+    }
+    if (def < 0)
+        return false;
+    int last = -1;
+    for (int j = callPos + 1; j < end; j++)
+    {
+        trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+        RegRole role = regRole(line, reg);
+        if (role == REG_READ)
+        {
+            if (lineWritesRegister(line, reg))
+            {
+                last = j; // reads it one last time, then holds something new
+                break;
+            }
+            last = j;
+            continue;
+        }
+        if (role == REG_WRITTEN || strncmp(line, "retw", 4) == 0)
+            break;
+        if (endsStraightLine(line) || isCallLine(line))
+            return false;
+    }
+    if (last < 0)
+        return false;
+    // The spare may already be in use there: the save/restore copies of
+    // the previous call sit right before this value's first write.
+    for (int j = def; j <= last; j++)
+    {
+        trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+        if (regRole(line, spare) != REG_UNTOUCHED)
+            return false;
+    }
+    for (int j = def; j <= last; j++)
+    {
+        trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+        // the last line may also write reg: rename only its sources then
+        char *renamed = renameRegister(line, reg, spare, j == last && lineWritesRegister(line, reg));
+        text->replaceText(j, (const char *)renamed);
+        free(renamed);
+    }
+    return true;
+}
+
+// Deletes, between `start` and `end`, register-to-itself copies and pure
+// writes (see writesFirstOperandOnly()) to a3..a15 that no line of the
+// function reads, a call reading its argument registers (see
+// callArgumentCount()). a2 (the return value), a8 (callExt's scratch)
+// and the float registers are left alone. Typically left behind once preserveAcrossCalls() has
+// renamed a value out of the register it was first loaded into. Returns
+// how many lines it removed.
+static int removeUnreadWrites(Text *text, int start, int end)
+{
+    int removed = 0;
+    bool changed = true;
+    char line[160], reg[16];
+    // A hand-written callx8/call4/... reads argument registers this
+    // function cannot see; leave such a function as written.
+    for (int j = start; j < end; j++)
+    {
+        trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+        if (strncmp(line, "call", 4) == 0 && !isCallLine(line))
+            return 0;
+    }
+    while (changed)
+    {
+        changed = false;
+        for (int j = start; j < end; j++)
+        {
+            trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
+            char op[16], a[16], b[16];
+            bool dead = false;
+            if (sscanf(line, "%15s %15[^,],%15s", op, a, b) == 3 &&
+                (strcmp(op, "mov") == 0 || strcmp(op, "movr") == 0 || strcmp(op, "mov.s") == 0) && strcmp(a, b) == 0)
+                dead = true;
+            else if (writtenRegister(line, reg, sizeof(reg)) && reg[0] == 'a' && atoi(reg + 1) >= 3 &&
+                     strcmp(reg, "a8") != 0 && lineWritesRegister(line, reg) &&
+                     regRole(line, reg) == REG_WRITTEN)
+            {
+                dead = true;
+                for (int k = start; k < end && dead; k++)
+                {
+                    trimmedLine(*text->getChildAtPos(k), line, sizeof(line));
+                    if (regRole(line, reg, true) == REG_READ)
+                        dead = false;
+                }
+            }
+            if (dead)
+            {
+                text->_texts.erase(j);
+                end--;
+                j--;
+                removed++;
+                changed = true;
+            }
+        }
+    }
+    return removed;
+}
+
 void preserveAcrossCalls(Text *text)
 {
     char line[160];
@@ -1201,6 +1396,10 @@ void preserveAcrossCalls(Text *text)
         // 16 and this frame's own a4..a7 in the 16 below (see
         // _visitdefFunctionNode()). lsi/ssi/l32i/s32i can only reach
         // offset 1020.
+        // The first live values of each call go to unused window
+        // registers, the rest to frame slots.
+        const char *spare[5];
+        int nSpare = unusedWindowRegisters(text, entryPos + 1, end, spare);
         const char *live[NUM_CALL_CLOBBERED];
         int maxSlots = 0;
         for (int c = entryPos + 1; c < end; c++)
@@ -1208,7 +1407,7 @@ void preserveAcrossCalls(Text *text)
             trimmedLine(*text->getChildAtPos(c), line, sizeof(line));
             if (!isCallLine(line))
                 continue;
-            int n = liveAcrossCall(text, c, end, live);
+            int n = liveAcrossCall(text, c, end, live) - nSpare;
             if (n > maxSlots && frame - _FRAME_RESERVED + 4 * (n - 1) <= 1020)
                 maxSlots = n;
         }
@@ -1227,11 +1426,6 @@ void preserveAcrossCalls(Text *text)
                 maxSpill = spillDepth;
             else if (strncmp(line, "fill ", 5) == 0 || strncmp(line, "pop ", 4) == 0)
                 spillDepth--;
-        }
-        if (maxSlots == 0 && maxSpill == 0)
-        {
-            i = end;
-            continue;
         }
         int growth = (((maxSlots + maxSpill) * 4 + 7) / 8) * 8;
 
@@ -1255,9 +1449,12 @@ void preserveAcrossCalls(Text *text)
             text->replaceText(c, (const char *)moved);
             free(moved);
         }
-        char *newEntry = string_format("entry a1,%d", frame + growth);
-        text->replaceText(entryPos, (const char *)newEntry);
-        free(newEntry);
+        if (growth > 0)
+        {
+            char *newEntry = string_format("entry a1,%d", frame + growth);
+            text->replaceText(entryPos, (const char *)newEntry);
+            free(newEntry);
+        }
 
         spillDepth = 0;
         for (int c = entryPos + 1; c < end; c++)
@@ -1285,22 +1482,49 @@ void preserveAcrossCalls(Text *text)
             if (!isCallLine(line))
                 continue;
             int n = liveAcrossCall(text, c, end, live);
-            if (n == 0 || n > maxSlots)
+            if (n == 0 || n > maxSlots + nSpare)
                 continue;
+            // Integer values that fit in a spare register for their whole
+            // life are renamed into it; the rest are saved and restored.
+            int used = 0;
+            for (int k = 0; k < n && used < nSpare;)
+            {
+                if (live[k][0] == 'a' && renameAcrossCall(text, c, entryPos, end, live[k], spare[used]))
+                {
+                    used++;
+                    live[k] = live[--n];
+                    continue;
+                }
+                k++;
+            }
+            if (n == 0)
+                continue;
+            int freeSpare = nSpare - used;
             for (int k = 0; k < n; k++)
             {
                 bool isFloat = live[k][0] == 'f';
-                text->addAfter(c, string_format(isFloat ? "lsi %s,a1,%d" : "l32i %s,a1,%d", live[k], frame - _FRAME_RESERVED + 4 * k));
+                if (k < freeSpare)
+                    text->addAfter(c, isFloat ? string_format("wfr %s,%s", live[k], spare[used + k])
+                                              : string_format("mov %s,%s", live[k], spare[used + k]));
+                else
+                    text->addAfter(c, string_format(isFloat ? "lsi %s,a1,%d" : "l32i %s,a1,%d", live[k],
+                                                    frame - _FRAME_RESERVED + 4 * (k - freeSpare)));
             }
             for (int k = 0; k < n; k++)
             {
                 bool isFloat = live[k][0] == 'f';
-                text->addAfter(c - 1, string_format(isFloat ? "ssi %s,a1,%d" : "s32i %s,a1,%d", live[k], frame - _FRAME_RESERVED + 4 * k));
+                if (k < freeSpare)
+                    text->addAfter(c - 1, isFloat ? string_format("rfr %s,%s", spare[used + k], live[k])
+                                                  : string_format("mov %s,%s", spare[used + k], live[k]));
+                else
+                    text->addAfter(c - 1, string_format(isFloat ? "ssi %s,a1,%d" : "s32i %s,a1,%d", live[k],
+                                                        frame - _FRAME_RESERVED + 4 * (k - freeSpare)));
             }
             // the call is now at c + n, its restores at c + n + 1 .. c + 2n
             c += 2 * n;
             end += 2 * n;
         }
+        end -= removeUnreadWrites(text, entryPos + 1, end);
         i = end;
     }
 }
