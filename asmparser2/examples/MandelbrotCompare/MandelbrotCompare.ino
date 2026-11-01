@@ -5,17 +5,18 @@
 //                    arithmetic the compiler generates for ffloat;
 //   - script float:  the MandelbrotFfloat script with float;
 //   - script ffloat: the MandelbrotFfloat script as it is.
-// All four call the same hsv() and write the same buffer. Each is run 5
+// All four call the same hsv() (FastLED's CHSV unless USE_FASTLED_HSV is 0)
+// and write the same buffer. Each is run 5
 // times; the sketch prints the best and average time per frame, the number
 // of pixels inside the set and a checksum of the buffer -- the native and
 // script versions of a type should give the same checksum, i.e. exactly
 // the same picture.
 //
-// Measured on an ESP32 at 240MHz:
-//   native float  32.4ms   inside 3318  checksum e19ee723
-//   native fixed  28.9ms   inside 3293  checksum d0dc310f
-//   script float  66.9ms   inside 3318  checksum e19ee723
-//   script ffloat 72.4ms   inside 3293  checksum d0dc310f
+// Measured on an ESP32 at 240MHz, with FastLED's CHSV:
+//   native float  33.5ms   inside 3318  checksum 0c584e72
+//   native fixed  30.0ms   inside 3293  checksum c026b3cf
+//   script float  61.7ms   inside 3318  checksum 0c584e72
+//   script ffloat 49.3ms   inside 3293  checksum c026b3cf
 //
 // The native float code uses float literals (2.7f): in C++ a plain 2.7 is
 // a double, computed in software and much slower, while the script's
@@ -30,17 +31,25 @@
 #define MAX_ITERATIONS 50
 #define RUNS 5
 
+// hsv(), for the scripts and the native code alike: FastLED's CHSV ->
+// CRGB conversion (hsv2rgb_rainbow) -- what a sketch driving a real panel
+// uses -- or, with USE_FASTLED_HSV set to 0 (FastLED not installed), a
+// small integer conversion. The timings in README.md use FastLED's.
+#define USE_FASTLED_HSV 1
+#if USE_FASTLED_HSV
+#include <FastLED.h>
+#define HSV_KIND "FastLED CHSV"
+CRGB scriptHsv(int h, int s, int v)
+{
+   return CHSV(h, s, v);
+}
+#else
+#define HSV_KIND "integer hsv"
 // 3 bytes, red/green/blue -- the compiler's built-in CRGB layout.
 struct CRGB
 {
    uint8_t red, green, blue;
 };
-
-// The scripts' `external CRGB leds[height, width];` binds to this buffer.
-static CRGB ledsBuffer[LED_HEIGHT][LED_WIDTH];
-
-// Integer HSV (0-255 per channel) -> RGB, same conversion as the other
-// examples.
 CRGB scriptHsv(int h, int s, int v)
 {
    CRGB c;
@@ -65,6 +74,10 @@ CRGB scriptHsv(int h, int s, int v)
    }
    return c;
 }
+#endif
+
+// The scripts' `external CRGB leds[height, width];` binds to this buffer.
+static CRGB ledsBuffer[LED_HEIGHT][LED_WIDTH];
 
 // ---- the scripts: one frame per call of main() ----
 
@@ -289,8 +302,8 @@ void setup()
    bindVariable((char *)"CRGB", (char *)"leds", (char *)"[]", (void *)ledsBuffer);
    bindFunction((char *)"CRGB", (char *)"hsv", (char *)"int,int,int", (void *)scriptHsv);
 
-   printf("Mandelbrot %dx%d, %d iterations, CPU %lu MHz\n", LED_WIDTH, LED_HEIGHT, MAX_ITERATIONS,
-          (unsigned long)getCpuFrequencyMhz());
+   printf("Mandelbrot %dx%d, %d iterations, CPU %lu MHz, %s\n", LED_WIDTH, LED_HEIGHT, MAX_ITERATIONS,
+          (unsigned long)getCpuFrequencyMhz(), HSV_KIND);
    benchNative("native float", nativeRenderFloat);
    benchNative("native fixed", nativeRenderFixed);
    benchScript("script float", scriptFloat);
