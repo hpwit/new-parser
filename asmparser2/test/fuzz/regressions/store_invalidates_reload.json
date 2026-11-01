@@ -1,0 +1,309 @@
+{
+ "funcs": [
+  {
+   "name": "f0",
+   "params": [
+    "p0"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": false
+  },
+  {
+   "name": "f1",
+   "params": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": false
+  },
+  {
+   "name": "f2",
+   "params": [
+    "p0"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": false
+  },
+  {
+   "name": "f3",
+   "params": [
+    "p0",
+    "p1"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": true
+  },
+  {
+   "name": "f4",
+   "params": [
+    "p0",
+    "p1"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": false
+  }
+ ],
+ "main": [
+  {
+   "kind": "if",
+   "branches": [
+    [
+     [
+      "cmp",
+      "<=",
+      [
+       "lit",
+       1
+      ],
+      [
+       "lit",
+       1
+      ]
+     ],
+     [
+      {
+       "kind": "if",
+       "branches": [
+        [
+         [
+          "or",
+          [
+           "cmp",
+           "!=",
+           [
+            "lit",
+            1
+           ],
+           [
+            "lit",
+            1
+           ]
+          ],
+          [
+           "cmp",
+           ">",
+           [
+            "lit",
+            1
+           ],
+           [
+            "lit",
+            1
+           ]
+          ]
+         ],
+         []
+        ]
+       ],
+       "else": [
+        {
+         "kind": "for",
+         "var": "i2",
+         "count": 1,
+         "body": [
+          {
+           "kind": "decl",
+           "name": "l3",
+           "expr": [
+            "lit",
+            1
+           ]
+          }
+         ]
+        }
+       ],
+       "braces": false
+      }
+     ]
+    ],
+    [
+     [
+      "cmp",
+      "==",
+      [
+       "lit",
+       1
+      ],
+      [
+       "lit",
+       1
+      ]
+     ],
+     []
+    ],
+    [
+     [
+      "or",
+      [
+       "cmp",
+       ">=",
+       [
+        "lit",
+        1
+       ],
+       [
+        "lit",
+        1
+       ]
+      ],
+      [
+       "and",
+       [
+        "cmp",
+        "!=",
+        [
+         "lit",
+         1
+        ],
+        [
+         "lit",
+         1
+        ]
+       ],
+       [
+        "cmp",
+        "!=",
+        [
+         "lit",
+         1
+        ],
+        [
+         "lit",
+         1
+        ]
+       ]
+      ]
+     ],
+     []
+    ],
+    [
+     [
+      "or",
+      [
+       "or",
+       [
+        "cmp",
+        "!=",
+        [
+         "lit",
+         1
+        ],
+        [
+         "lit",
+         1
+        ]
+       ],
+       [
+        "cmp",
+        "==",
+        [
+         "lit",
+         1
+        ],
+        [
+         "lit",
+         1
+        ]
+       ]
+      ],
+      [
+       "cmp",
+       ">=",
+       [
+        "lit",
+        1
+       ],
+       [
+        "lit",
+        1
+       ]
+      ]
+     ],
+     [
+      {
+       "kind": "decl",
+       "name": "l11",
+       "expr": [
+        "lit",
+        1
+       ]
+      }
+     ]
+    ]
+   ],
+   "else": null,
+   "braces": true
+  },
+  {
+   "kind": "decl",
+   "name": "l13",
+   "expr": [
+    "lit",
+    1
+   ]
+  },
+  {
+   "kind": "assign",
+   "target": [
+    "var",
+    "l13"
+   ],
+   "op": "-=",
+   "expr": [
+    "var",
+    "l13"
+   ]
+  },
+  {
+   "kind": "assign",
+   "target": [
+    "idx",
+    "A",
+    [
+     [
+      "lit",
+      1
+     ]
+    ]
+   ],
+   "op": "=",
+   "expr": [
+    "bin",
+    "*",
+    [
+     "lit",
+     1
+    ],
+    [
+     "var",
+     "l13"
+    ]
+   ]
+  }
+ ],
+ "description": "l13 -= l13 stored with s32i a15,a1,N; the next l32i a14,a1,N was dropped as a repeat of the one before it"
+}

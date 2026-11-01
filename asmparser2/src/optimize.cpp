@@ -90,6 +90,37 @@ static bool indirectLoadBase(const char *op, const char *operands, char *base, s
     return true;
 }
 
+// True if the store `line` (s8i/s16i/s32i/ssi, else false) may change
+// what the tracked load `tracked` ("l32i a14,a1,92") read: same base and
+// overlapping bytes, or any other base, which may point anywhere. Pass 1
+// and optimizeSpeed() forget the load then. They used to forget it only
+// when its base was rewritten: `l13 -= l13` stored the new value with
+// `s32i a15,a1,92`, and the next `l32i a14,a1,92` was dropped as a repeat
+// of the one before, reading the old value (fuzz seed 12212).
+static bool storeMayClobber(const char *line, const char *tracked)
+{
+    // cheap test first: this runs for every line, once per register
+    if (line[0] != 's' || tracked[0] != 'l')
+        return false;
+    char op[16], lop[16], lbase[16], sbase[16];
+    int soff, loff;
+    if (sscanf(line, "%15s %*[^,],%15[^,],%d", op, sbase, &soff) != 3)
+        return false;
+    int sw = strcmp(op, "s8i") == 0 ? 1 : strcmp(op, "s16i") == 0 ? 2
+             : strcmp(op, "s32i") == 0 || strcmp(op, "ssi") == 0 ? 4 : 0;
+    if (sw == 0)
+        return false;
+    if (sscanf(tracked, "%15s %*[^,],%15[^,],%d", lop, lbase, &loff) != 3)
+        return false;
+    int lw = strcmp(lop, "l8ui") == 0 ? 1 : strcmp(lop, "l16i") == 0 || strcmp(lop, "l16ui") == 0 ? 2
+             : strcmp(lop, "l32i") == 0 ? 4 : 0;
+    if (lw == 0)
+        return false; // movi, l32r...: not a memory read
+    if (strcmp(sbase, lbase) != 0)
+        return true;
+    return soff < loff + lw && loff < soff + sw;
+}
+
 // True if `operands`' first operand is exactly `reg` -- i.e. the line may
 // write it. Stores and branches also name a register first without
 // writing it; treating those as writes only costs a missed fold.
@@ -201,7 +232,7 @@ void optimize(Text *text)
                     }
                     else if (d.size() > 1)
                     {
-                        if (firstOperandIs(d.get(1), base))
+                        if (firstOperandIs(d.get(1), base) || storeMayClobber(tmp, str))
                         {
                             free(str);
                             str = ownedCopy("__");
@@ -817,7 +848,7 @@ void optimizeSpeed(Text *text)
                     }
                     else if (d.size() > 1)
                     {
-                        if (firstOperandIs(d.get(1), base))
+                        if (firstOperandIs(d.get(1), base) || storeMayClobber(tmp, str))
                         {
                             free(str);
                             str = ownedCopy("__");
@@ -1253,6 +1284,13 @@ static bool endsStraightLine(const char *line)
 static bool renameAcrossCall(Text *text, int callPos, int start, int end, const char *reg, const char *spare)
 {
     char line[160];
+    // An argument of the call itself is read there without being named
+    // (`movi a11,6` for `ix(g2, 6)`, then a11 spilled after the call for
+    // the next one): renaming it would leave the call reading a stale a11
+    // (fuzz seed 12178 divided by it).
+    trimmedLine(*text->getChildAtPos(callPos), line, sizeof(line));
+    if (regRole(line, reg, true) == REG_READ)
+        return false;
     int def = -1;
     for (int j = callPos - 1; j > start; j--)
     {
