@@ -84,6 +84,7 @@ None of this changes what you write in a script, but it is why I can say that so
   * [Use of define](#use-of-define)
 
 - [Running scripts in the background](#running-scripts-in-the-background)
+  * [The script scheduler](#the-script-scheduler)
 
 - [Performance](#performance)
   * [Summary](#summary)
@@ -1008,7 +1009,62 @@ A control that doesn't apply (pausing a paused script...) does nothing and retur
 > [!WARNING]
 > You can't choose where the task is stopped. It can be inside a host function the script called, holding `Serial`, a lock or a mutex of yours. If that matters, give the script a host function to call in its loop that checks a flag and returns at a point you choose.
 
-What v1 has and v2 doesn't yet: `scriptRuntime` to manage several scripts by name, `sync()` to synchronize their frames, and pre/post kill. See [Known limitations](#known-limitations).
+## The script scheduler
+
+To run several scripts at once and manage them by name, as v1's `scriptRuntime` did, use `scriptScheduler` (`script_scheduler.h`, esp32 only). Each running script is a FreeRTOS task of its own, and the scheduler also tells you how much CPU each one uses:
+
+```cpp
+#include "script_scheduler.h"
+
+scriptScheduler.add("busy", busyScript);         // compile and register
+scriptScheduler.add("blink", blinkScript);
+scriptScheduler.run("busy", "main", 8192, 1, 1); // its own task, pinned to core 1
+scriptScheduler.run("blink");                    // default: main(), 8KB stack, any core
+
+scriptScheduler.list();                          // the table below
+scriptScheduler.pause("busy");                   // vTaskSuspend()
+scriptScheduler.restart("busy");                 // vTaskResume(): carries on where it stopped
+scriptScheduler.kill("blink");                   // vTaskDelete()
+scriptScheduler.remove("blink");                 // kill, free, forget
+```
+
+`list()` prints:
+
+```
+ #  name             state      CPU%   stack   code   data core prio  function
+ 1  busy             running    82.2    7328    176     32    1    1  main
+ 2  blink            running     0.0    7336     64     24  any    1  main
+ 3  countdown        stopped       -    6228    128     68  any    1  main
+    core 0 load 0.0%   core 1 load 83.8%
+```
+
+|Column|Meaning|
+|:----|:----|
+|`state`|`ready` (added, never run), `running`, `paused`, `stopped` (killed, or its function returned)|
+|`CPU%`|share of one core used since the previous `list()` or `sample()`, from FreeRTOS run-time statistics|
+|`stack`|bytes of its task's stack never used so far (FreeRTOS high water mark)|
+|`code`, `data`|bytes of machine code and of globals|
+|`core`, `prio`|what `run()` asked for|
+|core load|100% minus the time each core's idle task ran|
+
+|Call|What it does|
+|:----|:----|
+|`add(name, source)`|compiles `source` and registers it as `name`, replacing a script of the same name; `false` if it doesn't compile (`showCompileError()` says why)|
+|`run(name, function, stack, priority, core)`|runs `function` (default `main`) on a new task and returns at once (v1's `executeAsTask`)|
+|`execute(name, function)`|runs it on the calling task and waits (v1's `execute`)|
+|`pause(name)`, `restart(name)`, `kill(name)`|stop where it is, carry on, delete the task|
+|`remove(name)`|kill, free the compiled script, forget the name (v1's `deleteExe`)|
+|`killAll()`, `removeAll()`|the same for every script|
+|`list()`, `sample()`, `coreLoad(core)`|the table, a CPU measurement, a core's load|
+|`count()`, `info(index or name, &info)`|the same figures in a `ScriptInfo`, to show them your own way|
+|`find(name)`|the script's `ScriptExecutable`, for `executeOnly()`, an interrupt...|
+
+It is all FreeRTOS underneath: `xTaskCreatePinnedToCore()`, `vTaskSuspend()`/`vTaskResume()`/`vTaskDelete()`, a mutex around the registry, `vTaskGetInfo()` for the CPU time and `uxTaskGetStackHighWaterMark()` for the stack. There is no STL in it: the registry is a fixed array of `SCRIPT_SCHEDULER_MAX` scripts (8; `#define` it before including the header for more). See [SchedulerDemo](examples/SchedulerDemo), which pauses, restarts, kills and removes scripts while they run.
+
+> [!WARNING]
+> A script running as a task has to give the CPU back from time to time, by calling a host function that waits (a bound `delay()`...). Otherwise the lower-priority tasks of its core never run, including on core 0 the idle task the task watchdog checks: after 5 seconds the board resets.
+
+What v1 has and v2 doesn't yet: `sync()` to synchronize the frames of several scripts, and pre/post kill. See [Known limitations](#known-limitations).
 
 ---
 
@@ -1206,6 +1262,7 @@ This is the part that is really new compared to v1:
 | `BouncingBallsCompare` | The bouncing balls four ways -- native C++ float and fixed point, script `float` and `ffloat` -- timed, with checksums (see [Performance](#structs-and-methods-bouncing-balls)). |
 | `MandelbrotCompare` | The Mandelbrot set four ways -- native C++ float and fixed point, script `float` and `ffloat` -- timed, with a checksum showing they draw the same picture. |
 | `MandelbrotFixedPoint` | The Mandelbrot set with integers only, fixed point done by hand. |
+| `SchedulerDemo` | Three scripts on their own tasks, managed by name with `scriptScheduler`: list with CPU %, pause, restart, kill, remove. esp32 only. |
 | `ExecuteAsTask` | `main()` on its own FreeRTOS task, with `pause()`/`restart()`/`kill()`/`state()`. esp32 only. |
 | `PinInterrupt` | A GPIO interrupt calling back into the running script. esp32 only. |
 | `DirectGPIO` | Driving pins from a script through the GPIO and IO_MUX registers; esp32 and esp32-S3. |
@@ -1220,7 +1277,7 @@ This is the part that is really new compared to v1:
 
 # Known limitations
 
-- **No multi-script scheduler**: no `scriptRuntime`, no `sync()`, no pre/post kill. Each script's own task can be paused, restarted and killed (see [Running scripts in the background](#running-scripts-in-the-background)).
+- **No `sync()` and no pre/post kill** from v1's `scriptRuntime`. Running, listing, pausing, restarting and killing scripts by name is there: see [The script scheduler](#the-script-scheduler).
 - **`import`** (v1's `import rand`...) **doesn't work yet.** Declare the function `external` and bind a host function instead.
 - **No built-in `hsv()` or led support**: bind them yourself (see [CRGB and the hue function](#crgb-and-the-hue-function)).
 

@@ -145,7 +145,8 @@ void ScriptExecutable::taskMain(void *param)
         vTaskSuspend(NULL);
 }
 
-bool ScriptExecutable::executeAsTask(const char *name, uint32_t stackSize, UBaseType_t priority, BaseType_t core)
+bool ScriptExecutable::executeAsTask(const char *name, uint32_t stackSize, UBaseType_t priority, BaseType_t core,
+                                     const char *taskName)
 {
     kill(); // a previous task of this script, running, paused or finished
     ScriptState before = taskState;
@@ -154,8 +155,8 @@ bool ScriptExecutable::executeAsTask(const char *name, uint32_t stackSize, UBase
     // Set before the task can run: xTaskCreatePinnedToCore() stores the
     // handle before the task is made ready.
     taskState = ScriptState::running;
-    BaseType_t created = xTaskCreatePinnedToCore(taskMain, name, stackSize, params,
-                                                  priority, &taskHandle, core);
+    BaseType_t created = xTaskCreatePinnedToCore(taskMain, taskName != NULL ? taskName : name, stackSize,
+                                                  params, priority, &taskHandle, core);
     if (created != pdPASS)
     {
         delete params;

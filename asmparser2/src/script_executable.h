@@ -185,8 +185,11 @@ public:
     // loop() for the same core, matching v1's own default
     // (`__RUN_CORE`, always 0) if you want that instead of this
     // default's no-affinity behavior.
+    //
+    // `taskName` names the FreeRTOS task (what task lists and statistics
+    // show); NULL uses `name`. Same lifetime rule as `name`.
     bool executeAsTask(const char *name, uint32_t stackSize = 8192, UBaseType_t priority = 1,
-                        BaseType_t core = tskNO_AFFINITY);
+                        BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
 
     // Control of the task executeAsTask() started -- v1's suspend(),
     // restart() and kill(). Each returns false, doing nothing, when the
@@ -213,6 +216,11 @@ public:
     bool pause();
     bool restart();
     bool kill();
+
+    // The FreeRTOS task executeAsTask() started (NULL if none) -- for
+    // reading its statistics (vTaskGetInfo(), see script_scheduler.h).
+    // Control it through pause()/restart()/kill(), not directly.
+    TaskHandle_t task() const { return taskHandle; }
 #endif
 
     // Always notStarted where executeAsTask() does not exist.
