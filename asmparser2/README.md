@@ -1,4 +1,36 @@
-# Introduction
+<div align="center">
+
+# ⚡ ESPLiveScript 2
+
+**Write C-like scripts, compile them to real Xtensa machine code _on the ESP32 itself_, and run them. No IDE, no re-flash.**
+
+![ESP32](https://img.shields.io/badge/ESP32-S2%20%7C%20S3-E7352C?logo=espressif&logoColor=white)
+![Arduino library](https://img.shields.io/badge/Arduino-library-00979D?logo=arduino&logoColor=white)
+![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Compiled](https://img.shields.io/badge/compiled%20to-Xtensa%20machine%20code-orange)
+![Tested](https://img.shields.io/badge/tested-host%20%C2%B7%20QEMU%20%C2%B7%20fuzzer%20%C2%B7%20real%20board-brightgreen)
+
+[Quick start](#first-light-) · [The language](#what-you-can-do-with-the-language) · [More than leds](#more-than-a-led-language) · [Performance](#performance) · [Examples](#examples) · [Testing](#testing)
+
+</div>
+
+---
+
+## ✨ At a glance
+
+| | |
+|:--|:--|
+| 🚀 **Native speed** | No interpreter: the script becomes Xtensa machine code on the chip. Loops and floats run at 1 to 1.3 times the time of the same code compiled by gcc, the Mandelbrot set at 24fps on 128x96 ([numbers](#performance)). |
+| 🧱 **A real language** | Structs with methods and constructors, `switch`, pointers, strings, recursion, `float` and built-in fixed point (`ffloat`), multidimensional arrays ([more than leds](#more-than-a-led-language)). |
+| 🔌 **Talks to your C++** | Call your own functions and use your variables (FastLED, WiFi, sensors...) with `bindFunction()` / `bindVariable()`. |
+| 🧵 **Runs alongside your sketch** | Background tasks you can pause, restart and kill; GPIO interrupts calling back into the script; direct register access (a pin switched at 10MHz). |
+| 💾 **Compile once, run anywhere** | Save the compiled binary to flash or SD and load it later, without the source, even from another sketch. |
+| 🛡️ **Checked, not just trusted** | The whole compiler also runs on a computer; the generated code is executed under QEMU, compared frame by frame with C, and fuzzed against C. |
+
+---
+
+## 📖 The story
+
 A while back I got tired of loading code onto the esp32 through an IDE every time I wanted to try a new led animation, so I wrote [ESPLiveScript](https://github.com/hpwit/asmparser): a small C-like language that compiles straight to real Xtensa machine code on the esp32 itself. No interpreter, no re-flash.
 
 It worked, people used it and [StarLight](https://github.com/MoonModules/StarLight) picked it up. But I wrote v1 the way most first compilers are written: fast, by hand, no grammar, and with no real way to check that a fix hadn't broken something else. Every fix was "works on my board".
@@ -13,12 +45,18 @@ None of this changes what you write in a script, but it is why I can say that so
 
 **If you know v1:** the language is very close, so most of what you know still applies. The C++ side you call from your sketch is new (`ScriptExecutable`, `parseScript()`, `bindFunction()`, `bindVariable()`), some v1 features are not there yet (see [Known limitations](#known-limitations)) and a few things changed on purpose. I point out the differences as we go.
 
+---
+
+## 🗺️ Contents
+
 <!-- TOC start -->
 
 - [Which language?](#which-language)
   * [C like language](#c-like-language)
   * [DIY parser and compiler](#diy-parser-and-compiler)
   * [Not a development environment](#not-a-development-environment)
+
+- [More than a led language](#more-than-a-led-language)
 
 - [First light](#first-light-)
   * [Checking for errors](#checking-for-errors)
@@ -71,6 +109,9 @@ None of this changes what you write in a script, but it is why I can say that so
 
 <!-- TOC end -->
 
+
+---
+
 # Which language?
 
 ## C like language
@@ -100,6 +141,83 @@ Still written by hand, still no grammar tool, and I am still not a compiler spec
 
 ## Not a development environment
 This library compiles and runs scripts; it doesn't give you a place to write them. [LedOS](https://github.com/hpwit/LedOS) (a console terminal to edit, save and run programs) and [StarLight](https://github.com/MoonModules/StarLight) (a web-enabled esp32 application) both use v1. Neither has been ported to v2 yet.
+
+---
+
+# More than a led language
+
+ESPLiveScript started as a way to try led animations without re-flashing, and the led side is still where it shines. But the language has grown into something much more **general purpose**: what you write is plain C-like code that has nothing to do with leds, compiled to machine code like any other function of your sketch.
+
+```c
+struct Account
+{
+   int balance;
+   int id;
+   void deposit(int amount)
+   {
+      balance += amount;
+   }
+};
+
+Account accounts[3];
+
+char *level(int b)
+{
+   if (b >= 100)
+      return "gold";
+   return "standard";
+}
+
+int fact(int n)
+{
+   if (n <= 1)
+      return 1;
+   return n * fact(n - 1);
+}
+
+void main()
+{
+   for (int i = 0; i < 3; i++)
+   {
+      accounts[i].id = i;
+      accounts[i].balance = 0;
+      accounts[i].deposit(fact(i + 3));
+   }
+   for (int i = 0; i < 3; i++)
+   {
+      switch (accounts[i].id)
+      {
+      case 0:
+         printfln("first account: %d (%s)", accounts[i].balance, level(accounts[i].balance));
+         break;
+      default:
+         printfln("account %d: %d (%s)", accounts[i].id, accounts[i].balance, level(accounts[i].balance));
+      }
+   }
+}
+```
+
+```
+first account: 6 (standard)
+account 1: 24 (standard)
+account 2: 120 (gold)
+```
+
+What you get today, led or no led:
+
+| | |
+|:--|:--|
+| 🧮 **Numbers** | `int`, `uint8_t`... `uint32_t`, `float` on the hardware FPU, `ffloat` fixed point, `^` power, `<<` `>>`, bitwise `and` / `or` |
+| 🧱 **Data** | structs with methods and constructors, arrays of structs, 1D/2D/3D arrays, pointers, `char *` strings |
+| 🔀 **Control flow** | `if`/`else`, `while`, `for`, `break`/`continue`, `switch`/`case`/`default`, the ternary operator, short-circuit `&&` / `\|\|`, recursion |
+| 🧠 **Memory** | `alloc()` / `free()` with `writeInt()` / `readInt()`, `safe_mode` bounds checking |
+| 🔌 **Your C++** | any function or variable of the sketch, bound by name; scripts calling them and them calling back into the script |
+| 🧵 **System** | background FreeRTOS tasks, GPIO interrupts, direct register access, binaries saved and loaded |
+
+Examples that have nothing to do with leds: [Factorial](examples/Factorial), [SwitchCase](examples/SwitchCase), [StringFunctions](examples/StringFunctions), [MemoryAllocator](examples/MemoryAllocator), [PinInterrupt](examples/PinInterrupt), [DirectGPIO](examples/DirectGPIO), [ExecuteAsTask](examples/ExecuteAsTask), [SaveScriptBinary](examples/SaveScriptBinary).
+
+
+---
 
 # First light :)
 
@@ -148,9 +266,11 @@ i: 2 3*i: 6
 i:19 3*i:57
 ```
 
-**NB 1: `printf` and `printfln` are built into the compiler, there is nothing to bind. Same for `alloc`, `free`, `writeInt` and `readInt` (see [What you can do with the language](#what-you-can-do-with-the-language)).**
+> [!NOTE]
+> `printf` and `printfln` are built into the compiler, there is nothing to bind. Same for `alloc`, `free`, `writeInt` and `readInt` (see [What you can do with the language](#what-you-can-do-with-the-language)).
 
-**NB 2: you can call any function of the script, not only `main`, and unlike v1 you get its return value back (see the next section).**
+> [!NOTE]
+> You can call any function of the script, not only `main`, and unlike v1 you get its return value back (see the next section).
 
 ## Checking for errors
 `exec.isExeExists()` is `true` when parsing, assembling and loading all worked. When it is `false`, `parseScript()` has already printed why: the line and position of a syntax error, or the assembler/loader message. There is no separate error object like v1's `Executable::error`.
@@ -173,9 +293,12 @@ if (exec2.isExeExists())
 }
 ```
 
-**NB: a `ScriptExecutable` can't be copied or reassigned. For a second script, create a second `ScriptExecutable` as above.**
+> [!WARNING]
+> A `ScriptExecutable` can't be copied or reassigned. For a second script, create a second `ScriptExecutable` as above.
 
 `free()` can be called several times without harm. See [TwoScripts](examples/TwoScripts) for the complete sketch.
+
+---
 
 # The function you call can have input parameters
 
@@ -186,7 +309,8 @@ int32_t result = 0;
 exec.execute("fact", &args, &result);
 ```
 
-**NB: for now arguments can only be `int` or `float`, same as v1.**
+> [!NOTE]
+> For now arguments can only be `int` or `float`, same as v1.
 
 In this example we calculate a factorial in the script and read the result back in the sketch ([Factorial](examples/Factorial)):
 
@@ -242,7 +366,10 @@ factorial of 6 is 720
 factorial of 7 is 5040
 ```
 
-**NB: `execute()` calls the function directly, like one script function calling another, which is why you get the return value. `main()` is no exception: `exec.execute("main", &result)` works too.**
+> [!NOTE]
+> `execute()` calls the function directly, like one script function calling another, which is why you get the return value. `main()` is no exception: `exec.execute("main", &result)` works too.
+
+---
 
 # Interaction with pre-compiled functions
 
@@ -319,7 +446,8 @@ void loop()
 }
 ```
 
-NB: here we call three different functions, all defined in the script.
+> [!NOTE]
+> Here we call three different functions, all defined in the script.
 
 Result:
 
@@ -401,6 +529,8 @@ from other function
 
 For bigger sketches built the same way, see [StructsAndHostBindings](examples/StructsAndHostBindings) and [BouncingBalls](examples/BouncingBalls).
 
+---
+
 # CRGB and the hue function
 
 If you are playing with leds, `CRGB` is part of the language, nothing to bind:
@@ -460,6 +590,8 @@ void loop()
 ```
 
 See [BouncingBalls](examples/BouncingBalls) for a complete working version.
+
+---
 
 # Safe mode and arrays
 
@@ -530,7 +662,10 @@ What is not checked: reads, plain pointers and arrays declared without a size (`
 
 `safe_mode` only applies to the script it is written in.
 
-**NB: every checked write costs three extra instructions, so it will slow the script down. Use it when you are hunting an indexing bug.** See [SafeMode](examples/SafeMode).
+> [!TIP]
+> Every checked write costs three extra instructions, so it will slow the script down. Use it when you are hunting an indexing bug. See [SafeMode](examples/SafeMode).
+
+---
 
 # Variable types
 
@@ -568,7 +703,8 @@ What you need to know:
 - results outside ±32768 wrap around like an int. Watch squares and powers: [BouncingBallsFfloat](examples/BouncingBallsFfloat) computes `(distance / r²)²` instead of `distance² / r⁴`, which goes up to ~72000;
 - `printfln` prints the raw 32-bit value of an `ffloat`; print `(int)(x * 100)` or convert it to a `float` first.
 
-**NB: the esp32 has a hardware single-precision FPU, so `float` is already fast. `ffloat` wins when there are a lot of conversions, divisions and integer mixing (see [Performance](#performance)).**
+> [!TIP]
+> The esp32 has a hardware single-precision FPU, so `float` is already fast. `ffloat` wins when there are a lot of conversions, divisions and integer mixing (see [Performance](#performance)).
 
 See [MandelbrotFfloat](examples/MandelbrotFfloat) (the float Mandelbrot with `float` replaced by `ffloat`) next to [MandelbrotFixedPoint](examples/MandelbrotFixedPoint) (the same picture with the scaling done by hand), and [FloatVsFfloat](examples/FloatVsFfloat) for a side-by-side timing.
 
@@ -632,16 +768,18 @@ Balls[i].updateBall();
 
 `varname d;` is the same as `varname d = varname();`, and a constructor with arguments works as you would expect: `varname d2 = varname(23);`.
 
-**NB 1: you can have arrays of structures: `new_type arr[10];`**
+> [!NOTE]
+> - You can have arrays of structures: `new_type arr[10];`
+> - A function needs to be defined before it is called (for the moment).
+> - Unlike v1, a struct definition ends with `};` like in C.
 
-**NB 2: a function needs to be defined before it is called (for the moment).**
+> [!IMPORTANT]
+> Due to memory alignment, the fields need to go from the biggest to the smallest:
+> - `float`, `ffloat`, `uint32_t`, `int`
+> - `s_int`, `uint16_t`
+> - `uint8_t`, `CRGB`, `CRGBW`
 
-**NB 3: unlike v1, a struct definition ends with `};` like in C.**
-
-**NB 4: due to memory alignment, the fields need to go from the biggest to the smallest:**
-  - `float`, `ffloat`, `uint32_t`, `int`
-  - `s_int`, `uint16_t`
-  - `uint8_t`, `CRGB`, `CRGBW`
+---
 
 # Saving executables
 
@@ -677,11 +815,14 @@ if (exec.isExeExists())
 
 See [SaveScriptBinary](examples/SaveScriptBinary) and [LoadScriptBinary](examples/LoadScriptBinary) for the full pair.
 
-**NB: if you need the lower-level steps (printing the generated assembly before saving, keeping the raw `executable`...), `Parser`, `createBinary()`, `serializeBinary()`, `deserializeBinary()` and `createExecutableFromBinary()` are all still available. See [LanguageBasics](examples/LanguageBasics) where every step is spelled out.**
+> [!NOTE]
+> If you need the lower-level steps (printing the generated assembly before saving, keeping the raw `executable`...), `Parser`, `createBinary()`, `serializeBinary()`, `deserializeBinary()` and `createExecutableFromBinary()` are all still available. See [LanguageBasics](examples/LanguageBasics) where every step is spelled out.
 
 ## Binded functions
 
 Same as v1: the bound functions and variables are not saved with the binary. The sketch that loads it needs to call `bindFunction()`/`bindVariable()` for every `external` name the script uses, **before** loading. They are matched by name, so the two sketches only need to agree on the names.
+
+---
 
 # What you can do with the language
 
@@ -760,7 +901,10 @@ if (i < 25)
 }
 ```
 
-NB: there are no macros yet.
+> [!NOTE]
+> There are no macros yet.
+
+---
 
 # Running scripts in the background
 
@@ -780,9 +924,12 @@ When using this you can also do:
 
 A control that doesn't apply (pausing a paused script...) does nothing and returns `false`. Calling `executeAsTask()` again kills the previous task first, and `free()` or the end of the `ScriptExecutable` kills it too. See [ExecuteAsTask](examples/ExecuteAsTask).
 
-**NB: you can't choose where the task is stopped. It can be inside a host function the script called, holding `Serial`, a lock or a mutex of yours. If that matters, give the script a host function to call in its loop that checks a flag and returns at a point you choose.**
+> [!WARNING]
+> You can't choose where the task is stopped. It can be inside a host function the script called, holding `Serial`, a lock or a mutex of yours. If that matters, give the script a host function to call in its loop that checks a flag and returns at a point you choose.
 
 What v1 has and v2 doesn't yet: `scriptRuntime` to manage several scripts by name, `sync()` to synchronize their frames, and pre/post kill. See [Known limitations](#known-limitations).
+
+---
 
 # Performance
 
@@ -790,16 +937,18 @@ Everything below was measured on a real esp32 (no PSRAM) at 240MHz, with `micros
 
 ## Summary
 
-|Test|Native|v1|v2|v2 / native|
-|:----|----:|----:|----:|:----:|
-|`fib(40)`, recursive (331 million calls)|16.96s|22.41s|21.72s|1.28|
-|Game of Life 128x128, per generation|5.95ms|14.67ms|7.13ms|1.20|
-|Mandelbrot 128x96 `float`, per frame|33.5ms|94.5ms|41.9ms|1.25|
-|Mandelbrot 128x96 `ffloat`, per frame|30.0ms (fixed point)|--|31.5ms|1.05|
-|60 bouncing balls 128x96 `float`, per frame|6.49ms|--|8.38ms|1.29|
-|60 bouncing balls 128x96 `ffloat`, per frame|7.02ms (fixed point)|--|6.86ms|0.98|
-|Rainbow 128x96, one `hsv()` call per pixel, per frame|7.12ms|--|7.13ms|1.00|
-|GPIO on/off through the registers|9.9MHz|--|9.9MHz|1.00|
+|Test|Native|v1|v2|v2 / native||
+|:----|----:|----:|----:|:----:|:----|
+|`fib(40)`, recursive (331 million calls)|16.96s|22.41s|21.72s|1.28|`█████████████`|
+|Game of Life 128x128, per generation|5.95ms|14.67ms|7.13ms|1.20|`████████████`|
+|Mandelbrot 128x96 `float`, per frame|33.5ms|94.5ms|41.9ms|1.25|`████████████`|
+|Mandelbrot 128x96 `ffloat`, per frame|30.0ms (fixed point)|--|31.5ms|1.05|`██████████`|
+|60 bouncing balls 128x96 `float`, per frame|6.49ms|--|8.38ms|1.29|`█████████████`|
+|60 bouncing balls 128x96 `ffloat`, per frame|7.02ms (fixed point)|--|6.86ms|0.98|`██████████`|
+|Rainbow 128x96, one `hsv()` call per pixel, per frame|7.12ms|--|7.13ms|1.00|`██████████`|
+|GPIO on/off through the registers|9.9MHz|--|9.9MHz|1.00|`██████████`|
+
+<sub>Each █ is a tenth of the native time: ten blocks is exactly as fast as native code, fewer is faster.</sub>
 
 So a script takes 1 to 1.3 times as long as precompiled code, and the same time when calls to the host (`hsv()` here) dominate; the `ffloat` balls are even slightly faster than the fixed point written by hand in C++. Against v1 it is 2 to 2.3 times faster on loops, arrays and floats, and about the same on function calls. The effects of a real multi-effect script are in [A real script: MultiEffectController](#a-real-script-multieffectcontroller).
 
@@ -851,7 +1000,8 @@ The inner loop (`while (iter < maxIterations && x2 + y2 <= 4)`) is 12 instructio
 
 Here `ffloat` is 18% faster than `float` in a script, and slightly faster than fixed point written by hand in C++.
 
-**NB: the esp32 has a single-precision FPU, so `float` is already fast. `ffloat` wins where conversions, divisions and integer mixing dominate, as in the balls; in the Mandelbrot's inner loop it is fixed-point multiplies against single float instructions.**
+> [!TIP]
+> The esp32 has a single-precision FPU, so `float` is already fast. `ffloat` wins where conversions, divisions and integer mixing dominate, as in the balls; in the Mandelbrot's inner loop it is fixed-point multiplies against single float instructions.
 
 ## Calling a host function per pixel: rainbow
 
@@ -903,6 +1053,8 @@ The plasma's time is the 12288 x 11 calls to `sin()`, `hypot()` and the float di
 
 The compiler and runtime add about 162KB of flash and 8.6KB of RAM to a sketch. The loader alone (to run a saved binary, see [Saving executables](#saving-executables)) adds 10KB of flash and 1KB of RAM. A short script needs around 30-40KB of heap to compile; `MultiEffectController` uses most of a PSRAM-less esp32's heap but fits.
 
+---
+
 # Advanced stuff
 
 ## Pointer to the executable and interrupts
@@ -930,7 +1082,10 @@ void main()
 
 `pinInterrupt` is a normal bound function and the interrupt itself is set up on the C++ side (`gpio_isr_handler_add()`...). See [PinInterrupt](examples/PinInterrupt) for the complete sketch.
 
-**NB: in the interrupt handler call the script with `callFunction((executable *)handle, name, NULL, 0, NULL)` or `exec.executeOnly(name)`, not `execute()`. `execute()` runs the global initializers first and would reset the script's globals on every interrupt.**
+> [!WARNING]
+> In the interrupt handler call the script with `callFunction((executable *)handle, name, NULL, 0, NULL)` or `exec.executeOnly(name)`, not `execute()`. `execute()` runs the global initializers first and would reset the script's globals on every interrupt.
+
+---
 
 # Testing
 
@@ -940,6 +1095,8 @@ This is the part that is really new compared to v1:
 - `test/qemu/`: the compiled machine code executed on Espressif's QEMU emulator: arithmetic, external calls, recursion, arguments, external variables, save/load, and the `fib()` timing above. See `test/qemu/README.md`.
 - `test/effects/`: the led effects of the examples (plasma, fire, voronoi, mandala, Mandelbrot...) run under QEMU and compared frame by frame with the same code written in C.
 - `test/fuzz/`: random programs run through the compiler and as plain C, results compared. Every bug found is kept in `test/fuzz/regressions/`. See `test/fuzz/README.md`.
+
+---
 
 # Examples
 
@@ -977,11 +1134,15 @@ This is the part that is really new compared to v1:
 | `MemoryAllocator` | `alloc()`/`free()`/`writeInt()`/`readInt()`. |
 | `SafeMode` | `safe_mode`: an out-of-range write stops the script and reports the array and index. |
 
+---
+
 # Known limitations
 
 - **No multi-script scheduler**: no `scriptRuntime`, no `sync()`, no pre/post kill. Each script's own task can be paused, restarted and killed (see [Running scripts in the background](#running-scripts-in-the-background)).
 - **`import`** (v1's `import rand`...) **doesn't work yet.** Declare the function `external` and bind a host function instead.
 - **No built-in `hsv()` or led support**: bind them yourself (see [CRGB and the hue function](#crgb-and-the-hue-function)).
+
+---
 
 # Conclusion
 
@@ -990,3 +1151,9 @@ v1 was my first try at "can I build a language for this". v2 is the answer to "c
 Issues and feature requests are welcome, same as v1.
 
 As always enjoy and have fun.
+
+<div align="center">
+
+**⚡ Happy scripting! ⚡**
+
+</div>
