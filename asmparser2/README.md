@@ -1057,19 +1057,41 @@ if (i < 25)
 
 # Running scripts in the background
 
-You can run a script function as a task in the background (esp32 only):
+You can run a script function as a task in the background (esp32 only): it runs on its own FreeRTOS task and `executeAsTask()` returns at once, so your sketch carries on.
 
 ```cpp
-exec.executeAsTask("function_name");
+bool executeAsTask(const char *name,
+                   uint32_t stackSize = 8192,
+                   UBaseType_t priority = 1,
+                   BaseType_t core = tskNO_AFFINITY,
+                   const char *taskName = NULL);
 ```
 
-When using this you can also do:
+|Parameter|What it is|Default|
+|:----|:----|:----|
+|`name`|the script function to run, e.g. `"main"`. It must stay valid while the task runs: a string literal is fine|--|
+|`stackSize`|the task's stack, in bytes. Raise it for deep recursion or big local variables in the script|`8192`|
+|`priority`|the FreeRTOS priority of the task. Arduino's `loop()` runs at 1, so with 1 they share the CPU; higher runs first|`1`|
+|`core`|`0` or `1` to pin the task to that core, `tskNO_AFFINITY` to let FreeRTOS choose. Arduino's `loop()` runs on core 1, WiFi and Bluetooth on core 0|`tskNO_AFFINITY`|
+|`taskName`|the name FreeRTOS shows for the task (task lists, statistics); `NULL` uses `name`. Same lifetime rule as `name`|`NULL`|
 
-- `exec.pause()`: the task stops where it is
-- `exec.restart()`: the task carries on from where it stopped
-- `exec.kill()`: the task is deleted
-- `exec.state()`: `ScriptState::notStarted`, `running`, `paused` or `stopped`
-- `exec.isRunning()`, `exec.isPaused()`
+It returns `false` if the task could not be created (not enough memory for the stack, typically).
+
+```cpp
+exec.executeAsTask("main");                          // main() on its own task, defaults
+exec.executeAsTask("main", 16384, 2, 0, "fire");     // 16KB stack, priority 2, core 0, named "fire"
+```
+
+Then, on that task:
+
+|Call|What it does|Returns `false` when|
+|:----|:----|:----|
+|`exec.pause()`|stops the task where it is (`vTaskSuspend()`)|it is not running|
+|`exec.restart()`|carries on from where it stopped (`vTaskResume()`); not a fresh start, call `executeAsTask()` again for that|it is not paused|
+|`exec.kill()`|deletes the task (`vTaskDelete()`), also freeing a task whose function has already returned|it was not running or paused|
+|`exec.state()`|`ScriptState::notStarted`, `running`, `paused` or `stopped` (killed, or the function returned)|--|
+|`exec.isRunning()`, `exec.isPaused()`|shortcuts for the two states|--|
+|`exec.task()`|the FreeRTOS `TaskHandle_t`, for reading its statistics (`vTaskGetInfo()`...); control the task through the calls above|--|
 
 A control that doesn't apply (pausing a paused script...) does nothing and returns `false`. Calling `executeAsTask()` again kills the previous task first, and `free()` or the end of the `ScriptExecutable` kills it too. See [ExecuteAsTask](examples/ExecuteAsTask).
 
@@ -1117,7 +1139,7 @@ scriptScheduler.remove("blink");                 // kill, free, forget
 |Call|What it does|
 |:----|:----|
 |`add(name, source)`|compiles `source` and registers it as `name`, replacing a script of the same name; `false` if it doesn't compile (`showCompileError()` says why)|
-|`run(name, function, stack, priority, core)`|runs `function` (default `main`) on a new task and returns at once (v1's `executeAsTask`)|
+|`run(name, function, stackSize, priority, core)`|runs `function` (default `"main"`) on a new task and returns at once (v1's `executeAsTask`). `stackSize` (default `8192` bytes), `priority` (default `1`) and `core` (default `tskNO_AFFINITY`) mean the same as for `executeAsTask()` above; the task is named after the script|
 |`execute(name, function)`|runs it on the calling task and waits (v1's `execute`)|
 |`pause(name)`, `restart(name)`, `kill(name)`|stop where it is, carry on, delete the task|
 |`remove(name)`|kill, free the compiled script, forget the name (v1's `deleteExe`)|
