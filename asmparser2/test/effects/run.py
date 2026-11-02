@@ -40,6 +40,7 @@ EFFECTS = {
     "mandelbrot": ((MANDELBROT, "script"), 100, 40),
     "mandelbrot_ffloat": ((MANDELBROT_FFLOAT, "script"), 100, 40),
     "fixes": (os.path.join(HERE, "scripts", "fixes.sc"), 100, 40),
+    "floatcalls": (os.path.join(HERE, "scripts", "floatcalls.sc"), 100, 1),
 }
 
 

@@ -2067,14 +2067,14 @@ void promoteFrameSlots(Text *text)
 
 #define LOOP_MAX_CANDIDATES 96
 
-// Control flow and a-register liveness of one function, line by line
-// (bit r of a mask is ar).
+// Control flow and register liveness of one function, line by line (bit
+// r of a mask is ar, bit 16 + r is fr).
 struct LineFlow
 {
     const char **line; // the text's own lines, leading blanks skipped
     int *target;       // line a branch or jump goes to, -1 if none
     bool *falls;       // whether control reaches the next line
-    uint16_t *use, *def, *liveIn, *liveOut;
+    uint32_t *use, *def, *liveIn, *liveOut;
     int n;
 };
 
@@ -2090,11 +2090,12 @@ static void freeFlow(LineFlow *f)
     f->use = NULL;
 }
 
-// The a-registers `line` reads and writes. A call reads its argument
-// registers (all six for a variadic one) and is not counted as writing
-// anything; retw reads a2. An instruction not known to write its first
-// operand only (see writesFirstOperandOnly()) is taken to read it.
-static void registerUseDef(const char *line, uint16_t *use, uint16_t *def)
+// The registers `line` reads and writes (a0..a15, then f0..f15). A call
+// reads its argument registers (all six for a variadic one, f1/f2 for
+// ___div) and is not counted as writing anything; retw reads a2 and the
+// float return registers f0/f2. An instruction not known to write its
+// first operand only (see writesFirstOperandOnly()) is taken to read it.
+static void registerUseDef(const char *line, uint32_t *use, uint32_t *def)
 {
     *use = 0;
     *def = 0;
@@ -2104,12 +2105,13 @@ static void registerUseDef(const char *line, uint16_t *use, uint16_t *def)
     {
         int n = callArgumentCount(line, true);
         for (int k = 0; k < n; k++)
-            *use |= (uint16_t)(1u << (10 + k));
+            *use |= (uint32_t)(1u << (10 + k));
+        *use |= (1u << 17) | (1u << 18);
         return;
     }
     if (strncmp(line, "retw", 4) == 0)
     {
-        *use = 1u << 2;
+        *use = (1u << 2) | (1u << 16) | (1u << 18);
         return;
     }
     const char *sp = strchr(line, ' ');
@@ -2130,16 +2132,17 @@ static void registerUseDef(const char *line, uint16_t *use, uint16_t *def)
         size_t len = strcspn(p, ", ");
         if (len == 0)
             break;
-        if (p[0] == 'a' && (len == 2 || len == 3) && isdigit((unsigned char)p[1]) &&
+        if ((p[0] == 'a' || p[0] == 'f') && (len == 2 || len == 3) && isdigit((unsigned char)p[1]) &&
             (len == 2 || isdigit((unsigned char)p[2])))
         {
             int r = atoi(p + 1);
             if (r < 16)
             {
+                uint32_t bit = 1u << (p[0] == 'f' ? 16 + r : r);
                 if (index == 0 && writes)
-                    *def |= (uint16_t)(1u << r);
+                    *def |= bit;
                 else
-                    *use |= (uint16_t)(1u << r);
+                    *use |= bit;
             }
         }
         index++;
@@ -2167,7 +2170,7 @@ static bool buildFlow(Text *text, int start, int end, LineFlow *f)
     f->line = (const char **)malloc(sizeof(char *) * (n > 0 ? n : 1));
     f->target = (int *)malloc(sizeof(int) * (n > 0 ? n : 1));
     f->falls = (bool *)malloc(sizeof(bool) * (n > 0 ? n : 1));
-    f->use = (uint16_t *)malloc(sizeof(uint16_t) * 4 * (n > 0 ? n : 1));
+    f->use = (uint32_t *)malloc(sizeof(uint32_t) * 4 * (n > 0 ? n : 1));
     if (f->line == NULL || f->target == NULL || f->falls == NULL || f->use == NULL)
     {
         freeFlow(f);
@@ -2215,12 +2218,12 @@ static bool buildFlow(Text *text, int start, int end, LineFlow *f)
         changed = false;
         for (int i = n - 1; i >= 0; i--)
         {
-            uint16_t out = 0;
+            uint32_t out = 0;
             if (f->falls[i] && i + 1 < n)
                 out |= f->liveIn[i + 1];
             if (f->target[i] >= 0)
                 out |= f->liveIn[f->target[i]];
-            uint16_t in = (uint16_t)(f->use[i] | (out & ~f->def[i]));
+            uint32_t in = (uint32_t)(f->use[i] | (out & ~f->def[i]));
             if (in != f->liveIn[i] || out != f->liveOut[i])
             {
                 f->liveIn[i] = in;
@@ -2239,7 +2242,7 @@ static bool registerFreeOver(LineFlow *f, int reg, int lo, int hi, bool hasCall)
 {
     if (hasCall && reg >= 8)
         return false;
-    uint16_t bit = (uint16_t)(1u << reg);
+    uint32_t bit = (uint32_t)(1u << reg);
     for (int i = lo; i <= hi; i++)
         if ((f->use[i] | f->def[i] | f->liveIn[i] | f->liveOut[i]) & bit)
             return false;
@@ -2254,9 +2257,11 @@ struct LoopCandidate
     int off;       // slot: frame offset
     int width;     // slot: 1, 2 or 4 bytes
     int loopStart; // hoist: the loop's label line
-    char sym[48];  // hoist: what the l32r loads, or the movi's value
-    bool movi;     // hoist: a movi rather than an l32r
-    int reg;
+    char sym[48];  // hoist: the operands after the destination
+    int kind;      // hoist: HOIST_L32R, HOIST_MOVI or HOIST_OP
+    char op[12];   // hoist: the instruction
+    bool fresult;  // hoist: it produces an f-register
+    int reg;       // 0..15: a0..a15, 16..31: f0..f15
 };
 
 static int compareCandidates(const void *a, const void *b)
@@ -2404,13 +2409,41 @@ static bool rangeHasCall(LineFlow *f, int lo, int hi)
 
 // Keeps frame slots and loop-invariant l32r/movi loads in registers of
 // lines start..end-1 (one function). Returns how many lines it inserted.
-// What an `l32r aX,@sym` or `movi aX,N` line loads (false for any other
-// line, or an operand too long for `sym`), and whether it is a movi.
-static bool loopInvariantLoad(const char *line, char *sym, size_t n, bool *movi)
+// What an `l32r aX,@sym`, `movi aX,N` or pure computation (`slli aX,aY,k`,
+// `float.s fX,aY,N`, see isHoistableOp()) line produces -- the operands
+// after the destination, into `sym` -- and which kind of line it is
+// (false for any other line, or operands too long for `sym`).
+enum
 {
-    *movi = strncmp(line, "movi ", 5) == 0;
-    if (strncmp(line, "l32r ", 5) != 0 && !*movi)
+    HOIST_L32R,
+    HOIST_MOVI,
+    HOIST_OP
+};
+
+// Pure computations a loop can do once before it when their sources do
+// not change in it (allocateFunction() checks that).
+static bool isHoistableOp(const char *op)
+{
+    static const char *ops[] = {"float.s", "slli", "srli", "srai", "addi", "add", "sub", "addx2", "addx4", "addx8", "neg"};
+    for (size_t i = 0; i < sizeof(ops) / sizeof(ops[0]); i++)
+        if (strcmp(op, ops[i]) == 0)
+            return true;
+    return false;
+}
+
+static bool loopInvariantLoad(const char *line, char *sym, size_t n, int *kind, char *opOut = NULL)
+{
+    char op[12];
+    size_t opLen = strcspn(line, " ");
+    if (opLen >= sizeof(op))
         return false;
+    memcpy(op, line, opLen);
+    op[opLen] = 0;
+    *kind = strcmp(op, "movi") == 0 ? HOIST_MOVI : strcmp(op, "l32r") == 0 ? HOIST_L32R : HOIST_OP;
+    if (*kind == HOIST_OP && !isHoistableOp(op))
+        return false;
+    if (opOut != NULL)
+        strcpy(opOut, op);
     const char *c = strchr(line, ',');
     if (c == NULL || strlen(c + 1) >= n || strchr(c + 1, ' ') != NULL)
         return false;
@@ -2461,15 +2494,26 @@ static int allocateFunction(Text *text, int start, int end)
         int at = loopPreheader(&f, k, b);
         if (at < 0)
             continue;
+        uint32_t loopDef = 0;
+        for (int i = k; i <= b; i++)
+            loopDef |= f.def[i];
         for (int i = k; i <= b; i++)
         {
-            char sym[48];
-            bool movi;
-            if (!loopInvariantLoad(f.line[i], sym, sizeof(sym), &movi))
+            char sym[48], opname[12];
+            int kind;
+            if (!loopInvariantLoad(f.line[i], sym, sizeof(sym), &kind, opname))
                 continue;
+            if (kind == HOIST_OP)
+            {
+                // every source must hold the same value all through
+                // (use[i] also has the destination when it is a source)
+                uint32_t dst = f.def[i];
+                if ((f.use[i] & loopDef) != 0 || (f.use[i] & dst) != 0 || dst == 0)
+                    continue;
+            }
             int c = 0;
-            while (c < ncand && !(cand[c].hoist && cand[c].loopStart == k && cand[c].movi == movi &&
-                                  strcmp(cand[c].sym, sym) == 0))
+            while (c < ncand && !(cand[c].hoist && cand[c].loopStart == k && cand[c].kind == kind &&
+                                  strcmp(cand[c].op, opname) == 0 && strcmp(cand[c].sym, sym) == 0))
                 c++;
             if (c == ncand)
             {
@@ -2480,7 +2524,9 @@ static int allocateFunction(Text *text, int start, int end)
                 cand[c].loopStart = k;
                 cand[c].lo = at;
                 cand[c].hi = b;
-                cand[c].movi = movi;
+                cand[c].kind = kind;
+                snprintf(cand[c].op, sizeof(cand[c].op), "%s", opname);
+                cand[c].fresult = (f.def[i] >> 16) != 0;
                 snprintf(cand[c].sym, sizeof(cand[c].sym), "%s", sym);
                 ncand++;
             }
@@ -2505,9 +2551,10 @@ static int allocateFunction(Text *text, int start, int end)
             bool any = false;
             for (int i = x->loopStart; i <= x->hi && !any; i++)
             {
-                char sym[48];
-                bool movi;
-                any = owner[i] == 0 && loopInvariantLoad(f.line[i], sym, sizeof(sym), &movi) && movi == x->movi &&
+                char sym[48], opname[12];
+                int kind;
+                any = owner[i] == 0 && loopInvariantLoad(f.line[i], sym, sizeof(sym), &kind, opname) &&
+                      kind == x->kind && strcmp(opname, x->op) == 0 &&
                       strcmp(sym, x->sym) == 0;
             }
             if (!any)
@@ -2515,9 +2562,15 @@ static int allocateFunction(Text *text, int start, int end)
         }
         bool hasCall = rangeHasCall(&f, x->lo, x->hi);
         static const int order[] = {8, 9, 10, 11, 12, 13, 14, 15, 3, 4, 5, 6, 7};
+        // f0..f2 carry float arguments and results; every float register
+        // is the callee's to change, so none across a call.
+        static const int forder[] = {19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
+        bool isFloat = x->hoist && x->fresult;
+        if (isFloat && hasCall)
+            continue;
         for (int o = 0; o < 13 && x->reg < 0; o++)
         {
-            int r = order[o];
+            int r = isFloat ? forder[o] : order[o];
             if (!registerFreeOver(&f, r, x->lo, x->hi, hasCall))
                 continue;
             bool clash = false;
@@ -2532,9 +2585,10 @@ static int allocateFunction(Text *text, int start, int end)
         if (x->hoist)
             for (int i = x->loopStart; i <= x->hi; i++)
             {
-                char sym[48];
-                bool movi;
-                if (owner[i] == 0 && loopInvariantLoad(f.line[i], sym, sizeof(sym), &movi) && movi == x->movi &&
+                char sym[48], opname[12];
+                int kind;
+                if (owner[i] == 0 && loopInvariantLoad(f.line[i], sym, sizeof(sym), &kind, opname) &&
+                    kind == x->kind && strcmp(opname, x->op) == 0 &&
                     strcmp(sym, x->sym) == 0)
                     owner[i] = c + 1;
             }
@@ -2550,7 +2604,7 @@ static int allocateFunction(Text *text, int start, int end)
         if (x->reg < 0)
             continue;
         char reg[8];
-        snprintf(reg, sizeof(reg), "a%d", x->reg);
+        snprintf(reg, sizeof(reg), "%c%d", x->reg >= 16 ? 'f' : 'a', x->reg % 16);
         int from = x->hoist ? x->loopStart : 0;
         for (int i = from; i <= x->hi; i++)
         {
@@ -2560,7 +2614,7 @@ static int allocateFunction(Text *text, int start, int end)
             if (x->hoist)
             {
                 if (owner[i] == c + 1)
-                    snprintf(out, sizeof(out), "movr %s,%s", ops[0], reg);
+                    snprintf(out, sizeof(out), "%s %s,%s", x->fresult ? "mov.s" : "movr", ops[0], reg);
             }
             else if (m == 3 && strcmp(ops[1], "a1") == 0 && atoi(ops[2]) == x->off && i > 0)
             {
@@ -2589,7 +2643,8 @@ static int allocateFunction(Text *text, int start, int end)
             if (cand[c].hoist && cand[c].reg >= 0 && cand[c].lo == at)
             {
                 text->addAfter(start + at - 1,
-                               string_format("%s a%d,%s", cand[c].movi ? "movi" : "l32r", cand[c].reg, cand[c].sym));
+                               string_format("%s %c%d,%s", cand[c].op, cand[c].reg >= 16 ? 'f' : 'a',
+                                             cand[c].reg % 16, cand[c].sym));
                 inserted++;
             }
     free(owner);
@@ -2635,6 +2690,91 @@ static char *withFirstOperand(const char *line, const char *reg)
 // becomes one movi; and pure computations (not loads, which may read a
 // device register) whose result nothing reads go. Returns how many lines
 // it changed.
+// The liveness bit of register `name` (a0..a15, f0..f15), 0 for anything
+// else.
+static uint32_t regBitOf(const char *name)
+{
+    if ((name[0] != 'a' && name[0] != 'f') || !isdigit((unsigned char)name[1]))
+        return 0;
+    int r = atoi(name + 1);
+    if (r > 15)
+        return 0;
+    return 1u << (name[0] == 'f' ? 16 + r : r);
+}
+
+// A register-to-register copy: `mov`/`movr` between a-registers or
+// `mov.s` between f-registers, a1 left out.
+static bool isRegisterCopy(const char *op, char **ops, int m)
+{
+    if (m != 2 || strcmp(ops[0], ops[1]) == 0 || strcmp(ops[0], "a1") == 0 || strcmp(ops[1], "a1") == 0)
+        return false;
+    if (strcmp(op, "mov.s") == 0)
+        return ops[0][0] == 'f' && ops[1][0] == 'f' && regBitOf(ops[0]) && regBitOf(ops[1]);
+    return (strcmp(op, "mov") == 0 || strcmp(op, "movr") == 0) && ops[0][0] == 'a' && ops[1][0] == 'a' &&
+           regBitOf(ops[0]) && regBitOf(ops[1]);
+}
+
+// Float registers kept across a call are stored right before it
+// (`ssi fN,a1,X`) and loaded right after (`lsi fN,a1,X`), by
+// promoteFrameSlots() and preserveAcrossCalls(), whether or not the value
+// is still needed. Removes a restore whose register is not read again
+// before being rewritten, with its save, and a save whose restore is
+// gone; a save and its restore are matched by their slot. Returns how
+// many lines it removed.
+static int pruneCallSaves(Text *text, int start, LineFlow *f)
+{
+    int removed = 0;
+    char buf[160], buf2[160];
+    char *op, *ops[4], *op2, *ops2[4];
+    for (int c = 0; c < f->n; c++)
+    {
+        if (!isCallLine(f->line[c]))
+            continue;
+        int s0 = c, r1 = c;
+        while (s0 > 0 && (f->line[s0 - 1][0] == 0 || strncmp(f->line[s0 - 1], "ssi ", 4) == 0 ||
+                          strncmp(f->line[s0 - 1], "s32i ", 5) == 0 || strncmp(f->line[s0 - 1], "rfr ", 4) == 0 ||
+                          strncmp(f->line[s0 - 1], "mov ", 4) == 0))
+            s0--;
+        while (r1 + 1 < f->n && (f->line[r1 + 1][0] == 0 || strncmp(f->line[r1 + 1], "lsi ", 4) == 0 ||
+                                 strncmp(f->line[r1 + 1], "l32i ", 5) == 0 || strncmp(f->line[r1 + 1], "wfr ", 4) == 0 ||
+                                 strncmp(f->line[r1 + 1], "mov ", 4) == 0 || strncmp(f->line[r1 + 1], "movr ", 5) == 0))
+            r1++;
+        for (int sv = s0; sv < c; sv++)
+        {
+            snprintf(buf, sizeof(buf), "%s", f->line[sv]);
+            if (splitInstruction(buf, &op, ops) != 3 || strcmp(op, "ssi") != 0 || strcmp(ops[1], "a1") != 0)
+                continue;
+            // Paired by slot, not register: the copy folds may have the
+            // save store the value from the register it was copied from
+            // (`ssi f0,a1,116` restored by `lsi f15,a1,116`).
+            uint32_t bit = 0;
+            int match = -1;
+            for (int rs = c + 1; rs <= r1 && match < 0; rs++)
+            {
+                snprintf(buf2, sizeof(buf2), "%s", f->line[rs]);
+                if (splitInstruction(buf2, &op2, ops2) == 3 && strcmp(op2, "lsi") == 0 && strcmp(ops2[1], "a1") == 0 &&
+                    strcmp(ops2[2], ops[2]) == 0)
+                {
+                    match = rs;
+                    bit = regBitOf(ops2[0]);
+                }
+            }
+            if (match >= 0 && (bit == 0 || (f->liveOut[match] & bit) != 0))
+                continue; // still needed
+            if (match >= 0)
+            {
+                text->replaceText(start + match, " ");
+                f->line[match] = "";
+                removed++;
+            }
+            text->replaceText(start + sv, " ");
+            f->line[sv] = "";
+            removed++;
+        }
+    }
+    return removed;
+}
+
 static int tidyFunction(Text *text, int start, int end)
 {
     LineFlow f;
@@ -2653,14 +2793,13 @@ static int tidyFunction(Text *text, int start, int end)
         int m2 = splitInstruction(buf2, &op2, ops2);
         char *rewritten = NULL;
         bool blankThis = false;
-        if (m == 2 && (strcmp(op, "mov") == 0 || strcmp(op, "movr") == 0) && ops[0][0] == 'a' && ops[1][0] == 'a' &&
-            strcmp(ops[0], ops[1]) != 0 && strcmp(ops[0], "a1") != 0 && strcmp(ops[1], "a1") != 0)
+        if (isRegisterCopy(op, ops, m))
         {
-            int t = atoi(ops[1] + 1);
+            uint32_t t = regBitOf(ops[1]);
             // the line before computes the source, which dies here
             if (m2 >= 1 && strcmp(ops2[0], ops[1]) == 0 && writesFirstOperandOnly(op2) && strcmp(op2, "fill") != 0 &&
                 strcmp(op2, "pop") != 0 && f.target[i - 1] < 0 && strchr(f.line[i - 1], ':') == NULL &&
-                (f.liveOut[i] & (1u << t)) == 0)
+                (f.liveOut[i] & t) == 0)
             {
                 rewritten = withFirstOperand(f.line[i - 1], ops[0]);
                 if (rewritten != NULL)
@@ -2695,6 +2834,29 @@ static int tidyFunction(Text *text, int start, int end)
                 }
             }
         }
+        else if (m == 3 && strcmp(op, "mull") == 0 && m2 == 2 && strcmp(op2, "movi") == 0 &&
+                 (strcmp(ops[1], ops2[0]) == 0) != (strcmp(ops[2], ops2[0]) == 0) && f.target[i - 1] < 0)
+        {
+            // `movi aT,2^k; mull aD,aT,aX` -> `slli aD,aX,k` once aT dies
+            // here (ffloat's `2 * x * y`)
+            long v = atol(ops2[1]);
+            uint32_t t = regBitOf(ops2[0]);
+            int k = 0;
+            while (k < 31 && (1L << k) < v)
+                k++;
+            if (v >= 1 && (1L << k) == v && t != 0 &&
+                (strcmp(ops[0], ops2[0]) == 0 || (f.liveOut[i] & t) == 0))
+            {
+                const char *x = strcmp(ops[1], ops2[0]) == 0 ? ops[2] : ops[1];
+                char *shifted = k == 0 ? string_format("mov %s,%s", ops[0], x) : string_format("slli %s,%s,%d", ops[0], x, k);
+                text->replaceText(start + i, (const char *)shifted);
+                free(shifted);
+                text->replaceText(start + i - 1, " ");
+                f.line[i - 1] = f.line[i] = "";
+                changes++;
+                continue;
+            }
+        }
         else if (m == 3 && strcmp(op, "addi") == 0 && m2 == 2 && strcmp(op2, "movi") == 0 &&
                  strcmp(ops[0], ops[1]) == 0 && strcmp(ops2[0], ops[0]) == 0)
         {
@@ -2727,13 +2889,12 @@ static int tidyFunction(Text *text, int start, int end)
     {
         snprintf(buf, sizeof(buf), "%s", f.line[i]);
         int m = splitInstruction(buf, &op, ops);
-        if (m != 2 || (strcmp(op, "mov") != 0 && strcmp(op, "movr") != 0) || ops[0][0] != 'a' || ops[1][0] != 'a' ||
-            strcmp(ops[0], ops[1]) == 0 || strcmp(ops[0], "a1") == 0 || strcmp(ops[1], "a1") == 0)
+        if (!isRegisterCopy(op, ops, m))
             continue;
         // Every read of the copy before it dies is in the straight run
         // after it -- the branch closing that run included -- and the
         // source holds still until the last: those lines read the source.
-        uint16_t t = (uint16_t)(1u << atoi(ops[0] + 1)), src = (uint16_t)(1u << atoi(ops[1] + 1));
+        uint32_t t = regBitOf(ops[0]), src = regBitOf(ops[1]);
         int reads[16], nr = 0;
         bool ok = false, srcChanged = false;
         for (int k = i + 1; k < f.n; k++)
@@ -2757,7 +2918,8 @@ static int tidyFunction(Text *text, int start, int end)
                 snprintf(buf2, sizeof(buf2), "%s", q);
                 int m2 = splitInstruction(buf2, &op2, ops2);
                 if (m2 >= 1 && strcmp(ops2[0], ops[0]) == 0 && (f.def[k] & t) == 0 && q[0] != 'b' &&
-                    strcmp(op2, "s8i") != 0 && strcmp(op2, "s16i") != 0 && strcmp(op2, "s32i") != 0)
+                    strcmp(op2, "s8i") != 0 && strcmp(op2, "s16i") != 0 && strcmp(op2, "s32i") != 0 &&
+                    strcmp(op2, "ssi") != 0)
                     break;
                 reads[nr++] = k;
             }
@@ -2795,17 +2957,70 @@ static int tidyFunction(Text *text, int start, int end)
 
     if (!buildFlow(text, start, end, &f))
         return 0;
+    changes += pruneCallSaves(text, start, &f);
+    if (changes > 0)
+    {
+        freeFlow(&f);
+        return changes;
+    }
     for (int i = 0; i < f.n; i++)
     {
         snprintf(buf, sizeof(buf), "%s", f.line[i]);
         int m = splitInstruction(buf, &op, ops);
-        if (m < 1 || ops[0][0] != 'a' || !writesFirstOperandOnly(op) || op[0] == 'l' || strcmp(op, "fill") == 0 ||
-            strcmp(op, "pop") == 0 || strcmp(op, "movExt") == 0)
+        // a load from the frame is as pure as an add (a float restored
+        // after a call nothing reads again)
+        bool frameLoad = strcmp(op, "lsi") == 0 && m == 3 && strcmp(ops[1], "a1") == 0;
+        if (m < 1 || (ops[0][0] != 'a' && ops[0][0] != 'f') || !writesFirstOperandOnly(op) ||
+            (op[0] == 'l' && !frameLoad) || strcmp(op, "fill") == 0 || strcmp(op, "pop") == 0 ||
+            strcmp(op, "movExt") == 0)
             continue;
         int t = atoi(ops[0] + 1);
-        if (t < 3 || t == 8 || t > 15 || f.def[i] != (1u << t) || (f.liveOut[i] & (1u << t)) != 0)
+        uint32_t bit = regBitOf(ops[0]);
+        if (ops[0][0] == 'a' ? (t < 3 || t == 8 || t > 15) : (t < 3 || t > 15))
+            continue;
+        if (bit == 0 || f.def[i] != bit || (f.liveOut[i] & bit) != 0)
             continue;
         text->replaceText(start + i, " ");
+        f.line[i] = ""; // its old text may be freed
+        changes++;
+    }
+    // Float saves (`ssi fN,a1,X`) to a slot nothing loads any more -- their
+    // restores went just above -- go too, unless the frame's address is
+    // used some other way.
+    bool frameOk = true;
+    int loaded[64], nloaded = 0;
+    for (int i = 1; i < f.n && frameOk; i++)
+    {
+        if (((f.use[i] | f.def[i]) & 2) == 0 || f.line[i][0] == 0)
+            continue;
+        snprintf(buf, sizeof(buf), "%s", f.line[i]);
+        int m = splitInstruction(buf, &op, ops);
+        if (m != 3 || strcmp(ops[1], "a1") != 0 || strcmp(ops[0], "a1") == 0 || (op[0] != 'l' && op[0] != 's'))
+            frameOk = false;
+        else if (op[0] == 'l')
+        {
+            if (nloaded == 64)
+                frameOk = false;
+            else
+                loaded[nloaded++] = atoi(ops[2]);
+        }
+    }
+    for (int i = 1; i < f.n && frameOk; i++)
+    {
+        if (strncmp(f.line[i], "ssi ", 4) != 0)
+            continue;
+        snprintf(buf, sizeof(buf), "%s", f.line[i]);
+        int m = splitInstruction(buf, &op, ops);
+        if (m != 3 || strcmp(ops[1], "a1") != 0)
+            continue;
+        int off = atoi(ops[2]);
+        bool read = false;
+        for (int k = 0; k < nloaded && !read; k++)
+            read = loaded[k] > off - 4 && loaded[k] < off + 4;
+        if (read)
+            continue;
+        text->replaceText(start + i, " ");
+        f.line[i] = "";
         changes++;
     }
     // `bge a4,a14,skip; j label_4; skip:` -> `blt a4,a14,label_4` (the
@@ -2837,6 +3052,62 @@ static int tidyFunction(Text *text, int start, int end)
     return changes;
 }
 
+// Moves a loop-invariant line (see loopInvariantLoad()) out of its loop,
+// as it is, when its destination X is written nowhere else in the loop
+// and holds nothing the loop or its entry still needs: `slli a14,a3,18`
+// (ffloat's 4.0) with a3 set before the loop. No register is needed,
+// unlike allocateFunction()'s hoisting. X in a8..a15 or a float register
+// only if the loop makes no call (which would change it). Returns how
+// many lines it moved.
+static int hoistInvariantLines(Text *text, int start, int end)
+{
+    LineFlow f;
+    if (!buildFlow(text, start, end, &f))
+        return 0;
+    int moved = 0;
+    for (int k = 0; k < f.n && moved == 0; k++)
+    {
+        int b = -1;
+        for (int i = k; i < f.n; i++)
+            if (f.target[i] == k)
+                b = i;
+        if (b < 0)
+            continue;
+        int at = loopPreheader(&f, k, b);
+        if (at < 0)
+            continue;
+        uint32_t loopDef = 0;
+        for (int i = k; i <= b; i++)
+            loopDef |= f.def[i];
+        bool hasCall = rangeHasCall(&f, k, b);
+        for (int i = k; i <= b && moved == 0; i++)
+        {
+            char sym[48], opname[12];
+            int kind;
+            if (!loopInvariantLoad(f.line[i], sym, sizeof(sym), &kind, opname))
+                continue;
+            uint32_t x = f.def[i];
+            if (x == 0 || (x & (x - 1)) != 0 || (f.use[i] & loopDef) != 0 || (f.use[i] & x) != 0)
+                continue;
+            int defs = 0;
+            for (int j = k; j <= b; j++)
+                if (f.def[j] & x)
+                    defs++;
+            int r = __builtin_ctz(x);
+            bool clobberable = r >= 8; // a8..a15, f0..f15
+            if (defs != 1 || (f.liveIn[k] & x) != 0 || (f.liveIn[at] & x) != 0 || (hasCall && clobberable) ||
+                r < 3 || (r >= 16 && r < 19))
+                continue;
+            char *copy = string_format("%s", f.line[i]);
+            text->replaceText(start + i, " ");
+            text->addAfter(start + at - 1, copy);
+            moved++;
+        }
+    }
+    freeFlow(&f);
+    return moved;
+}
+
 // Renames short-lived values of a3..a7 inside loops -- one written and
 // read up within a straight run of lines, like an element's address --
 // into a13..a15 wherever one is free over that run, so that the loop
@@ -2854,7 +3125,7 @@ static int packTemporaries(Text *text, int start, int end)
         for (int d = 0; d < f.n; d++)
         {
             bool done = false;
-            uint16_t x = f.def[d];
+            uint32_t x = f.def[d];
             if (x == 0 || (x & (x - 1)) != 0 || (x & 0x00f8) == 0 || (f.use[d] & x) != 0)
                 continue; // writes one of a3..a7, not reading it
             bool inLoop = false;
@@ -2898,7 +3169,7 @@ static int packTemporaries(Text *text, int start, int end)
                 continue;
             for (int r = 15; r >= 13 && !done; r--)
             {
-                uint16_t bit = (uint16_t)(1u << r);
+                uint32_t bit = (uint32_t)(1u << r);
                 bool avail = (f.use[u] & bit) == 0;
                 for (int k = d; k < u && avail; k++)
                     avail = (f.liveOut[k] & bit) == 0 && (k == d || ((f.use[k] | f.def[k]) & bit) == 0);
@@ -2959,14 +3230,36 @@ void allocateLoopRegisters(Text *text)
         }
         if (!handWritten)
         {
-            packTemporaries(text, i + 1, end);
-            end += allocateFunction(text, i + 1, end);
-            for (int round = 0; round < 8; round++)
+            // Twice: a float.s of a constant only becomes loop-invariant
+            // once the first round has moved its movi out of the loop.
+            for (int pass = 0; pass < 2; pass++)
             {
+                // peepholes first, while a constant's movi still sits
+                // next to the line using it
+                for (int round = 0; round < 8; round++)
+                {
+                    end -= eraseBlankLines(text, i + 1, end);
+                    if (tidyFunction(text, i + 1, end) == 0)
+                        break;
+                }
                 end -= eraseBlankLines(text, i + 1, end);
-                end -= foldCopies(text, i + 1, end);
-                if (tidyFunction(text, i + 1, end) == 0)
-                    break;
+                for (int guard = 0; guard < 64; guard++)
+                {
+                    int h = hoistInvariantLines(text, i + 1, end);
+                    if (h == 0)
+                        break;
+                    end += h;
+                    end -= eraseBlankLines(text, i + 1, end);
+                }
+                packTemporaries(text, i + 1, end);
+                end += allocateFunction(text, i + 1, end);
+                for (int round = 0; round < 8; round++)
+                {
+                    end -= eraseBlankLines(text, i + 1, end);
+                    end -= foldCopies(text, i + 1, end);
+                    if (tidyFunction(text, i + 1, end) == 0)
+                        break;
+                }
             }
             end -= eraseBlankLines(text, i + 1, end);
         }

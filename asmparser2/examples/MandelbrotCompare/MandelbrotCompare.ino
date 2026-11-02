@@ -15,8 +15,8 @@
 // Measured on an ESP32 at 240MHz, with FastLED's CHSV:
 //   native float  33.5ms   inside 3318  checksum 0c584e72
 //   native fixed  30.0ms   inside 3293  checksum c026b3cf
-//   script float  61.7ms   inside 3318  checksum 0c584e72
-//   script ffloat 49.3ms   inside 3293  checksum c026b3cf
+//   script float  41.9ms   inside 3318  checksum 0c584e72
+//   script ffloat 31.5ms   inside 3293  checksum c026b3cf
 //
 // The native float code uses float literals (2.7f): in C++ a plain 2.7 is
 // a double, computed in software and much slower, while the script's

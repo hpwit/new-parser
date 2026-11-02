@@ -54,6 +54,7 @@ None of this changes what you write in a script, but it is why I can say that so
   * [Floating point: Mandelbrot](#floating-point-mandelbrot)
   * [Structs and methods: bouncing balls](#structs-and-methods-bouncing-balls)
   * [Calling a host function per pixel: rainbow](#calling-a-host-function-per-pixel-rainbow)
+  * [A real script: MultiEffectController](#a-real-script-multieffectcontroller)
   * [GPIO switching speed](#gpio-switching-speed)
   * [Compiling](#compiling)
 
@@ -792,15 +793,15 @@ Everything below was measured on a real esp32 (no PSRAM) at 240MHz, with `micros
 |Test|Native|v1|v2|v2 / native|
 |:----|----:|----:|----:|:----:|
 |`fib(40)`, recursive (331 million calls)|16.96s|22.41s|21.72s|1.28|
-|Game of Life 128x128, per generation|5.95ms|14.67ms|8.08ms|1.36|
-|Mandelbrot 128x96 `float`, per frame|33.5ms|94.5ms|61.7ms|1.84|
-|Mandelbrot 128x96 `ffloat`, per frame|30.0ms (fixed point)|--|49.3ms|1.64|
-|60 bouncing balls 128x96 `float`, per frame|6.49ms|--|8.55ms|1.32|
-|60 bouncing balls 128x96 `ffloat`, per frame|7.02ms (fixed point)|--|7.04ms|1.00|
+|Game of Life 128x128, per generation|5.95ms|14.67ms|7.13ms|1.20|
+|Mandelbrot 128x96 `float`, per frame|33.5ms|94.5ms|41.9ms|1.25|
+|Mandelbrot 128x96 `ffloat`, per frame|30.0ms (fixed point)|--|31.5ms|1.05|
+|60 bouncing balls 128x96 `float`, per frame|6.49ms|--|8.38ms|1.29|
+|60 bouncing balls 128x96 `ffloat`, per frame|7.02ms (fixed point)|--|6.86ms|0.98|
 |Rainbow 128x96, one `hsv()` call per pixel, per frame|7.12ms|--|7.13ms|1.00|
 |GPIO on/off through the registers|9.9MHz|--|9.9MHz|1.00|
 
-So a script takes 1 to 1.9 times as long as precompiled code, and the same time when calls to the host (`hsv()` here) dominate. Against v1 it is 1.5 to 1.8 times faster on loops and arrays, and about the same on function calls.
+So a script takes 1 to 1.3 times as long as precompiled code, and the same time when calls to the host (`hsv()` here) dominate; the `ffloat` balls are even slightly faster than the fixed point written by hand in C++. Against v1 it is 2 to 2.3 times faster on loops, arrays and floats, and about the same on function calls. The effects of a real multi-effect script are in [A real script: MultiEffectController](#a-real-script-multieffectcontroller).
 
 ## Function calls: fib(40)
 
@@ -819,9 +820,9 @@ QEMU does not charge for the window exceptions, so it reads about 5 cycles per c
 
 ## Loops and arrays: Game of Life
 
-`examples/GameOfLife`'s script on a 128x128 grid (`uint8_t copy[128, 128]` plus two line buffers, `external CRGB leds[128, 128]`), 50 generations: 404ms in the script, 297ms native, the 51 frames identical. v1 takes 733ms.
+`examples/GameOfLife`'s script on a 128x128 grid (`uint8_t copy[128, 128]` plus two line buffers, `external CRGB leds[128, 128]`), 50 generations: 357ms in the script, 297ms native, the 51 frames identical. v1 takes 733ms.
 
-What closed most of the gap: array addresses and constants loaded once before a loop instead of at every access, locals kept in registers instead of the stack, and 2D indexes computed with shifts.
+What closed most of the gap: array addresses and constants loaded once before a loop instead of at every access, locals kept in registers instead of the stack, 2D indexes computed with shifts, and `a && b` in a condition compiled as one branch per comparison (stopping at the first false one, as in C).
 
 ## Floating point: Mandelbrot
 
@@ -831,9 +832,11 @@ The Mandelbrot set on a 128x96 matrix, 50 iterations, `examples/MandelbrotCompar
 |:----|----:|:----:|
 |Native `float`|33.5ms|0c584e72|
 |Native fixed point|30.0ms|c026b3cf|
-|Script `float`|61.7ms (16fps)|0c584e72|
-|Script `ffloat`|49.3ms (20fps)|c026b3cf|
+|Script `float`|41.9ms (24fps)|0c584e72|
+|Script `ffloat`|31.5ms (32fps)|c026b3cf|
 |v1 `float`|94.5ms|0c584e72|
+
+The inner loop (`while (iter < maxIterations && x2 + y2 <= 4)`) is 12 instructions in `float`: the condition is two branches, the constants 2.0 and 4.0 are set once before the loop, and float registers are only saved around a call (the per-pixel divisions, `hsv()`) when their value is still needed after it.
 
 ## Structs and methods: bouncing balls
 
@@ -843,10 +846,10 @@ The Mandelbrot set on a 128x96 matrix, 50 iterations, `examples/MandelbrotCompar
 |:----|----:|:----:|
 |Native `float`|6.49ms|d82c6aa0|
 |Native fixed point (16.16)|7.02ms|96c0e39f|
-|Script `float`|8.55ms|d82c6aa0|
-|Script `ffloat`|7.04ms|96c0e39f|
+|Script `float`|8.38ms|d82c6aa0|
+|Script `ffloat`|6.86ms|96c0e39f|
 
-Here `ffloat` is 18% faster than `float` in a script, and as fast as fixed point written by hand in C++.
+Here `ffloat` is 18% faster than `float` in a script, and slightly faster than fixed point written by hand in C++.
 
 **NB: the esp32 has a single-precision FPU, so `float` is already fast. `ffloat` wins where conversions, divisions and integer mixing dominate, as in the balls; in the Mandelbrot's inner loop it is fixed-point multiplies against single float instructions.**
 
@@ -867,7 +870,23 @@ Every pixel is a call to the host's `hsv()` (FastLED's `CHSV`) and a `CRGB` stor
 |Native|7.12ms (140fps)|
 |Script|7.13ms (140fps)|
 
-The 100 frames are identical (same hash). The time is FastLED's colour conversion: around it, the script's loop and call cost the same as native code. With a small integer `hsv()` instead (`USE_FASTLED_HSV 0` in the example), native takes 4.25ms and the script 6.77ms. The script compiles in 116ms.
+The 100 frames are identical (same hash). The time is FastLED's colour conversion: around it, the script's loop and call cost the same as native code. With a small integer `hsv()` instead (`USE_FASTLED_HSV 0` in the example), native took 4.25ms and the script 6.77ms (measured on 2026-11-01). The script compiles in 0.12s.
+
+## A real script: MultiEffectController
+
+`examples/MultiEffectController` is a 730-line script: a particle fountain, stars, ripples, comets and a plasma, drawn on a 128x96 matrix with a fading trail, all host functions bound (`hsv()` is the sketch's own integer conversion here). Each effect function below was called 100 times on its own with `executeOnly()`, with `millis()` made to return a fixed sequence so the plasma draws the same frames in every build. Time per call:
+
+|Effect|What it does|Time per call|
+|:----|:----|----:|
+|`fadeTrail()`|fades the 128x96 trail buffer|0.51ms|
+|`renderParticles()`|160 particles (structs with methods): move, sort by life, draw, stamp the trail|1.55ms|
+|`renderStars()`|twinkling stars: update, sort by brightness, draw|2.01ms|
+|`renderRipples()`|expanding rings, restarted when they fade|1.07ms|
+|`renderComets()`|move and draw the comets, stamp the trail|0.21ms|
+|`renderPlasma()`|four `sin()`, one `hypot()` and six float divisions per pixel|28.1ms|
+|`drawModeIndicator()`|the mode bar on the top row|0.06ms|
+
+The plasma's time is the 12288 x 11 calls to `sin()`, `hypot()` and the float division routine. The frames are the same, hash for hash, as with the previous version of the compiler, which took 2.06ms for the particles, 1.18ms for the ripples and 0.37ms for the comets.
 
 ## GPIO switching speed
 
@@ -878,9 +897,9 @@ The 100 frames are identical (same hash). The time is FastLED's colour conversio
 |Script|Lines|Compile time|
 |:----|----:|----:|
 |`fib()`|12|40ms|
-|Rainbow|16|116ms|
-|Game of Life|55|0.73s|
-|`MultiEffectController`|730|about 9s|
+|Rainbow|16|0.12s|
+|Game of Life|55|0.78s|
+|`MultiEffectController`|730|11s|
 
 The compiler and runtime add about 162KB of flash and 8.6KB of RAM to a sketch. The loader alone (to run a saved binary, see [Saving executables](#saving-executables)) adds 10KB of flash and 1KB of RAM. A short script needs around 30-40KB of heap to compile; `MultiEffectController` uses most of a PSRAM-less esp32's heap but fits.
 

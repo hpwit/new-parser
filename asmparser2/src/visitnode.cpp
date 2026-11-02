@@ -2167,38 +2167,14 @@ static bool isLiteralIntOperand(NodeToken *changeTypeWrapper)
            changeTypeWrapper->getChildPtr(0)->_vartype != __float__;
 }
 
-void _visitcomparatorNode(NodeToken *nd)
+// Emits the branch for one comparison `nd` (a testNode): to
+// `target`_end when it is false -- or, for a long body (totalSize), into
+// `target`_if when it is true and `j target_end` otherwise.
+static void emitTestBranch(NodeToken *nd, int totalSize, const char *target)
 {
-    // printf("in comparator\n");
     int numl = register_numl.get();
-
-    if (nd->getChildPtr(0)->_nodetype != testNode)
-    {
-        // on va tester si on est >0;
-        nd->getChildPtr(0)->visitNode();
-        if (nd->_total_size > 116)
-        {
-            bufferText->addAfter(string_format("bnez a%d,%s_if", numl, nd->parent->getTargetText()));
-            bufferText->addAfter(string_format("j %s_end", nd->parent->getTargetText()));
-            bufferText->addAfter(string_format("%s_if:", nd->parent->getTargetText()));
-            register_numl.increase();
-        }
-        else
-        {
-            bufferText->addAfter(string_format("beqz a%d,%s_end", numl, nd->parent->getTargetText()));
-            // bufferText->addAfter(_compare.back()+1,string_format("j %s_end", nd->target.c_str()));
-            // bufferText->addAfter(_compare.back()+2,string_format("%s_if:", nd->target.c_str()));
-            register_numl.increase();
-        }
-
-        return;
-    }
-    // printf("test node\n\r");
-    //  nd->getChildPtr(0)->visitNode();
-    nd = nd->getChildPtr(0);
-    nd->_total_size = nd->parent->_total_size;
-
-    nd->addTargetText(nd->parent->getTargetText());
+    nd->_total_size = totalSize;
+    nd->addTargetText(target);
     ffloatComparison(nd);
     if (nd->getChildPtr(0)->_vartype == __float__)
         nd->getChildPtr(1)->_vartype = __float__;
@@ -2605,6 +2581,74 @@ void _visitcomparatorNode(NodeToken *nd)
     // printf("out comparator\n");
     if(_add!=NULL)
     free(_add);
+}
+
+// A comparison, or comparisons joined by && (TokenKeywordAnd): each
+// side then is 0 or 1, so evaluating them as branches one by one gives
+// the same result as and-ing their values.
+static bool isTestChain(NodeToken *nd)
+{
+    if (nd == NULL)
+        return false;
+    if (nd->_nodetype == testNode)
+        return true;
+    return nd->_nodetype == binOpNode && nd->type == TokenKeywordAnd && nd->children_size() == 2 &&
+           isTestChain(nd->getChildPtr(0)) && isTestChain(nd->getChildPtr(1));
+}
+
+// Branches to `target`_end as soon as one comparison of the chain fails.
+static void emitTestChain(NodeToken *nd, const char *target)
+{
+    if (nd->_nodetype != testNode)
+    {
+        emitTestChain(nd->getChildPtr(0), target);
+        emitTestChain(nd->getChildPtr(1), target);
+        return;
+    }
+    register_numl.duplicate();
+    emitTestBranch(nd, 0, target);
+    register_numl.pop();
+}
+
+void _visitcomparatorNode(NodeToken *nd)
+{
+    // printf("in comparator\n");
+    int numl = register_numl.get();
+
+    if (isTestChain(nd->getChildPtr(0)) && nd->getChildPtr(0)->_nodetype != testNode)
+    {
+        // `a < b && c <= d && ...`: one branch to _end per comparison,
+        // the later ones skipped once one fails -- C's short-circuit
+        // evaluation, instead of computing every comparison as 0/1 and
+        // and-ing the results (seen in Mandelbrot's
+        // `while (iter < maxIterations && x2 + y2 <= 4)`). The assembler
+        // relaxes any branch that cannot reach.
+        emitTestChain(nd->getChildPtr(0), nd->getTargetText());
+        register_numl.increase();
+        return;
+    }
+    if (nd->getChildPtr(0)->_nodetype != testNode)
+    {
+        // on va tester si on est >0;
+        nd->getChildPtr(0)->visitNode();
+        if (nd->_total_size > 116)
+        {
+            bufferText->addAfter(string_format("bnez a%d,%s_if", numl, nd->parent->getTargetText()));
+            bufferText->addAfter(string_format("j %s_end", nd->parent->getTargetText()));
+            bufferText->addAfter(string_format("%s_if:", nd->parent->getTargetText()));
+            register_numl.increase();
+        }
+        else
+        {
+            bufferText->addAfter(string_format("beqz a%d,%s_end", numl, nd->parent->getTargetText()));
+            // bufferText->addAfter(_compare.back()+1,string_format("j %s_end", nd->target.c_str()));
+            // bufferText->addAfter(_compare.back()+2,string_format("%s_if:", nd->target.c_str()));
+            register_numl.increase();
+        }
+
+        return;
+    }
+    emitTestBranch(nd->getChildPtr(0), nd->_total_size, nd->getTargetText());
 }
 
 // Set by _visitCallFunctionTemplate() when it spilled a10 -- an outer
@@ -4435,16 +4479,31 @@ void _visitternaryIfNode(NodeToken *nd)
     // are dropped at the end -- see the end of this function.
     int spDepthAtEntry = bufferText->sp._stack.size();
 
-    register_numl.duplicate();
-    nd->getChildPtr(0)->visitNode();
-    register_numl.pop();
-    bufferText->addAfter(string_format("beqz a%d,%s", register_numl.get(), nd->getTargetText()));
+    // A comparison (or && of them) as the condition branches straight to
+    // the false arm, as in an if, rather than being computed as 0/1 first.
+    NodeToken *cond = nd->getChildPtr(0);
+    while (cond->_nodetype == comparatorNode && cond->children_size() == 1)
+        cond = cond->getChildPtr(0);
+    char *falseTarget = string_format("%s_f", nd->getTargetText());
+    bool branches = isTestChain(cond);
+    if (branches)
+    {
+        emitTestChain(cond, falseTarget);
+    }
+    else
+    {
+        register_numl.duplicate();
+        nd->getChildPtr(0)->visitNode();
+        register_numl.pop();
+        bufferText->addAfter(string_format("beqz a%d,%s_end", register_numl.get(), falseTarget));
+    }
 
     register_numl.duplicate();
     nd->getChildPtr(1)->visitNode();
     register_numl.pop();
     bufferText->addAfter(string_format("j %s_end", nd->getTargetText()));
-    bufferText->addAfter(string_format("%s:", nd->getTargetText()));
+    bufferText->addAfter(string_format("%s_end:", falseTarget));
+    free(falseTarget);
 
     register_numl.duplicate();
     nd->getChildPtr(2)->visitNode();

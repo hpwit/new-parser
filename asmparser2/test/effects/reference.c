@@ -84,6 +84,32 @@ static void fixes(void)
     for (int y = 80; y < height; y++) for (int x = 0; x < width; x++) { h2[y][x] = 20 + target_rand(200); leds[y * width + x] = palette[h2[y][x]]; }
     target_show();
 }
+static float fc_lerp(float a, float b, float t) { return a + (b - a) * t; }
+static float fc_plasma(int x, int y, uint32_t t)
+{
+    float fx = x, fy = y, ft = t;
+    float v1 = sinf((fx / 8.0f) + (ft / 40.0f));
+    float v2 = sinf((fy / 6.0f) - (ft / 55.0f));
+    float v3 = sinf(((fx + fy) / 10.0f) + (ft / 30.0f));
+    float cx = fx - (width / 2), cy = fy - (height / 2);
+    float dist = hypotf(cx, cy);
+    float v4 = sinf((dist / 4.0f) - (ft / 20.0f));
+    return (v1 + v2 + v3 + v4) / 4.0f;
+}
+static void floatcalls(void)
+{
+    for (uint32_t t = 0; t < 80; t += 40)
+    {
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                float v = fc_plasma(x, y, t);
+                int hue = (int)(fc_lerp(0, 255, (v + 1.0f) / 2.0f));
+                leds[y * width + x] = target_hsv(hue, 255, 200);
+            }
+        target_show();
+    }
+}
 #define NSEEDS 9
 static int sx[NSEEDS], sy[NSEEDS], ringIn[NSEEDS], ringOut[NSEEDS], gap[NSEEDS][NSEEDS];
 static int isqrt_(int v) { int r = 0; while ((r + 1) * (r + 1) <= v) r++; return r; }
@@ -286,6 +312,7 @@ int main(int argc, char **argv)
     else if (!strcmp(w, "voronoi")) voronoi();
     else if (!strcmp(w, "plasma")) plasma();
     else if (!strcmp(w, "fixes")) fixes();
+    else if (!strcmp(w, "floatcalls")) floatcalls();
     else if (!strcmp(w, "fire")) fire();
     else
     {

@@ -1537,7 +1537,7 @@ static void runStructArrayFieldStrideTest()
                 char *after = content.getText(i + 2);
                 if (line == NULL || next == NULL || after == NULL)
                     continue;
-                int reg = -1, imm = -1;
+                int reg = -1, imm = -1, src = -1;
                 if (strncmp(next, "mull", 4) == 0 && strstr(after, "@_arr") != NULL &&
                     sscanf(line, "movi a%d,%d", &reg, &imm) == 2)
                 {
@@ -1545,6 +1545,15 @@ static void runStructArrayFieldStrideTest()
                         foundCorrectStride = true;
                     else
                         wrongStrideSeen = imm;
+                }
+                // allocateLoopRegisters() turns a movi of a power of two
+                // and its mull into one shift
+                if (strstr(next, "@_arr") != NULL && sscanf(line, "slli a%d,a%d,%d", &reg, &src, &imm) == 3)
+                {
+                    if (imm == 3)
+                        foundCorrectStride = true;
+                    else
+                        wrongStrideSeen = 1 << imm;
                 }
             }
             if (foundCorrectStride == false && wrongStrideSeen != -1)
@@ -1555,7 +1564,7 @@ static void runStructArrayFieldStrideTest()
             }
             else if (!foundCorrectStride)
             {
-                printf("       did not find the expected 'movi a<reg>,8' / 'mull' / 'l32r ...,@_arr' sequence in the generated instructions\n");
+                printf("       did not find the expected 'movi a<reg>,8' / 'mull' (or 'slli ...,3') / 'l32r ...,@_arr' sequence in the generated instructions\n");
                 ok = false;
             }
 
@@ -1669,10 +1678,17 @@ static void runStructArrayMethodSelfPointerTest()
                     mullDestReg = mullDest;
                     break;
                 }
+                // the same as one shift (see the field-read test above)
+                if (sscanf(line, "slli a%d,a%d,%d", &mullDest, &mullA, &imm) == 3 && imm == 3 &&
+                    strstr(next, "@_arr") != NULL)
+                {
+                    mullDestReg = mullDest;
+                    break;
+                }
             }
             if (mullDestReg == -1)
             {
-                printf("       did not find the expected 'movi a<reg>,8' / 'mull' / 'l32r ...,@_arr' sequence in the generated instructions\n");
+                printf("       did not find the expected 'movi a<reg>,8' / 'mull' (or 'slli ...,3') / 'l32r ...,@_arr' sequence in the generated instructions\n");
                 ok = false;
             }
             else
