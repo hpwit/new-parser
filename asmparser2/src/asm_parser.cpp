@@ -19,7 +19,7 @@ static uint32_t _address_data = 0;
 static uint32_t _tmp_data_address = 0;
 static uint16_t _instr_size = 0;
 static uint16_t tmp_instr_size = 0;
-static uint16_t _data_size = 0;
+static uint32_t _data_size = 0; // globals can pass 64KB
 static uint16_t tmp_data_size = 0;
 static uint16_t binary_header_size = 0;
 static parsedLines _asm_parsed;
@@ -132,7 +132,7 @@ static void addInstr(result_parse_line operande, parsedLines *asm_parsed)
             _tmp_data_address += operande.size;
             asm_parsed->push_back(operande);
         }
-        _address_data += operande.size;
+        _address_data += operande.op == opCodeType::data ? operande.bincode : operande.size;
     }
 }
 
@@ -760,6 +760,10 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
                 ps1->align = true;
                 asm_Error.error = 0;
                 ps.size = (uint16_t)((value / 4) * 4 + 4);
+                // the whole reservation, for globals past 64KB (`size`
+                // is 16 bits to keep every assembled line small; a data
+                // line has no instruction word of its own to put there)
+                ps.bincode = (uint32_t)((value / 4) * 4 + 4);
                 // ".bytes N" (no trailing values) is a plain zeroed
                 // reservation (e.g. the built-in _handle_ scratch word)
                 // -- nothing to store. ".bytes N
@@ -1122,7 +1126,7 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
         // handle/execaddr/sync scratch words, internal constants, ...)
         // lives in this range even when nothing is ever written there, so
         // the loader's data buffer needs to be at least this big.
-        _data_size = (uint16_t)_address_data;
+        _data_size = _address_data;
 
     return main_error;
 }

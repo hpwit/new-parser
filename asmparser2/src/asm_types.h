@@ -170,7 +170,9 @@ struct Binary
     uint16_t instruction_size = 0;
     uint16_t tmp_instruction_size = 0;
     uint16_t function_size = 0;
-    uint16_t data_size = 0;
+    // 32 bits: a script's globals can pass 64KB (`uint8_t copy[480, 800]`
+    // for an 800x480 screen is 384000 bytes).
+    uint32_t data_size = 0;
 };
 
 // A declared script function, decoded from a Binary's relocation header

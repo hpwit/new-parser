@@ -184,6 +184,10 @@ void Parser::parse(Script *main_script, Tokens *__tks)
 
 void Parser::parseProgram()
 {
+    // for-loop external-store tracking starts afresh with every program
+    _for_num = 0;
+    nbofextern = 0;
+    extvariablestore = NULL;
 
     int memberpos = 0;
     int _start = 0;
@@ -3422,15 +3426,21 @@ void createNodeVariable(Token *_var, bool isStore)
             v._nodetype = (int)storeExtGlocalVariableNode;
             // See the _for_num/nbofextern/extvariablestore comment near
             // this file's top -- ported from v1's identical tracking.
-            if (extvariablestore != NULL)
+            // only inside a for-loop: a store anywhere else used to be
+            // counted too and never reset, so the next for-loop -- even
+            // in the next script compiled -- hoisted a stale (freed) name
+            if (_for_num > 0)
             {
-                if (strcmp(extvariablestore, v.getText()) != 0)
+                if (extvariablestore != NULL)
+                {
+                    if (strcmp(extvariablestore, v.getText()) != 0)
+                        nbofextern++;
+                }
+                else
+                {
+                    extvariablestore = v.getText();
                     nbofextern++;
-            }
-            else
-            {
-                extvariablestore = v.getText();
-                nbofextern++;
+                }
             }
             // current_node->asPointer=asPointer;
             //  return;
@@ -3451,15 +3461,21 @@ void createNodeVariable(Token *_var, bool isStore)
         {
             // NodeStoreExtGlobalVariable v = NodeStoreExtGlobalVariable(_var);
             v._nodetype = (int)storeExtGlocalVariableNode;
-            if (extvariablestore != NULL)
+            // only inside a for-loop: a store anywhere else used to be
+            // counted too and never reset, so the next for-loop -- even
+            // in the next script compiled -- hoisted a stale (freed) name
+            if (_for_num > 0)
             {
-                if (strcmp(extvariablestore, v.getText()) != 0)
+                if (extvariablestore != NULL)
+                {
+                    if (strcmp(extvariablestore, v.getText()) != 0)
+                        nbofextern++;
+                }
+                else
+                {
+                    extvariablestore = v.getText();
                     nbofextern++;
-            }
-            else
-            {
-                extvariablestore = v.getText();
-                nbofextern++;
+                }
             }
             // current_node->asPointer=asPointer;
             // return;

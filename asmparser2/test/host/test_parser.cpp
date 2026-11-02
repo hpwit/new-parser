@@ -542,6 +542,7 @@ static void runEquivalenceTest(const char *name, const char *script)
 
         before.empty();
         after.empty();
+        fflush(stdout);
         _exit(ok ? 0 : 1);
     }
 
@@ -2712,6 +2713,113 @@ static void runCompileErrorReportTest()
     }
 }
 
+// Globals past 64KB: the data size is 32 bits, through compiling and a
+// save/load round trip (serializeBinary() writes it on 2 bytes, or as
+// 0xFFFF + 4 bytes when it does not fit).
+static void runLargeGlobalsTest()
+{
+    const char *name = "globals past 64KB: 32-bit data size, kept by serialize/deserialize";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+    const char *script = "uint8_t copy[480, 800];\nuint8_t line1[800];\nvoid main()\n{\n   copy[479, 799] = 1;\n   line1[0] = 2;\n}\n";
+    if (!compileForTest(script))
+        ok = false;
+    else
+    {
+        Binary bin = createBinary(&footer, &header, &content, false);
+        if (bin.error.error || bin.data_size < 480 * 800 + 800)
+        {
+            printf("       data_size %u, expected at least %u\n", (unsigned)bin.data_size, 480u * 800u + 800u);
+            ok = false;
+        }
+        else
+        {
+            uint32_t size = 0;
+            uint8_t *buf = serializeBinary(&bin, &size);
+            Binary back = deserializeBinary(buf, size);
+            if (back.error.error || back.data_size != bin.data_size ||
+                back.tmp_instruction_size != bin.tmp_instruction_size || back.function_size != bin.function_size)
+            {
+                printf("       round trip: data_size %u -> %u\n", (unsigned)bin.data_size, (unsigned)back.data_size);
+                ok = false;
+            }
+            free(buf);
+            freeBinary(&back);
+        }
+        freeBinary(&bin);
+    }
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
+// Indexing a pointer variable loads the pointer first: `led16[i]` with
+// `external uint16_t *led16;` (bound to the address of a host pointer),
+// or a global `uint16_t *gp;`. An array (`uint16_t arr[8];`) is indexed
+// from its own address. Both pointer cases used to index from the
+// pointer's own storage, writing over whatever followed it.
+static void runPointerIndexTest()
+{
+    const char *name = "p[i] on a T* variable loads the pointer first; arrays are indexed directly";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    static uint16_t *hostBuf = NULL;
+    bindVariable((char *)"uint16_t *", (char *)"testPtr16", NULL, (void *)&hostBuf);
+    // declared explicitly: equivalence tests further down drive the
+    // parser without parse()'s own reset, which an auto-declared external
+    // (a bound name used undeclared) would leave state behind for
+    const char *script = "external uint16_t *testPtr16;\nuint16_t *gp;\nuint16_t arr[8];\nvoid main()\n{\n   int i = 3;\n   testPtr16[i] = 7;\n   gp[i] = 8;\n   arr[i] = 9;\n}\n";
+    bool compiled = compileForTest(script);
+    bool ok = compiled;
+    int derefs = 0, arrayLoads = 0;
+    for (int i = 0; ok && i + 1 < content.size(); i++)
+    {
+        char *line = content.getText(i);
+        char *next = content.getText(i + 1);
+        int r1 = -1, r2 = -2, r3 = -3;
+        bool base = strstr(line, "@_ext_testPtr16") != NULL || strstr(line, "@_gp") != NULL;
+        if (base && sscanf(next, "l32i a%d,a%d,%d", &r1, &r2, &r3) == 3 && r1 == r2 && r3 == 0)
+            derefs++;
+        if (strstr(line, "@_arr") != NULL && strncmp(next, "l32i", 4) == 0)
+            arrayLoads++;
+    }
+    if (ok && (derefs != 2 || arrayLoads != 0))
+    {
+        printf("       pointer loads %d (expected 2), loads after the array's address %d (expected 0)\n", derefs,
+               arrayLoads);
+        ok = false;
+    }
+    if (compiled)
+    {
+        // consumes the generated text, as every other test leaves it
+        Binary bin = createBinary(&footer, &header, &content, false);
+        if (bin.error.error)
+        {
+            printf("       assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+            ok = false;
+        }
+        freeBinary(&bin);
+    }
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     registerBallEffectBindings();
@@ -2721,6 +2829,8 @@ int main()
     runOptimizeUnitTest();
     runSafeModeTest();
     runCompileErrorReportTest();
+    runLargeGlobalsTest();
+    runPointerIndexTest();
     runBuiltinHandleTest();
     runVarargsOrderTest();
     runCharPointerArgumentsTest();

@@ -142,7 +142,9 @@ public:
 	// complex scripts.)
 	NodeToken **children = NULL;
 	NodeToken *parent = NULL;
-	uint16_t _total_size = 1;
+	// 32 bits: an element count, and a global array can pass 65535
+	// elements (`uint8_t copy[480, 800]`).
+	uint32_t _total_size = 1;
 	uint16_t target = EOF_TEXTARRAY;
 	uint16_t textref = EOF_TEXTARRAY;
 	uint16_t stack_pos = 0;

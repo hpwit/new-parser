@@ -7,12 +7,18 @@
 // before trusting their size fields.
 #define SCRIPT_BINARY_MAGIC 0x31504353u
 
+// The data size field: 2 bytes as it always was, or, for globals of
+// 0xFFFF bytes or more, 0xFFFF followed by the size on 4 bytes -- so
+// binaries saved before keep loading.
+#define DATA_SIZE_ESCAPE 0xFFFF
+
 uint8_t *serializeBinary(Binary *bin, uint32_t *outSize)
 {
     if (bin->error.error || bin->binary_data == NULL || bin->function_data == NULL)
         return NULL;
 
-    uint32_t total = 4 + 2 * 4 + (uint32_t)bin->tmp_instruction_size + (uint32_t)bin->function_size;
+    bool wideData = bin->data_size >= DATA_SIZE_ESCAPE;
+    uint32_t total = 4 + 2 * 4 + (wideData ? 4 : 0) + (uint32_t)bin->tmp_instruction_size + (uint32_t)bin->function_size;
     uint8_t *buf = (uint8_t *)malloc(total);
     uint8_t *p = buf;
     uint32_t magic = SCRIPT_BINARY_MAGIC;
@@ -25,8 +31,20 @@ uint8_t *serializeBinary(Binary *bin, uint32_t *outSize)
     p += 2;
     memcpy(p, &bin->function_size, 2);
     p += 2;
-    memcpy(p, &bin->data_size, 2);
-    p += 2;
+    if (wideData)
+    {
+        uint16_t escape = DATA_SIZE_ESCAPE;
+        memcpy(p, &escape, 2);
+        p += 2;
+        memcpy(p, &bin->data_size, 4);
+        p += 4;
+    }
+    else
+    {
+        uint16_t narrow = (uint16_t)bin->data_size;
+        memcpy(p, &narrow, 2);
+        p += 2;
+    }
     memcpy(p, bin->binary_data, bin->tmp_instruction_size);
     p += bin->tmp_instruction_size;
     memcpy(p, bin->function_data, bin->function_size);
@@ -45,7 +63,7 @@ Binary deserializeBinary(const uint8_t *buf, uint32_t size)
     bin.error.error = 0;
     bin.error.error_message = NULL;
 
-    const uint32_t headerSize = 4 + 2 * 4;
+    uint32_t headerSize = 4 + 2 * 4;
     if (buf == NULL || size < headerSize)
     {
         bin.error.error = 1;
@@ -70,8 +88,22 @@ Binary deserializeBinary(const uint8_t *buf, uint32_t size)
     p += 2;
     memcpy(&bin.function_size, p, 2);
     p += 2;
-    memcpy(&bin.data_size, p, 2);
+    uint16_t narrow;
+    memcpy(&narrow, p, 2);
     p += 2;
+    bin.data_size = narrow;
+    if (narrow == DATA_SIZE_ESCAPE)
+    {
+        headerSize += 4;
+        if (size < headerSize)
+        {
+            bin.error.error = 1;
+            bin.error.error_message = (char *)"serialized script binary is truncated";
+            return bin;
+        }
+        memcpy(&bin.data_size, p, 4);
+        p += 4;
+    }
 
     uint32_t expected = headerSize + (uint32_t)bin.tmp_instruction_size + (uint32_t)bin.function_size;
     if (size < expected)

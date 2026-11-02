@@ -1350,6 +1350,28 @@ static void emitSingleIndex(NodeToken *nd, bool pushIntType)
         globalType.pop();
 }
 
+// A variable declared `T *p`, as opposed to an array `T p[N]` (whose
+// target text carries its dimensions, "@n ..."): indexing it reads the
+// address the pointer holds first. Struct member accesses are left out.
+static bool isBarePointer(NodeToken *nd)
+{
+    if (!nd->isPointer || nd->type == TokenUserDefinedVariableMember ||
+        nd->type == TokenUserDefinedVariableMemberFunction)
+        return false;
+    const char *t = nd->getTargetText();
+    return t == NULL || t[0] != '@';
+}
+
+// After the variable's own address went into `reg`: for an element of a
+// bare pointer (`led16[i]` with `external uint16_t *led16;`, or a global
+// `uint16_t *buf;`), load the pointer itself. `p[i]` used to index from
+// the pointer's own storage, writing over whatever followed it.
+static void emitPointerLoad(NodeToken *nd, int reg)
+{
+    if (nd->children_size() > 0 && isBarePointer(nd))
+        bufferText->addAfter(string_format("l32i a%d,a%d,0", reg, reg));
+}
+
 void _visitglobalVariableNode(NodeToken *nd)
 {
 
@@ -1397,7 +1419,7 @@ void _visitglobalVariableNode(NodeToken *nd)
         {
             bufferText->addAfter(string_format(movi, point_regnum, nd->_total_size));
             bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(), point_regnum));
-            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
             // addi's third operand is a genuine immediate ("addi a%d,a%d,%d",
             // parser_enum.cpp) -- passing register_numl.get() here (a
             // register *number*, e.g. 15) rendered as a literal "...,15"
@@ -1430,7 +1452,7 @@ void _visitglobalVariableNode(NodeToken *nd)
             default: scaleInstr = addx8; break; // 9
             }
             bufferText->addAfter(string_format(scaleInstr, register_numl.get(), register_numl.get(), register_numl.get()));
-            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
             bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
         }
         else if (v->total_size == 4)
@@ -1442,7 +1464,7 @@ void _visitglobalVariableNode(NodeToken *nd)
             // the sizes above rather than falling into the general path.
             bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), register_numl.get()));
             bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), register_numl.get()));
-            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
             bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
         }
         else if (v->total_size > 4)
@@ -1451,12 +1473,12 @@ void _visitglobalVariableNode(NodeToken *nd)
             // content.l->pop_back();
             bufferText->addAfter(string_format(movi, point_regnum, v->total_size));
             bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(), point_regnum));
-            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
             bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
         }
         else
         {
-            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
             for (int i = 0; i < v->total_size; i++)
             {
                 bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
@@ -1465,7 +1487,7 @@ void _visitglobalVariableNode(NodeToken *nd)
     }
     else
     {
-        bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+        bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
     }
     bufferText->sp.push(bufferText->get());
     if (nd->asPointer) //(&d)
@@ -3240,6 +3262,7 @@ void _visitextGlobalVariableNode(NodeToken *nd)
             }
 
             bufferText->addAfter(string_format("movExt a%d,@_ext_%s", point_regnum, nd->getText()));
+            emitPointerLoad(nd, point_regnum);
             // f=f+number.f;
             // Same strength reduction as _visitglobalVariableNode()'s
             // identical case: scale the index in place with a single
@@ -3778,7 +3801,7 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
         {
             bufferText->addAfter(string_format(movi, point_regnum, nd->_total_size));
             bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(), point_regnum));
-            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
             bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
         }
         else if (v->total_size == 2 || v->total_size == 3 || v->total_size == 5 || v->total_size == 7 || v->total_size == 9)
@@ -3796,7 +3819,7 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
             default: scaleInstr = addx8; break; // 9
             }
             bufferText->addAfter(string_format(scaleInstr, register_numl.get(), register_numl.get(), register_numl.get()));
-            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
             bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
         }
         else if (v->total_size == 4)
@@ -3805,7 +3828,7 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
             // _visitglobalVariableNode()'s identical case.
             bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), register_numl.get()));
             bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), register_numl.get()));
-            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
             bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
         }
         else if (v->total_size > 4)
@@ -3815,12 +3838,12 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
             // content.l->pop_back();
             bufferText->addAfter(string_format(movi, point_regnum, v->total_size));
             bufferText->addAfter(string_format(mull, register_numl.get(), register_numl.get(), point_regnum));
-            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
             bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
         }
         else
         {
-            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+            bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
             for (int i = 0; i < v->total_size; i++)
             {
                 bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
@@ -3829,7 +3852,7 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
     }
     else
     {
-        bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText()));
+        bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
     }
     bufferText->end();
     if (isStructFunction)
@@ -3961,6 +3984,7 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
     {
         bufferText->addAfter(string_format(mov, point_regnum, 7));
     }
+    emitPointerLoad(nd, point_regnum);
     if (nd->isPointer && nd->children_size() > 0)
     {
         // f=f+number.f;
