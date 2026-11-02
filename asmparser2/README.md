@@ -23,9 +23,76 @@
 | 🚀 **Native speed** | No interpreter: the script becomes Xtensa machine code on the chip. Loops and floats run at 1 to 1.3 times the time of the same code compiled by gcc, the Mandelbrot set at 24fps on 128x96 ([numbers](#performance)). |
 | 🧱 **A real language** | Structs with methods and constructors, `switch`, pointers, strings, recursion, `float` and built-in fixed point (`ffloat`), multidimensional arrays ([more than leds](#more-than-a-led-language)). |
 | 🔌 **Talks to your C++** | Call your own functions and use your variables (FastLED, WiFi, sensors...) with `bindFunction()` / `bindVariable()`. |
-| 🧵 **Runs alongside your sketch** | Background tasks you can pause, restart and kill; GPIO interrupts calling back into the script; direct register access (a pin switched at 10MHz). |
+| 🧵 **Runs alongside your sketch** | Several scripts at once, each on its own FreeRTOS task, listed with their CPU use and paused, restarted or killed by name; GPIO interrupts calling back into the script; direct register access (a pin switched at 10MHz). |
 | 💾 **Compile once, run anywhere** | Save the compiled binary to flash or SD and load it later, without the source, even from another sketch. |
 | 🛡️ **Checked, not just trusted** | The whole compiler also runs on a computer; the generated code is executed under QEMU, compared frame by frame with C, and fuzzed against C. |
+
+---
+
+## 🆕 What's new
+
+### 🗂️ A script scheduler, like v1's `scriptRuntime`
+
+Run several scripts at the same time, each on its own FreeRTOS task, and manage them by name:
+
+```cpp
+scriptScheduler.add("fire", fireScript);   // compile and register
+scriptScheduler.run("fire");               // main() on its own task
+scriptScheduler.pause("fire");             // ... restart(), kill(), remove()
+scriptScheduler.list();
+```
+
+```
+ #  name             state      CPU%   stack   code   data core prio  function
+ 1  busy             running    82.1    7296    176     32    1    1  main
+ 2  blink            running     0.0    7336     64     24  any    1  main
+    core 0 load 0.0%   core 1 load 83.7%
+```
+
+`list()` shows what every script is doing and **how much CPU it uses**, measured by FreeRTOS itself, with each core's load. It is FreeRTOS all the way down (tasks, suspend/resume/delete, a mutex, run-time statistics) and uses no STL. → [The script scheduler](#the-script-scheduler), [SchedulerDemo](examples/SchedulerDemo)
+
+### 🚨 Compile errors you can show
+
+```cpp
+ScriptExecutable exec = parseScript(script);
+if (exec.isExeExists())
+   exec.execute("main");
+else
+   showCompileError();
+```
+
+```
+error   : Expecting ;
+line 5  :    a = a + 1;
+             ^
+```
+
+`showCompileError()` prints the error with the line and a `^` where it was found; `lastCompileError()` gives you the message, line and position to put on a display or a web page. → [Checking for errors](#checking-for-errors), [CompileErrors](examples/CompileErrors)
+
+### ⚡ Much faster code
+
+The compiler now keeps loop constants and array addresses in registers, moves work out of loops, compiles `a && b` as short-circuit branches like C, and only saves float registers around a call when it has to. Measured on an esp32 at 240MHz:
+
+|Test|Before|Now|Native C++|
+|:----|----:|----:|----:|
+|Mandelbrot `float`|61.7ms|**41.9ms**|33.5ms|
+|Mandelbrot `ffloat`|49.3ms|**31.5ms**|30.0ms (fixed point)|
+|Game of Life 128x128, per generation|13.7ms|**7.13ms**|5.95ms|
+|60 bouncing balls `ffloat`|7.04ms|**6.86ms**|7.02ms (fixed point)|
+
+Scripts now run at 1 to 1.3 times the time of gcc-compiled code, and the same pictures come out, checksum for checksum. → [Performance](#performance)
+
+### 🧹 No more memory lost at each compile
+
+Every successful compile used to lose about 300 bytes. Now compiling again and again keeps the free heap flat, and a large script needs about 20KB less heap while it compiles.
+
+### 🐛 More bugs found and fixed
+
+The differential fuzzer (random programs run through the compiler and as plain C) found three more miscompiles (in four failing programs), all fixed and kept as regression tests; a new frame-by-frame test covers float values kept across calls. → [Testing](#testing)
+
+### 📚 New examples
+
+[SchedulerDemo](examples/SchedulerDemo), [CompileErrors](examples/CompileErrors), [RainbowCompare](examples/RainbowCompare), [BouncingBallsCompare](examples/BouncingBallsCompare), [DirectGPIOSpeed](examples/DirectGPIOSpeed), and a [general purpose sample](#more-than-a-led-language) that has nothing to do with leds.
 
 ---
 
