@@ -137,6 +137,9 @@ int addTextNoDelete(char* str);
     void addBefore(const char *s);
     void replaceText(int pos, char *str);
     void replaceText(int pos, const char *str);
+    // Removes line `pos`, freeing its string unless another line shares
+    // it (identical lines are pooled, see findText()).
+    void eraseLine(int pos);
 
     char **getChildAtPos(int pos);
 

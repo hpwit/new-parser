@@ -233,12 +233,7 @@
             {
               // printf("we tray to look to  delete:|%s|\n",_texts.front());
             if (!isReused(0))
-            {
-             //printf("we tray to delete:|%s|\n",_texts.front());
-              //(_texts.front());
-               
-              //printf("we delted the string\n\r");
-            }
+                free(_texts.front());
             }
             // _texts[0]=NULL;
             _texts.erase(_texts.begin());
@@ -309,6 +304,14 @@
         {
             free(str);
         }
+    }
+    void Text::eraseLine(int pos)
+    {
+        if (pos < 0 || pos >= size())
+            return;
+        if (!isReused(pos))
+            free(_texts.get(pos));
+        _texts.erase(pos);
     }
     void Text::replaceText(int pos, const char * str)
     {

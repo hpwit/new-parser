@@ -340,6 +340,7 @@ void optimize(Text *text)
     // a13,a7 / mov a11,a13` for the 2nd) and relies on this fold to never
     // actually write it. Only the destination is rewritten, never the
     // register local itself.
+    free(torep);
     free(before);
     before = ownedCopy(" ");
     indexbefore = 0;
@@ -982,7 +983,7 @@ void removeBlankLines(Text *text)
     {
         char *tmp = *text->getChildAtPos(i);
         if (tmp == NULL || strcmp(tmp, " ") == 0 || strcmp(tmp, "") == 0)
-            text->_texts.erase(i);
+            text->eraseLine(i);
     }
 }
 
@@ -1394,7 +1395,7 @@ static int removeUnreadWrites(Text *text, int start, int end)
             }
             if (dead)
             {
-                text->_texts.erase(j);
+                text->eraseLine(j);
                 end--;
                 j--;
                 removed++;
@@ -1467,7 +1468,7 @@ static int foldCopies(Text *text, int start, int end)
             text->replaceText(reads[r], (const char *)renamed);
             free(renamed);
         }
-        text->_texts.erase(j);
+        text->eraseLine(j);
         end--;
         j--;
         removed++;
@@ -2663,7 +2664,7 @@ static int eraseBlankLines(Text *text, int start, int end)
         trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
         if (line[0] != 0)
             continue;
-        text->_texts.erase(j);
+        text->eraseLine(j);
         end--;
         j--;
         removed++;
