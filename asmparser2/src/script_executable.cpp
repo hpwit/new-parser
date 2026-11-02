@@ -227,8 +227,33 @@ bool ScriptExecutable::kill()
 // .error.error before using the result (and freeBinary() it either way,
 // see freeBinary()'s own NULL-safety -- a parse failure returns a
 // Binary whose buffers never got allocated).
+static CompileError g_lastCompileError;
+
+const CompileError &lastCompileError()
+{
+    return g_lastCompileError;
+}
+
+void showCompileError()
+{
+    const CompileError &e = g_lastCompileError;
+    if (!e.failed)
+        return;
+    printf("error   : %s\n", e.message);
+    if (e.line > 0)
+    {
+        printf("line %-3d: %s\n", e.line, e.sourceLine);
+        // a caret under the position (both count from 1)
+        printf("          ");
+        for (int i = 1; i < e.position; i++)
+            printf(" ");
+        printf("^\n");
+    }
+}
+
 static Binary compileScriptToBinary(const char *script)
 {
+    memset(&g_lastCompileError, 0, sizeof(g_lastCompileError));
     Script s;
     // addContent()/the tokenizer need a mutable buffer they can own for
     // the duration of parsing -- build kPrelude+script fresh rather than
@@ -275,6 +300,26 @@ static Binary compileScriptToBinary(const char *script)
         // use-after-free from an earlier version of this function that
         // freed buf unconditionally right after parse() returned.
         display_error(&Error);
+        // Copied out now: the token's line points into buf.
+        CompileError &e = g_lastCompileError;
+        e.failed = true;
+        snprintf(e.message, sizeof(e.message), "%s", error_messages[Error.error]);
+        size_t ml = strlen(e.message);
+        while (ml > 0 && e.message[ml - 1] == ' ')
+            e.message[--ml] = 0;
+        if (Error.token != NULL)
+        {
+            e.line = Error.token->line;
+            e.position = Error.token->pos;
+            if (Error.token->lineref != NULL)
+            {
+                size_t n = strcspn(Error.token->lineref, "\n");
+                if (n >= sizeof(e.sourceLine))
+                    n = sizeof(e.sourceLine) - 1;
+                memcpy(e.sourceLine, Error.token->lineref, n);
+                e.sourceLine[n] = 0;
+            }
+        }
         free(buf);
         Binary bin;
         bin.error.error = 1;
@@ -287,6 +332,9 @@ static Binary compileScriptToBinary(const char *script)
     if (bin.error.error)
     {
         printf("assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+        g_lastCompileError.failed = true;
+        snprintf(g_lastCompileError.message, sizeof(g_lastCompileError.message), "assembler error: %s",
+                 bin.error.error_message ? bin.error.error_message : "?");
     }
     return bin;
 }

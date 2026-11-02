@@ -2666,6 +2666,52 @@ static void runJsonBindingStructureTest()
     }
 }
 
+// lastCompileError(): what a failed parseScript() reports to the sketch,
+// and that a compile that works clears it.
+static void runCompileErrorReportTest()
+{
+    const char *name = "lastCompileError(): message, line, position and source line of a failed compile";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+    struct Case
+    {
+        const char *script, *message, *source;
+        int line, position;
+    } cases[] = {
+        {"void main()\n{\n   int a = 3;\n   b = a + 1;\n}\n", "Impossible to find variable declaration", "   b = a + 1;", 4, 4},
+        {"void main()\n{\n   int a = 3\n   a = a + 1;\n}\n", "Expecting ;", "   a = a + 1;", 4, 4},
+    };
+    for (int i = 0; i < 2; i++)
+    {
+        ScriptExecutable exec = parseScript(cases[i].script);
+        const CompileError &e = lastCompileError();
+        if (exec.isExeExists() || !e.failed || strcmp(e.message, cases[i].message) != 0 ||
+            e.line != cases[i].line || e.position != cases[i].position || strcmp(e.sourceLine, cases[i].source) != 0)
+        {
+            printf("       case %d: failed=%d message=\"%s\" line=%d position=%d source=\"%s\"\n", i, e.failed,
+                   e.message, e.line, e.position, e.sourceLine);
+            ok = false;
+        }
+    }
+    ScriptExecutable good = parseScript("void main()\n{\n   int a = 3;\n}\n");
+    if (!good.isExeExists() || lastCompileError().failed)
+    {
+        printf("       a script that compiles left lastCompileError().failed set\n");
+        ok = false;
+    }
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     registerBallEffectBindings();
@@ -2674,6 +2720,7 @@ int main()
     runStructArrayMethodSelfPointerTest();
     runOptimizeUnitTest();
     runSafeModeTest();
+    runCompileErrorReportTest();
     runBuiltinHandleTest();
     runVarargsOrderTest();
     runCharPointerArgumentsTest();

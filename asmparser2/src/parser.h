@@ -7,7 +7,7 @@
 #include "binding.h"
 
 
-#define RETURN_ERROR(x) { printf("line:%d\n",__LINE__);Error.error=x;Error.token=current();return;}
+#define RETURN_ERROR(x) { Error.error=x;Error.token=current();return;}
 #define RETURN_IF_ERROR if(Error.error!=noError) return;
 class Parser
 {

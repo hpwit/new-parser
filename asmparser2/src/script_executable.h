@@ -252,6 +252,48 @@ private:
 // executable survives, freed automatically when it's destroyed.
 ScriptExecutable parseScript(const char *script);
 
+// What went wrong in the last parseScript()/parseScriptToBinary(), for a
+// sketch that wants to show a compile error its own way (on a display, a
+// web page...) rather than only in the console, where parseScript() has
+// already printed it:
+//
+//   ScriptExecutable exec = parseScript(script);
+//   if (!exec.isExeExists())
+//   {
+//      const CompileError &e = lastCompileError();
+//      printf("line %d: %s\n", e.line, e.message);
+//   }
+//
+// `failed` is false after a compile that worked. For a syntax error,
+// `line` and `position` (both from 1) say where it was noticed -- for a
+// missing `;`, the start of the next statement -- and `sourceLine` is that
+// line of the script. An assembler error has no line (`line` is 0).
+struct CompileError
+{
+   bool failed;
+   int line;
+   int position;
+   char message[80];
+   char sourceLine[120];
+};
+const CompileError &lastCompileError();
+
+// Prints the last compile error (see lastCompileError()) as a report:
+//
+//   error   : Expecting ;
+//   line 5  :    a = a + 1;
+//                ^
+//
+// Nothing if the last compile worked. For a sketch that only needs the
+// report in the console:
+//
+//   ScriptExecutable exec = parseScript(script);
+//   if (exec.isExeExists())
+//      exec.execute("main");
+//   else
+//      showCompileError();
+void showCompileError();
+
 // Parses, assembles, and serializes `script` in one call, without
 // loading or running it -- the one-call equivalent of upstream v1's
 // Parser::parseScriptBinary() combined with serializeBinary(), for the

@@ -273,7 +273,88 @@ i:19 3*i:57
 > You can call any function of the script, not only `main`, and unlike v1 you get its return value back (see the next section).
 
 ## Checking for errors
-`exec.isExeExists()` is `true` when parsing, assembling and loading all worked. When it is `false`, `parseScript()` has already printed why: the line and position of a syntax error, or the assembler/loader message. There is no separate error object like v1's `Executable::error`.
+
+`exec.isExeExists()` is `true` when parsing, assembling and loading all worked. When it is `false` the script didn't compile: don't run it, and show why with `showCompileError()`:
+
+```cpp
+ScriptExecutable exec = parseScript(script);
+if (exec.isExeExists())
+{
+   exec.execute("main");
+}
+else
+{
+   showCompileError();
+}
+```
+
+`showCompileError()` prints the error of the last compile as a report: the message, the line of the script, and a `^` under the place where the problem was found. It prints nothing if the last compile worked.
+
+### Two common mistakes
+
+Take two broken scripts ([CompileErrors](examples/CompileErrors)), one using a variable that was never declared, the other missing a `;` at the end of a line:
+
+```c
+void main()
+{
+   int a = 3;
+   b = a + 1;          // b was never declared
+   printfln("b = %d", b);
+}
+```
+
+```c
+void main()
+{
+   int a = 3           // no ;
+   a = a + 1;
+   printfln("a = %d", a);
+}
+```
+
+`showCompileError()` gives:
+
+```
+error   : Impossible to find variable declaration
+line 5  :    b = a + 1;
+             ^
+```
+
+```
+error   : Expecting ;
+line 5  :    a = a + 1;
+             ^
+```
+
+> [!NOTE]
+> A missing `;` is noticed where the next statement starts, so the error points at the line after the one that lacks it. Lines count from the first line of the script text: with `R"EOF(` followed by a new line, the script's first line is an empty line 1.
+
+`parseScript()` also prints the error by itself when it happens, in a shorter form:
+
+```
+Expecting ;
+line:  5 position:  4 "   a = a + 1;"
+                          ^
+```
+
+so you see it in the console even without calling anything. `showCompileError()` is for printing it again, later or in a clearer form.
+
+### Showing the error your own way
+
+To put the error on a display, a web page or a log, `lastCompileError()` gives you the same information after a failed `parseScript()` or `parseScriptToBinary()`:
+
+```cpp
+const CompileError &e = lastCompileError();
+if (e.failed)
+   myDisplay.printf("line %d: %s", e.line, e.message);   // "line 5: Expecting ;"
+```
+
+|`CompileError` field|What it holds|
+|:----|:----|
+|`failed`|`true` if the last compile failed|
+|`message`|the error, e.g. `Expecting ;`, `Impossible to find variable declaration`|
+|`line`, `position`|where it was noticed, both from 1 (`line` is 0 for an assembler error)|
+|`sourceLine`|that line of the script, as written|
 
 ## Freeing an executable
 A `ScriptExecutable` frees its memory by itself when it goes out of scope, so most of the time you have nothing to do. If you want the memory back sooner, for instance before compiling a second script, use `exec.free()`:
@@ -1103,6 +1184,7 @@ This is the part that is really new compared to v1:
 | Example | What it shows |
 | --- | --- |
 | `SimpleScript` | The first light example above. |
+| `CompileErrors` | Scripts that don't compile (undeclared variable, missing `;`): the printed error, `showCompileError()`, and `lastCompileError()` to show it your own way. |
 | `ScriptPrintf` | Printing from a script with `printf()`/`printfln()`. |
 | `Factorial` | `Arguments`: calling a function several times with different values. |
 | `CallScriptFunction` | Calling a function with a raw `int32_t[]` and using its return value. |
