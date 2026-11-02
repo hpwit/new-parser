@@ -1146,7 +1146,66 @@ This is the part that is really new compared to v1:
 
 # Conclusion
 
-v1 was my first try at "can I build a language for this". v2 is the answer to "can I trust it". The goal hasn't changed: fast led animations written live on an esp32, without an IDE in the loop.
+It all started with led animations. I wanted to try a new effect on my panel without going through the IDE and re-flashing the esp32 every time, and that is still what ESPLiveScript does best: the Mandelbrot, the plasma or the bouncing balls of this page run at close to the speed of precompiled code.
+
+But along the way the language outgrew the leds. Once you have structs, arrays, recursion, `switch`, strings and interrupts, you are not writing an animation any more, you are writing a program. The best proof is **Tetris** 🎮: the whole game is one script. The board, the seven tetrominoes, rotation, collisions, clearing the full lines, the falling speed and the buttons are all script code, and the leds are only where it shows.
+
+This is its game logic (from v1's `sc_examples`, compiled by v2's test suite; tidied a little, and it runs as is on v2):
+
+```c
+#define WIDTH 10
+#define HEIGHT 20
+uint8_t board[HEIGHT, WIDTH];
+uint8_t currentShape[4, 4];
+int currentX = 0;
+int currentY = 0;
+
+bool checkCollision(int dx, int dy)
+{
+   for (int y = 0; y < 4; y++)
+      for (int x = 0; x < 4; x++)
+         if (currentShape[y, x] > 0)
+         {
+            int newX = currentX + x + dx;
+            int newY = currentY + y + dy;
+            if (newX < 0 || newX >= WIDTH || newY >= HEIGHT || board[newY, newX])
+               return true;
+         }
+   return false;
+}
+
+void clearFullLines()
+{
+   for (int y = 0; y < HEIGHT; y++)
+   {
+      bool full = true;
+      for (int x = 0; x < WIDTH; x++)
+         if (board[y, x] == 0)
+         {
+            full = false;
+            break;
+         }
+      if (full)
+      {
+         for (int ty = y; ty > 0; ty--)
+            for (int x = 0; x < WIDTH; x++)
+               board[ty, x] = board[ty - 1, x];
+         for (int x = 0; x < WIDTH; x++)
+            board[0, x] = 0;
+      }
+   }
+}
+```
+
+and the controls are three buttons, each a GPIO interrupt calling back into the running script (see [Pointer to the executable and interrupts](#pointer-to-the-executable-and-interrupts)):
+
+```c
+pinInterrupt(_handle_, "left", 23);
+pinInterrupt(_handle_, "right", 2);
+pinInterrupt(_handle_, "rotate", 15);
+```
+
+v1 was my first try at "can I build a language for this". v2 is the answer to "can I trust it", and more and more to "what else can I build with it". The goal hasn't changed: write code live on an esp32, without an IDE in the loop. It just doesn't have to be a led animation any more.
 
 Issues and feature requests are welcome, same as v1.
 
