@@ -2896,6 +2896,11 @@ void Parser::parseCreateArguments()
 
         return;
     }
+    // A structure of the script passed by value has no calling convention
+    // here: its parameter's type lookup read past the built-in types and
+    // crashed the compiler. Say so instead.
+    if (findStruct(current()->getText()) > -1 && !Match(TokenStar, 1))
+        RETURN_ERROR(structArgument)
     parseType();
     if (Error.error)
     {
@@ -2938,6 +2943,8 @@ void Parser::parseCreateArguments()
     while (Match(TokenComma))
     {
         next();
+        if (findStruct(current()->getText()) > -1 && !Match(TokenStar, 1))
+            RETURN_ERROR(structArgument)
         parseType();
         if (Error.error)
         {

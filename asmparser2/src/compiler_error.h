@@ -44,6 +44,7 @@ duplicateCase,
 duplicateDefault,
 expectingColon,
 switchNeedsInteger,
+structArgument,
 };
 struct error_message_struct
 {

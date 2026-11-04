@@ -43,7 +43,8 @@ const char *error_messages[]=
 "Duplicate case value",
 "More than one default in a switch",
 "Expecting :",
-"switch needs an integer value"
+"switch needs an integer value",
+"A structure can't be passed as an argument: pass its fields"
 
 };
 void display_error(error_message_struct *err){
