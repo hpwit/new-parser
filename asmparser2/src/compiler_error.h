@@ -45,6 +45,8 @@ duplicateDefault,
 expectingColon,
 switchNeedsInteger,
 structArgument,
+structTooManyFields,
+structRedefined,
 };
 struct error_message_struct
 {

@@ -120,9 +120,18 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     static char builtinDeclarations[] = "uint32_t _handle_;\n";
     if (!main_script->startsWith(builtinDeclarations))
         main_script->addContentFront(builtinDeclarations);
+    int frontLines = 1;
+    // bindStruct() definitions go in front as well
+    for (int i = binded_structs.size() - 1; i >= 0; i--)
+    {
+        main_script->addContentFront(binded_structs[i]);
+        for (char *c = binded_structs[i]; *c; c++)
+            if (*c == '\n')
+                frontLines++;
+    }
     main_script->init();
     int startLine = _tokenizer_start_line;
-    _tokenizer_start_line = startLine - 1;
+    _tokenizer_start_line = startLine - frontLines;
 
     _tks = __tks;
     _tks->tokenize(main_script, true, true, 1);
@@ -180,6 +189,55 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     // Global initializers run as one more function, @__footer.
     preserveAcrossCalls(&footer);
     PARSER_PHASE("optimized")
+}
+
+// C layout for struct members: a member starts at a multiple of its
+// alignment (its largest component), and the struct is padded to a
+// multiple of its own, so a script struct matches the host's. Padding
+// becomes filler components (l8ui/s8i, l16ui/s16i), so the code that
+// copies a struct component by component carries it along unchanged.
+static int structAlignment(uint8_t *sizes, int n)
+{
+    int a = 1;
+    for (int i = 0; i < n; i++)
+        if (sizes[i] > a)
+            a = sizes[i];
+    return a;
+}
+
+static bool padStruct(varType *usded, int *start, int *pos, int align)
+{
+    while (*start % align)
+    {
+        int step = (*start % 2) ? 1 : 2;
+        if (*pos >= 20)
+            return false;
+        varType *filler = &_varTypes[step == 1 ? __uint8_t__ : __uint16_t__];
+        usded->load[*pos] = filler->load[0];
+        usded->store[*pos] = filler->store[0];
+        usded->sizes[*pos] = step;
+        (*pos)++;
+        *start += step;
+    }
+    return true;
+}
+
+static bool alignStructMember(varType *usded, int *start, int *pos, varType *member)
+{
+    if (!padStruct(usded, start, pos, structAlignment(member->sizes, member->size)))
+        return false;
+    return *pos + member->size <= 20;
+}
+
+static bool sameStruct(varType *a, varType *b, int members)
+{
+    if (a->total_size != b->total_size || a->size != b->size)
+        return false;
+    for (int i = 0; i < members; i++)
+        if (a->starts[i] != b->starts[i] || a->types[i] != b->types[i] ||
+            strcmp(a->membersNames[i], b->membersNames[i]) != 0)
+            return false;
+    return true;
 }
 
 void Parser::parseProgram()
@@ -273,9 +331,11 @@ void Parser::parseProgram()
                     }
                     else if (Match(TokenKeywordVarType) and Match(TokenIdentifier, 1) and !Match(TokenOpenParenthesis, 2))
                     {
+                        varType *__v = current()->getVarTypeObj();
+                        if (!alignStructMember(&usded, &_start, &_pos, __v))
+                            RETURN_ERROR(structTooManyFields)
                         usded.starts[memberpos] = _start;
 
-                        varType *__v = current()->getVarTypeObj();
                         usded.types[memberpos] = __v->_varType;
                         usded.memberSize[memberpos] = __v->size;
                         _start += __v->total_size;
@@ -303,6 +363,8 @@ void Parser::parseProgram()
                         {
                             // next();
                             memberpos++;
+                            if (!alignStructMember(&usded, &_start, &_pos, __v))
+                                RETURN_ERROR(structTooManyFields)
                             usded.starts[memberpos] = _start;
 
                             usded.types[memberpos] = __v->_varType;
@@ -342,10 +404,24 @@ void Parser::parseProgram()
                         return;
                     }
                 }
+                // tail padding: sizeof is a multiple of the struct's
+                // alignment, as in C, so arrays of it have C's stride
+                if (!padStruct(&usded, &_start, &_pos, structAlignment(usded.sizes, _pos)))
+                    RETURN_ERROR(structTooManyFields)
                 usded.size = _pos;
                 usded.total_size = _start;
                 usded._varSize = _start;
-                _userDefinedTypes.push_back(usded);
+                // A struct the host bound with bindStruct() is already
+                // defined when the script repeats it: accepted if it is
+                // the same, an error if it differs.
+                int previous = findStruct(usded.varName);
+                if (previous > -1)
+                {
+                    if (!sameStruct(_userDefinedTypes.getptr(previous), &usded, memberpos))
+                        RETURN_ERROR(structRedefined)
+                }
+                else
+                    _userDefinedTypes.push_back(usded);
                 next(); // }
                 if (!Match(TokenSemicolon))
                     RETURN_ERROR(expectingSemicolon)
@@ -3256,7 +3332,12 @@ void Parser::getVariable(bool isStore)
         }
         else
         {
-            current_node->_total_size = v->sizes[i];
+            // sizes[] has one entry per component, padding included:
+            // member i's first component is the one at its offset
+            int c = 0;
+            for (int off = 0; off < v->starts[i]; c++)
+                off += v->sizes[c];
+            current_node->_total_size = v->sizes[c];
         }
         next();
     }

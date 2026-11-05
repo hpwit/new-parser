@@ -1372,6 +1372,14 @@ static void emitPointerLoad(NodeToken *nd, int reg)
         bufferText->addAfter(string_format("l32i a%d,a%d,0", reg, reg));
 }
 
+// arr[i].field: the index steps over whole structs (_total_size, the
+// struct's size), not over the field's type as v->total_size would.
+static bool isIndexedMember(NodeToken *nd)
+{
+    return nd->isPointer && nd->children_size() > 0 &&
+           (nd->type == TokenUserDefinedVariableMember || nd->type == TokenUserDefinedVariableMemberFunction);
+}
+
 void _visitglobalVariableNode(NodeToken *nd)
 {
 
@@ -3261,6 +3269,16 @@ void _visitextGlobalVariableNode(NodeToken *nd)
                 translateType(__int__, nd->getChildPtr(0)->getVarTypeObj()->_varType, register_numl.get());
             }
 
+            if (isIndexedMember(nd))
+            {
+                // scaled before the base is loaded: point_regnum is free
+                // to hold a constant until then
+                emitScaleByConstant(register_numl.get(), register_numl.get(), nd->_total_size, point_regnum);
+                bufferText->addAfter(string_format("movExt a%d,@_ext_%s", point_regnum, nd->getText()));
+                bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
+            }
+            else
+            {
             bufferText->addAfter(string_format("movExt a%d,@_ext_%s", point_regnum, nd->getText()));
             emitPointerLoad(nd, point_regnum);
             // f=f+number.f;
@@ -3297,6 +3315,7 @@ void _visitextGlobalVariableNode(NodeToken *nd)
                 {
                     bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
                 }
+            }
             }
         }
         else
@@ -3950,6 +3969,10 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
 
     if (safeMode && nd->isPointer)
         emitSafeBoundsCheck(nd, regnum);
+    // see _visitextGlobalVariableNode(): scaled while point_regnum is free
+    bool indexedMember = isIndexedMember(nd);
+    if (indexedMember)
+        emitScaleByConstant(register_numl.get(), register_numl.get(), nd->_total_size, point_regnum);
     // boolextern (see _visitforNode()): if the enclosing for-loop already
     // resolved this exact array's base address into a7 once, before the
     // loop, just copy it -- nbofextern's parse-time count already
@@ -3985,7 +4008,9 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
         bufferText->addAfter(string_format(mov, point_regnum, 7));
     }
     emitPointerLoad(nd, point_regnum);
-    if (nd->isPointer && nd->children_size() > 0)
+    if (indexedMember)
+        bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
+    else if (nd->isPointer && nd->children_size() > 0)
     {
         // f=f+number.f;
         // Same strength reduction as _visitglobalVariableNode()/

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstddef>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -2820,6 +2821,129 @@ static void runPointerIndexTest()
     }
 }
 
+// consumes the generated text, as every other test leaves it
+static bool assembleForTest()
+{
+    Binary bin = createBinary(&footer, &header, &content, false);
+    bool ok = !bin.error.error;
+    if (!ok)
+        printf("       assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+    freeBinary(&bin);
+    return ok;
+}
+
+struct HostMix
+{
+    char a;
+    int32_t b;
+    uint16_t c;
+    char d;
+    float e;
+    uint8_t f;
+};
+
+static void runStructLayoutTest()
+{
+    const char *name = "structs use C's layout; bindStruct() defines a host struct for every script";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+
+    // 1. member offsets and sizeof are C's
+    const char *mix = "struct HostMix { char a; int b; uint16_t c; char d; float e; uint8_t f; };\nHostMix m;\nvoid main(){ m.e = 1.5; }\n";
+    if (!compileForTest(mix))
+        ok = false;
+    else
+    {
+        int k = findStruct((char *)"HostMix");
+        varType *v = k > -1 ? _userDefinedTypes.getptr(k) : NULL;
+        size_t expected[6] = {offsetof(HostMix, a), offsetof(HostMix, b), offsetof(HostMix, c),
+                              offsetof(HostMix, d), offsetof(HostMix, e), offsetof(HostMix, f)};
+        if (v == NULL || v->_varSize != sizeof(HostMix))
+        {
+            printf("       sizeof %d, C says %d\n", v ? v->_varSize : -1, (int)sizeof(HostMix));
+            ok = false;
+        }
+        for (int i = 0; v != NULL && i < 6; i++)
+            if (v->starts[i] != expected[i])
+            {
+                printf("       member %d at %d, C says %d\n", i, v->starts[i], (int)expected[i]);
+                ok = false;
+            }
+        ok = assembleForTest() && ok;
+    }
+
+    // 2. a bound struct needs no definition in the script
+    static struct { char key; char val; } hostKey = {'a', 4};
+    bindStruct("struct BoundKey { char key; char val; };");
+    bindVariable((char *)"BoundKey", (char *)"boundKey", NULL, (void *)&hostKey);
+    if (!compileForTest("external BoundKey boundKey;\nint main(){ return boundKey.val; }\n") || !assembleForTest())
+    {
+        printf("       bound struct not usable without a definition\n");
+        ok = false;
+    }
+
+    // 3. repeating it identically is accepted
+    if (!compileForTest("struct BoundKey { char key; char val; };\nexternal BoundKey boundKey;\nint main(){ return boundKey.key; }\n") ||
+        !assembleForTest())
+    {
+        printf("       identical repeated definition refused\n");
+        ok = false;
+    }
+
+    // 4. a different definition is an error
+    if (compileForTest("struct BoundKey { int key; char val; };\nint main(){ return 0; }\n") ||
+        Error.error != structRedefined)
+    {
+        printf("       differing definition: error %d, expected %d\n", Error.error, (int)structRedefined);
+        ok = false;
+    }
+
+    // 5. reported lines are still the script's own
+    if (compileForTest("void main()\n{\n   int x = ;\n}\n") || Error.token == NULL || Error.token->line != 3)
+    {
+        printf("       error line %d, expected 3\n", Error.token ? Error.token->line : -1);
+        ok = false;
+    }
+
+    // 6. an array of a bound struct steps over whole structs (8 bytes),
+    //    not over the field's size
+    static char hostRecs[4 * 8];
+    bindStruct("struct BoundRec { char a; int b; };");
+    bindVariable((char *)"BoundRec", (char *)"boundRecs", (char *)"[4]", (void *)hostRecs);
+    if (!compileForTest("external BoundRec boundRecs[4];\nint main(){ int i = 1; boundRecs[i].b = 5; return boundRecs[i].a; }\n"))
+        ok = false;
+    else
+    {
+        int strides = 0;
+        for (int i = 0; i < content.size(); i++)
+        {
+            int d = -1, r = -1, k = -1;
+            if (sscanf(content.getText(i), "slli a%d,a%d,%d", &d, &r, &k) == 3 && k == 3)
+                strides++;
+        }
+        if (strides != 2)
+        {
+            printf("       %d index scalings by 8 (expected 2, one per access)\n", strides);
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
+
+    binded_structs.clear();
+    Error.error = 0;
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     registerBallEffectBindings();
@@ -2831,6 +2955,7 @@ int main()
     runCompileErrorReportTest();
     runLargeGlobalsTest();
     runPointerIndexTest();
+    runStructLayoutTest();
     runBuiltinHandleTest();
     runVarargsOrderTest();
     runCharPointerArgumentsTest();

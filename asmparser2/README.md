@@ -31,6 +31,10 @@
 
 ## 🆕 What's new
 
+### 🧩 Structures shared with your sketch
+
+Define a `struct` once in your sketch and hand it to every script with `bindStruct()`; script structures now use the same memory layout as C, so a bound variable of that type (or an array of them) reads and writes your sketch's own fields. → [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
+
 ### 🗂️ A script scheduler, like v1's `scriptRuntime`
 
 Run several scripts at the same time, each on its own FreeRTOS task, and manage them by name:
@@ -92,7 +96,7 @@ The differential fuzzer (random programs run through the compiler and as plain C
 
 ### 📚 New examples
 
-[SchedulerDemo](examples/SchedulerDemo), [CompileErrors](examples/CompileErrors), [RainbowCompare](examples/RainbowCompare), [BouncingBallsCompare](examples/BouncingBallsCompare), [DirectGPIOSpeed](examples/DirectGPIOSpeed), and a [general purpose sample](#more-than-a-led-language) that has nothing to do with leds.
+[HostStructs](examples/HostStructs), [SchedulerDemo](examples/SchedulerDemo), [CompileErrors](examples/CompileErrors), [RainbowCompare](examples/RainbowCompare), [BouncingBallsCompare](examples/BouncingBallsCompare), [DirectGPIOSpeed](examples/DirectGPIOSpeed), and a [general purpose sample](#more-than-a-led-language) that has nothing to do with leds.
 
 ---
 
@@ -134,6 +138,7 @@ None of this changes what you write in a script, but it is why I can say that so
 - [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions)
   * [Access to pre-compiled variables](#access-to-pre-compiled-variables)
   * [Calling pre-compiled functions](#calling-pre-compiled-functions)
+  * [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
 
 - [CRGB and the hue function](#crgb-and-the-hue-function)
 
@@ -678,6 +683,59 @@ from other function
 
 For bigger sketches built the same way, see [StructsAndHostBindings](examples/StructsAndHostBindings) and [BouncingBalls](examples/BouncingBalls).
 
+## Sharing a structure with the sketch
+
+A variable whose type is one of your sketch's structures can be bound like any other. The script needs to know the structure: `bindStruct()` gives it the definition, so you don't have to repeat it in every script.
+
+```cpp
+void bindStruct(const char *definition);   // e.g. "struct key_t { char key; char code; };"
+```
+
+| Parameter | What it is |
+|---|---|
+| `definition` | The structure's definition, in the script language (the same text as in C for plain fields). Every script compiled afterwards knows the type. |
+
+To write the structure only once, `SCRIPT_STRUCT(name, { fields })` (`binding.h`) declares the C struct and keeps its text in `name_definition` for `bindStruct()`:
+
+```cpp
+#include "script_executable.h"
+#include "binding.h"
+
+SCRIPT_STRUCT(sensor, {
+   char id;
+   int value;
+   uint16_t count;
+   float average;
+})
+
+sensor probe = {'A', 10, 0, 0};
+sensor probes[3];
+
+char script[] = R"EOF(
+void main()
+{
+   probe.count = probe.count + 1;          // sensor is not defined here
+   probes[2].average = probes[2].value / 8.0;
+}
+)EOF";
+
+void setup()
+{
+   bindStruct(sensor_definition);
+   bindVariable((char *)"sensor", (char *)"probe", NULL, (void *)&probe);
+   bindVariable((char *)"sensor", (char *)"probes", (char *)"[3]", (void *)probes);
+   static ScriptExecutable exec = parseScript(script);
+   exec.execute("main");
+}
+```
+
+> [!NOTE]
+> - Script structures follow C's layout: each field is aligned as in C (an `int` or `float` on 4 bytes, a `uint16_t` on 2), and the structure is padded to a multiple of its largest alignment. That is what lets the script and the sketch read the same bytes.
+> - A script can still define the structure itself (scripts written before `bindStruct()` keep working), as long as the definition is the same. A different one is an error: *Structure already defined differently*.
+> - A structure can't be passed by value as a function argument. Bind a variable (as above) or pass the fields.
+
+See the [HostStructs](examples/HostStructs) example.
+
 ---
 
 # CRGB and the hue function
@@ -922,11 +980,8 @@ Balls[i].updateBall();
 > - A function needs to be defined before it is called (for the moment).
 > - Unlike v1, a struct definition ends with `};` like in C.
 
-> [!IMPORTANT]
-> Due to memory alignment, the fields need to go from the biggest to the smallest:
-> - `float`, `ffloat`, `uint32_t`, `int`
-> - `s_int`, `uint16_t`
-> - `uint8_t`, `CRGB`, `CRGBW`
+> [!NOTE]
+> Fields are laid out as in C (aligned like C does, padding added where needed), so they can be in any order, and a structure from your sketch can be shared with a script. → [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
 
 ---
 

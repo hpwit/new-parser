@@ -1346,6 +1346,13 @@ int tokenizer(Script *script, bool update, bool increae_line,
                     nbReadToken--;
                 }
             }
+            else if (isUserDefined(vchar, endchar) > -1 && _tks->size() >= __DEPTH &&
+                     _tks->back().getType() == TokenKeywordStruct && !_for_display)
+            {
+                // `struct Name` again: a bindStruct() definition the
+                // script repeats, compared with the first by the parser
+                t.type = (int)TokenUserDefinedName;
+            }
             else if (isUserDefined(vchar, endchar) > -1)
             {
                 t.type = (int)TokenUserDefinedVariable;

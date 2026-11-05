@@ -7,6 +7,13 @@
 
 Text extern_text;
 vect<_binding> binded_assets;
+vect<char *> binded_structs;
+
+void bindStruct(const char *definition)
+{
+    // own copy, ending in a newline, put in front of each script text
+    binded_structs.push_back(string_format("%s\n", definition));
+}
 
 // Resolves a symbol referenced in generated assembly (e.g. "@_rnd(d)" or
 // just "rnd") to its binded_assets entry by comparing against the bare

@@ -47,6 +47,22 @@ struct _binding
 
 void bindFunction(char * out,char * name,char *  in, void * ptr);
 void bindVariable( char *out,char *name,char *in,void * ptr);
+// Makes a struct the host program defines known to every script compiled
+// afterwards, so the script needn't repeat it: pass the C definition,
+// e.g. bindStruct("struct key_t { char key; char code; };"). Script
+// structs follow C's layout, so a bound variable of that type
+// (bindVariable("key_t", "key", NULL, &hostKey)) reads the host's own
+// fields. A script may still define it, if identically.
+void bindStruct(const char *definition);
+// Declares a C struct and keeps its definition as text for bindStruct(),
+// so it is written once:
+//   SCRIPT_STRUCT(sensor, { char id; int value; float average; })
+//   ...
+//   bindStruct(sensor_definition);
+#define SCRIPT_STRUCT(name, ...)  \
+    struct name __VA_ARGS__;      \
+    static const char *name##_definition = "struct " #name " " #__VA_ARGS__ ";";
+extern vect<char *> binded_structs;
 void replaceExternal(char *name, void *ptr);
 int findLink(char *label, externalType op);
 uint32_t *createExternalLinks();
