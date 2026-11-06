@@ -107,10 +107,10 @@ struct ball
             int distance = (i - xc) ^ 2 + (j - yc) ^ 2;
             if (distance <= r2)
             {
-               setPixel(i,j,1);
-               setPixel((int)(2 * xc - i),j,1);
-               setPixel((int)(2 * xc - i),(int)(2 * yc - j),1);
-               setPixel(i,(int)(2 * yc - j),1);
+               setPixel(i,j,color);
+               setPixel((int)(2 * xc - i),j,color);
+               setPixel((int)(2 * xc - i),(int)(2 * yc - j),color);
+               setPixel(i,(int)(2 * yc - j),color);
             }
          }
    }

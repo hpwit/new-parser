@@ -31,13 +31,32 @@
 
 ## 🆕 What's new
 
-### 🧩 Structures as function arguments
+### 🧩 Structures, the whole way
 
-Pass a structure by value (the function gets its own copy) or by pointer (`ball *b`, then `b->x` or `b[i].x`), and take addresses with `&g`, `&arr[i]`, `&g.field`. Your sketch can call a script function with a pointer to one of its own structs, e.g. a keyboard handler `void keyboard(key_event *k)`. Pointer parameters in general got fixes along the way: a pointer passed as the first argument, and reading `*p`, compiled wrongly. → [Structures as function arguments](#structures-as-function-arguments)
+Structures now behave like C's, in the script and across the border with your sketch:
 
-### 🧩 Structures shared with your sketch
+```c
+void step(ball *b)            // by pointer: b->x, b[i].x
+{
+   b->x = b->x + b->dx;
+}
 
-Define a `struct` once in your sketch and hand it to every script with `bindStruct()`; script structures now use the same memory layout as C, so a bound variable of that type (or an array of them) reads and writes your sketch's own fields. → [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
+int distance2(ball b, int x)  // by value: the function gets its own copy
+{
+   b.x = b.x - x;
+   return b.x * b.x;
+}
+
+step(&balls[2]);              // &variable, &array[i], &variable.field
+```
+
+- **Function arguments**: by value or by pointer, with `->`, `&` and `*`.
+- **C memory layout**: fields are aligned exactly as the ESP32 compiler aligns them, so a script and your sketch read the same bytes.
+- **`bindStruct()`**: define a structure once in your sketch and every script knows it. Bind variables or arrays of that type and the script works directly on your sketch's data.
+- **Your sketch can call a script function with a pointer to its own structure**, e.g. a keyboard handler `void keyboard(key_event *k)`.
+- Pointer fixes on the way: a pointer passed as the first argument (or declared as a local) was overwritten by `p[i] = v`, and reading `*p` gave the wrong value.
+
+Every case is checked against the same code compiled by GCC on an emulated ESP32. → [Structures](#structures)
 
 ### 🗂️ A script scheduler, like v1's `scriptRuntime`
 
@@ -142,7 +161,6 @@ None of this changes what you write in a script, but it is why I can say that so
 - [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions)
   * [Access to pre-compiled variables](#access-to-pre-compiled-variables)
   * [Calling pre-compiled functions](#calling-pre-compiled-functions)
-  * [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
 
 - [CRGB and the hue function](#crgb-and-the-hue-function)
 
@@ -151,8 +169,15 @@ None of this changes what you write in a script, but it is why I can say that so
 - [Variable types](#variable-types)
   * [Fixed point: ffloat](#fixed-point-ffloat)
   * [Arrays and multidimensional arrays](#arrays-and-multidimensional-arrays)
-  * [Structures](#structures)
+
+- [Structures](#structures)
+  * [Defining a structure](#defining-a-structure)
+  * [Memory layout](#memory-layout)
   * [Structures as function arguments](#structures-as-function-arguments)
+  * [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
+  * [The sketch calling a script with a structure](#the-sketch-calling-a-script-with-a-structure)
+  * [Limits and error messages](#limits-and-error-messages)
+  * [Structure examples](#structure-examples)
 
 - [Saving executables](#saving-executables)
   * [Binded functions](#binded-functions)
@@ -286,7 +311,7 @@ What you get today, led or no led:
 | | |
 |:--|:--|
 | 🧮 **Numbers** | `int`, `uint8_t`... `uint32_t`, `float` on the hardware FPU, `ffloat` fixed point, `^` power, `<<` `>>`, bitwise `and` / `or` |
-| 🧱 **Data** | structs with methods and constructors, arrays of structs, 1D/2D/3D arrays, pointers, `char *` strings |
+| 🧱 **Data** | structs with methods and constructors, arrays of structs, structs by value and by pointer, 1D/2D/3D arrays, pointers, `char *` strings |
 | 🔀 **Control flow** | `if`/`else`, `while`, `for`, `break`/`continue`, `switch`/`case`/`default`, the ternary operator, short-circuit `&&` / `\|\|`, recursion |
 | 🧠 **Memory** | `alloc()` / `free()` with `writeInt()` / `readInt()`, `safe_mode` bounds checking |
 | 🔌 **Your C++** | any function or variable of the sketch, bound by name; scripts calling them and them calling back into the script |
@@ -688,58 +713,7 @@ from other function
 
 For bigger sketches built the same way, see [StructsAndHostBindings](examples/StructsAndHostBindings) and [BouncingBalls](examples/BouncingBalls).
 
-## Sharing a structure with the sketch
-
-A variable whose type is one of your sketch's structures can be bound like any other. The script needs to know the structure: `bindStruct()` gives it the definition, so you don't have to repeat it in every script.
-
-```cpp
-void bindStruct(const char *definition);   // e.g. "struct key_t { char key; char code; };"
-```
-
-| Parameter | What it is |
-|---|---|
-| `definition` | The structure's definition, in the script language (the same text as in C for plain fields). Every script compiled afterwards knows the type. |
-
-To write the structure only once, `SCRIPT_STRUCT(name, { fields })` (`binding.h`) declares the C struct and keeps its text in `name_definition` for `bindStruct()`:
-
-```cpp
-#include "script_executable.h"
-#include "binding.h"
-
-SCRIPT_STRUCT(sensor, {
-   char id;
-   int value;
-   uint16_t count;
-   float average;
-})
-
-sensor probe = {'A', 10, 0, 0};
-sensor probes[3];
-
-char script[] = R"EOF(
-void main()
-{
-   probe.count = probe.count + 1;          // sensor is not defined here
-   probes[2].average = probes[2].value / 8.0;
-}
-)EOF";
-
-void setup()
-{
-   bindStruct(sensor_definition);
-   bindVariable((char *)"sensor", (char *)"probe", NULL, (void *)&probe);
-   bindVariable((char *)"sensor", (char *)"probes", (char *)"[3]", (void *)probes);
-   static ScriptExecutable exec = parseScript(script);
-   exec.execute("main");
-}
-```
-
-> [!NOTE]
-> - Script structures follow C's layout: each field is aligned as in C (an `int` or `float` on 4 bytes, a `uint16_t` on 2), and the structure is padded to a multiple of its largest alignment. That is what lets the script and the sketch read the same bytes.
-> - A script can still define the structure itself (scripts written before `bindStruct()` keep working), as long as the definition is the same. A different one is an error: *Structure already defined differently*.
-> - A bound structure can be passed to script functions like any other, by value or with `&`. → [Structures as function arguments](#structures-as-function-arguments)
-
-See the [HostStructs](examples/HostStructs) example.
+A variable can also have the type of one of your sketch's structures: see [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch).
 
 ---
 
@@ -932,33 +906,15 @@ int array3D[depth, height, width];
 int h = array3D[2, 12, 23];
 ```
 
-## Structures
+Structures have a chapter of their own: [Structures](#structures).
 
-You can define new types with `struct`:
+---
 
-```c
-struct new_type
-{
-   float k;
-   int l;
-};
-```
+# Structures
 
-Structures can have methods:
+A structure groups fields, and optionally methods and a constructor, into a type of its own. In v2 they behave like C's: same memory layout, passed to functions by value or by pointer, and shared with your sketch's own C++ structures.
 
-```c
-struct new_type
-{
-   float h;
-   int l;
-   void display()
-   {
-      printfln("l:%d", l);
-   }
-};
-```
-
-and constructors:
+## Defining a structure
 
 ```c
 struct ball
@@ -966,27 +922,57 @@ struct ball
    float vx, vy, xc, yc, r;
    int color;
 
-   ball()
+   ball()                      // constructor: runs for every ball declared
    {
       vx = rand(300) / 255.0;
-      ...
+      color = rand(255);
+   }
+
+   void move()                 // method: the fields are in scope
+   {
+      xc = xc + vx;
    }
 };
 
-ball Balls[max_nb_balls];
-...
-Balls[i].updateBall();
+ball balls[20];                // an array of structures
+
+void main()
+{
+   balls[3].move();
+   ball one = ball();          // same as `ball one;`
+}
 ```
 
-`varname d;` is the same as `varname d = varname();`, and a constructor with arguments works as you would expect: `varname d2 = varname(23);`.
+> [!NOTE]
+> - A definition ends with `};` as in C (v1 didn't need the `;`).
+> - `varname d;` is the same as `varname d = varname();`, and a constructor can take arguments: `varname d2 = varname(23);`.
+> - A function or method must be defined before it is called (for the moment).
+
+## Memory layout
+
+Fields are laid out exactly as the ESP32's C compiler lays them out: each field starts at a multiple of its own alignment, and the structure's size is rounded up to a multiple of its largest alignment.
+
+```c
+struct particle
+{
+   char tag;        // offset 0, then 3 bytes of padding
+   int x;           // offset 4
+   uint16_t life;   // offset 8, then 2 bytes of padding
+   float speed;     // offset 12
+};                  // size 16, same as sizeof(particle) in C
+```
+
+| Type | Size | Aligned on |
+|---|---|---|
+| `char`, `uint8_t`, `bool` | 1 | 1 |
+| `uint16_t`, `s_int` | 2 | 2 |
+| `int`, `uint32_t`, `float`, `ffloat` | 4 | 4 |
+| `CRGB` / `CRGBW` | 3 / 4 | 1 |
+
+That is what lets a script and your sketch read the same bytes, and the fields can be written in any order.
 
 > [!NOTE]
-> - You can have arrays of structures: `new_type arr[10];`
-> - A function needs to be defined before it is called (for the moment).
-> - Unlike v1, a struct definition ends with `};` like in C.
-
-> [!NOTE]
-> Fields are laid out as in C (aligned like C does, padding added where needed), so they can be in any order, and a structure from your sketch can be shared with a script. → [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
+> Before this release, fields were packed with no padding: in `struct { char a; int b; }`, `b` was at offset 1, an unaligned address the esp32 can't load an `int` from. If you ordered your fields from the biggest to the smallest to avoid that, it still works; it is just not needed any more.
 
 ## Structures as function arguments
 
@@ -1010,7 +996,7 @@ int distance2(ball b, int x, int y)   // by value: changes stay in the copy
    return b.x * b.x + b.y * b.y;
 }
 
-void step(ball *b)                    // by pointer
+void step(ball *b)                    // by pointer: changes the caller's ball
 {
    b->x = b->x + b->dx;
    b->y = b->y + b->dy;
@@ -1025,7 +1011,9 @@ void stepAll(ball *b, int n)          // a pointer to the first of n balls
 void main()
 {
    ball one;
-   step(&one);
+   one.x = 0;
+   one.dx = 5;
+   step(&one);                        // one.x is now 5
    stepAll(balls, 3);                 // an array name is a pointer to its first element
    int d = distance2(balls[1], 50, 50);
 }
@@ -1033,29 +1021,121 @@ void main()
 
 | You write | It means |
 |---|---|
-| `void f(ball b)` | `b` is a copy of the argument |
-| `void f(ball *b)` | `b` points to the caller's structure |
-| `b->x`, `b.x`, `b[i].x` | a field through the pointer (`b.x` is accepted too) |
+| `void f(ball b)` | `b` is a copy of the argument: `f(g)`, `f(arr[i])`, `f(p[i])` |
+| `void f(ball *b)` | `b` points to the caller's structure: `f(&g)`, `f(arr)`, `f(&arr[i])`, `f(p)` |
+| `b->x`, `b[i].x` | a field through the pointer (`b.x` is accepted too) |
 | `&g`, `&arr[i]`, `&g.x`, `&b[i]` | the address of a variable, an element, a field |
-| `*p` | the value `p` points to (`p[0]`) |
+| `*p` | the value `p` points to, the same as `p[0]` |
 
-Your sketch can call a script function with a pointer to one of its own structures (bound with [`bindStruct()`](#sharing-a-structure-with-the-sketch)), which is how a keyboard handler gets its key:
+Pointers to numbers work the same way: `int *q = &arr[2]; *q = 9;`.
+
+**How it works.** A structure passed by value travels as its address, and the called function copies it into its own frame before running, so the caller's copy can't change. A field read through a pointer, `b[i].x`, is computed as an ordinary indexed access, `((int *)b)[(i * sizeof(ball) + offset of x) / 4]`; C's alignment rules make that division exact, and the code is the same as for any `int *`.
+
+## Sharing a structure with the sketch
+
+A variable of one of your sketch's structures can be bound like any other. The script needs to know the structure: `bindStruct()` gives it the definition, once for every script compiled afterwards.
 
 ```cpp
-// script: void keyboard(key_event *k) { printfln("key %c code %d", k->key, k->code); }
-key_event k = {'a', 4};
-Arguments args;
-args.add((int)(uintptr_t)&k);
-exec.execute("keyboard", &args);
+void bindStruct(const char *definition);
+```
+
+| Parameter | What it is |
+|---|---|
+| `definition` | The structure's definition as text, e.g. `"struct key_event { char key; char code; };"`. The same text as in C for plain fields. |
+
+To write the structure only once, `SCRIPT_STRUCT(name, { fields })` (`binding.h`) declares the C++ struct and keeps its text in `name_definition`:
+
+```cpp
+#include "script_executable.h"
+#include "binding.h"
+
+SCRIPT_STRUCT(sensor, {
+   char id;
+   int value;
+   uint16_t count;
+   float average;
+})
+
+sensor probe = {'A', 10, 0, 0};
+sensor probes[3];
+
+char script[] = R"EOF(
+void main()
+{
+   probe.count = probe.count + 1;            // sensor is not defined in the script
+   for (int i = 0; i < 3; i++)
+      probes[i].average = probes[i].value / 8.0;
+}
+)EOF";
+
+void setup()
+{
+   bindStruct(sensor_definition);
+   bindVariable((char *)"sensor", (char *)"probe", NULL, (void *)&probe);
+   bindVariable((char *)"sensor", (char *)"probes", (char *)"[3]", (void *)probes);
+   static ScriptExecutable exec = parseScript(script);
+   exec.execute("main");
+   // probe and probes now hold what the script wrote
+}
 ```
 
 > [!NOTE]
-> - Through a pointer, a field must be a number or a `char` (not a `CRGB`).
-> - A structure passed by value must be one of the first 6 arguments.
-> - `&` works on global and bound variables, and on local structures and arrays; not on a local number (it lives in a register) or a field of a local structure.
-> - A `char` parameter needs a `char` argument: give an `int` parameter if you pass numbers.
+> - Call `bindStruct()` before `parseScript()`, like `bindVariable()`.
+> - A script can still define the structure itself (scripts written before `bindStruct()` keep working), as long as the definition is identical; a different one is an error.
+> - Bound structures work everywhere a script structure does: as arguments by value, with `&probe` or `&probes[i]`, through pointers.
 
-See the [StructArguments](examples/StructArguments) example.
+See the [HostStructs](examples/HostStructs) example.
+
+## The sketch calling a script with a structure
+
+The arguments of `execute()` are 32-bit values, so a structure goes as its address. The script function takes a pointer:
+
+```cpp
+SCRIPT_STRUCT(key_event, {
+   char key;
+   char code;
+})
+
+char script[] = R"EOF(
+void keyboard(key_event *k)
+{
+   printfln("key '%c' code %d", k->key, k->code);
+}
+)EOF";
+
+void onKey(char key, char code)          // your event handler
+{
+   key_event k = {key, code};
+   Arguments args;
+   args.add((int)(uintptr_t)&k);
+   exec.execute("keyboard", &args);      // the script reads your k directly
+}
+```
+
+Remember `bindStruct(key_event_definition);` before compiling. Writes through `k` change your sketch's structure, which is a way to hand values back.
+
+## Limits and error messages
+
+| Message | Why | What to do |
+|---|---|---|
+| *A structure passed by value must be one of the first 6 arguments* | The first 6 arguments travel in registers; the copy is made from there. | Move it earlier, or pass a pointer. |
+| *This member can't be used through a pointer (only plain numbers and char)* | Through a pointer, a field must be a number or a `char`. A `CRGB` field isn't supported there yet. | Read it through the variable itself, or pass the structure by value. |
+| *Can't take the address of this variable* | A local number may live in a register, and fields of local structures aren't addressable yet. | Use a global, or take the address of the whole local structure. |
+| *\* needs a pointer variable* | `*x` on something that isn't a pointer. | Use `x` itself, or declare it `T *x`. |
+| *Structure already defined differently (bindStruct)* | The script defines a structure the sketch bound, with other fields. | Remove the script's definition, or make it identical. |
+| *Too many fields in the structure* | A structure holds at most 20 slots: one per number field, three per `CRGB`, one or two per padding gap. | Split it into two structures. |
+| *Function not found* on a `char` parameter | A `char` parameter wants a `char` argument; `90` is an `int`. | Give the function an `int` parameter. |
+
+A function can't return a structure yet (the call then reports *Function not found*): return a field, or write into a structure passed by pointer.
+
+## Structure examples
+
+| Example | What it shows |
+|---|---|
+| [StructArguments](examples/StructArguments) | By value, by pointer, `->`, `&b[i]`, and the sketch calling `keyboard(key_event *k)` with its own struct. |
+| [HostStructs](examples/HostStructs) | `SCRIPT_STRUCT` and `bindStruct()`: a struct and an array of structs shared with the sketch. |
+| [BouncingBalls](examples/BouncingBalls) | Methods, a constructor and an array of structures. |
+| [StructsAndHostBindings](examples/StructsAndHostBindings) | A structure method using bound functions and variables. |
 
 ---
 
@@ -1466,6 +1546,8 @@ This is the part that is really new compared to v1:
 | `FibonacciTiming` | Timing a script with `micros()`. |
 | `BouncingBalls` | Structs with methods and constructors, an array of structs, several bound functions. |
 | `StructsAndHostBindings` | Structs with `bindFunction()`/`bindVariable()`, smaller. |
+| `StructArguments` | Structures by value and by pointer, `->`, `&`, and the sketch calling a script function with a pointer to its own struct (see [Structures](#structures)). |
+| `HostStructs` | A structure defined once in the sketch with `SCRIPT_STRUCT`, shared with the script through `bindStruct()`, as a variable and an array. |
 | `KeyboardCallback` | An `external` variable, calling a loaded script again from an event handler. |
 | `LanguageBasics` | Every compiling step one by one, printing the AST and the generated assembly. |
 | `SaveScriptBinary` / `LoadScriptBinary` | Compile once, save to flash, load and run from another sketch. |
