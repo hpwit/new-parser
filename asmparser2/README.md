@@ -181,6 +181,11 @@ None of this changes what you write in a script, but it is why I can say that so
   * [Limits and error messages](#limits-and-error-messages)
   * [Structure examples](#structure-examples)
 
+- [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script)
+  * [How a key reaches the script](#how-a-key-reaches-the-script)
+  * [The sketch, part by part](#the-sketch-part-by-part)
+  * [The script](#the-script)
+
 - [Saving executables](#saving-executables)
   * [Binded functions](#binded-functions)
 
@@ -211,6 +216,17 @@ None of this changes what you write in a script, but it is why I can say that so
 - [Known limitations](#known-limitations)
 
 - [Conclusion](#conclusion)
+
+- [API reference](#api-reference)
+  * [Compiling and running](#compiling-and-running-script_executableh)
+  * [Arguments](#arguments-argumentsh)
+  * [Running as a task](#running-as-a-task-script_executableh)
+  * [Compile errors](#compile-errors-script_executableh)
+  * [Saving and loading compiled scripts](#saving-and-loading-compiled-scripts-script_executableh)
+  * [Binding your C++ functions, variables and structures](#binding-your-c-functions-variables-and-structures-bindingh)
+  * [Runtime errors](#runtime-errors-runtime_functionsh)
+  * [The script scheduler](#the-script-scheduler-script_schedulerh)
+  * [Built into every script](#built-into-every-script)
 
 <!-- TOC end -->
 
@@ -1185,6 +1201,143 @@ A function can't return a structure yet (the call then reports *Function not fou
 
 ---
 
+# A USB keyboard driving a script
+
+[KeyboardTest](examples/KeyboardTest) connects a USB keyboard to a script: every key you press runs the script's `keyboard()` function, which echoes the key, keeps the line being typed and prints it on Enter. It is the keyboard part of a bigger sketch (a 5" screen with a script console) with everything else taken out, so it is a good starting point for your own keyboard-driven scripts.
+
+## What you need
+
+| | |
+|---|---|
+| Board | An **ESP32-S3**. Its USB OTG port can act as a USB *host*; the plain ESP32 has no USB host. |
+| Keyboard | Any USB keyboard, plugged into the S3's USB host port (with an OTG adapter or a board that has a host socket). The port must power the keyboard. |
+| Library | `ESP32_USB_Host_HID`, in the version whose `keyboard.h` defines `struct key_return` and calls the `hid_keyboard_print_char()` hook on every key. |
+| Serial monitor | 115200 baud, on the port your board prints `Serial` to (on most S3 boards with two sockets, the UART one, since the other is busy with the keyboard). |
+
+## How a key reaches the script
+
+```mermaid
+sequenceDiagram
+    participant K as USB keyboard
+    participant L as Keyboard library<br/>(USB host task)
+    participant S as Sketch
+    participant P as Script
+    P->>S: setup_keyboard(_handle_), once, from main()
+    K->>L: key pressed (HID report)
+    L->>S: hid_keyboard_print_char(key) = print_char(key)
+    S->>S: lastKey = key
+    S->>P: executeOnly("keyboard")
+    P->>S: reads key.key_char, key.key_code (bound to lastKey)
+```
+
+1. **The script registers itself.** Its `main()` calls `setup_keyboard(_handle_)`. `_handle_` is the address of the script's own `ScriptExecutable`, filled in by the loader; the sketch keeps it in `keyboardScript`. This is the same pattern as the 5" sketch, and it lets the script decide when it starts receiving keys.
+2. **The library reports a key.** The keyboard library runs its own USB host task. When a key arrives it translates the HID code into a character and calls the function pointer `hid_keyboard_print_char`, which the sketch set to `print_char()`.
+3. **The sketch stores the key and calls the script.** `print_char()` copies the key into `lastKey` and calls `keyboardScript->executeOnly("keyboard")`.
+4. **The script reads the key.** In the script, `key` is bound to the sketch's `lastKey`: `key.key_char` and `key.key_code` are read straight from the sketch's memory, no copy.
+
+## The sketch, part by part
+
+**The key and its structure.** `struct key_return { unsigned char key_char; unsigned char key_code; }` is defined in the keyboard library's header, not in the sketch, so it is bound with [`BIND_STRUCT`](#a-structure-from-a-library), which writes the script's definition from the C type and checks the layout:
+
+```cpp
+key_return lastKey;                                   // the last key, filled by print_char()
+
+BIND_STRUCT(key_return, key_char, key_code);          // the script knows key_return
+bindVariable((char *)"key_return", (char *)"key", NULL, (void *)&lastKey);   // `key` in the script is lastKey
+bindFunction((char *)"void", (char *)"setup_keyboard", (char *)"uint32_t", (void *)setup_keyboard);
+```
+
+**The callback.** It runs on the keyboard library's task, once per key:
+
+```cpp
+void print_char(key_return k)
+{
+   lastKey = k;
+   if (keyboardScript != NULL)
+      keyboardScript->executeOnly("keyboard");
+}
+```
+
+`executeOnly()` and not `execute()`: `execute()` first runs the script's top-level initialization again (global initializers and constructors), which would reset `len` to 0 and lose the line on every key. `executeOnly()` only calls the function, so the script's globals keep their values between keys.
+
+**`setup()`**, in this order:
+
+| Step | Why there |
+|---|---|
+| `BIND_STRUCT`, `bindVariable`, `bindFunction` | Bindings must exist before compiling. |
+| `static ScriptExecutable exec = parseScript(script);` | `static`: the script must outlive `setup()`, since keys arrive later. A local would be freed when `setup()` returns. |
+| `exec.execute("main");` | Runs the initialization, then `main()`, which calls `setup_keyboard(_handle_)`. |
+| `hid_keyboard_print_char = print_char; app_main_keyboard();` | Only now start the USB host: the script is ready for the first key. |
+
+## The script
+
+```c
+char line[100];
+int len = 0;
+
+void keyboard()
+{
+   if (key.key_code == 40)            // Enter: show the line typed
+   {
+      printf("line (%d chars): ", len);
+      for (int i = 0; i < len; i++)
+         printf("%c", line[i]);
+      printfln("");
+      len = 0;
+   }
+   else if (key.key_code == 42)       // Backspace
+   {
+      if (len > 0)
+         len--;
+      printfln("backspace, %d chars", len);
+   }
+   else if (key.key_char != 0)        // a key that types something
+   {
+      if (len < 99)
+      {
+         line[len] = key.key_char;
+         len++;
+      }
+      printfln("key '%c' code %d", key.key_char, key.key_code);
+   }
+   else                               // Shift, arrows, F keys...
+      printfln("key code %d (no character)", key.key_code);
+}
+
+void main()
+{
+   setup_keyboard(_handle_);
+   printfln("ready: type on the USB keyboard, Enter shows the line");
+}
+```
+
+`key_code` is the USB HID usage code of the key (40 Enter, 42 Backspace, 41 Escape, 79 to 82 the arrows, 225 left Shift), and `key_char` the character it types, or 0 when it types none. The library already applies Shift: `!` arrives as `key_char` `'!'`.
+
+Typing `hiy`, Backspace, `!` and Enter prints:
+
+```
+ready: type on the USB keyboard, Enter shows the line
+key 'h' code 11
+key 'i' code 12
+key 'y' code 28
+backspace, 2 chars
+key '!' code 30
+key code 225 (no character)
+line (3 chars): hi!
+```
+
+## Going further
+
+- **Change what the keys do without re-flashing.** Edit the script text, recompile it with `parseScript()` (from a file, the serial port, a web page), and keys go to the new script once it has called `setup_keyboard(_handle_)`.
+- **Bind more.** Give the script your display functions and `keyboard()` becomes a text editor or a game controller (the 5" sketch draws the typed line on its screen).
+- **Keep `keyboard()` short.** It runs on the keyboard library's USB task; a long computation there delays the next keys. Store the key and let a script running as a task (see [Running scripts in the background](#running-scripts-in-the-background)) do the heavy work.
+
+> [!NOTE]
+> - Nothing printed when typing: check the keyboard is powered by the S3's host port, and that the serial monitor is on the port `Serial` prints to (`ready: ...` appears at start-up when it is).
+> - `BIND_STRUCT(key_return): ...` at start-up means your `keyboard.h` defines `key_return` differently: list its fields, in order.
+
+---
+
 # Saving executables
 
 You can compile a script once, save the binary to LittleFS or an SD card, and run it later without the source, even from another sketch.
@@ -1596,6 +1749,7 @@ This is the part that is really new compared to v1:
 | `HostStructs` | A structure defined once in the sketch with `SCRIPT_STRUCT`, shared with the script through `bindStruct()`, as a variable and an array. |
 | `LibraryStruct` | `BIND_STRUCT()`: structures defined in libraries (the USB keyboard's `key_return`, the C library's `struct tm`) bound to a script, layout checked. |
 | `KeyboardCallback` | An `external` variable, calling a loaded script again from an event handler. |
+| `KeyboardTest` | A USB keyboard on an ESP32-S3 driving a script: the library's `key_return` bound with `BIND_STRUCT`, `executeOnly()` on every key (see [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script)). Needs the `ESP32_USB_Host_HID` library. |
 | `LanguageBasics` | Every compiling step one by one, printing the AST and the generated assembly. |
 | `SaveScriptBinary` / `LoadScriptBinary` | Compile once, save to flash, load and run from another sketch. |
 | `PrintBinaryHex` | Hex dump of a compiled script and its relocation header. |
@@ -1702,3 +1856,263 @@ As always enjoy and have fun.
 **⚡ Happy scripting! ⚡**
 
 </div>
+
+---
+
+# API reference
+
+Everything a sketch calls, grouped by header. Strings are plain C strings; a `(char *)` cast in the examples only silences the compiler's warning about string literals. All of it runs on the esp32, esp32-S2 and esp32-S3; the calls marked **esp32 only** need FreeRTOS tasks.
+
+## Compiling and running `script_executable.h`
+
+### `parseScript()`
+
+```cpp
+ScriptExecutable parseScript(const char *script);
+```
+
+Compiles `script` and loads it, ready to run.
+
+| | |
+|---|---|
+| `script` | The script's source text. Only read during the call. |
+| **Returns** | A `ScriptExecutable`. Check `isExeExists()`: on a compile error it is empty and `showCompileError()` / `lastCompileError()` say why. |
+
+Keep the result alive as long as you run the script, and declare it `static` (or global) when something calls it after the current function returns (a task, an interrupt, a callback). It can't be copied or moved.
+
+```cpp
+static ScriptExecutable exec = parseScript(script);
+if (!exec.isExeExists())
+   showCompileError();
+```
+
+### `ScriptExecutable`
+
+| Method | Inputs | Returns | What it does |
+|---|---|---|---|
+| `isExeExists()` | | `bool` | `true` when the script compiled, loaded and has at least one function. |
+| `execute(name, result)` | `const char *name`: the script function; `int32_t *result`: receives its return value, or `NULL` | `bool` | Runs the script's initialization (global initializers, constructors), then `name`. `false` if there is no such function or a runtime error stopped it. |
+| `execute(name, args, result)` | `Arguments *args`: the arguments, up to 6 | `bool` | The same, with arguments. |
+| `execute(name, args, nargs, result)` | `const int32_t *args`, `int nargs`: up to 6 raw 32-bit arguments | `bool` | The same, from an array. |
+| `executeOnly(...)` | the same three forms | `bool` | Calls `name` **without** the initialization, so globals keep their values between calls. Use it for callbacks (keys, interrupts) on a script already started. |
+| `free()` | | | Frees the compiled script now (also kills its task). The destructor does the same. |
+| `hasRuntimeError()` | | `bool` | `true` if the last call was stopped by a `safe_mode` check. |
+| `runtimeError()` | | `const runtime_error_struct &` | Which array, its size and the index, see [Runtime errors](#runtime-errors-runtime_functionsh). |
+
+A float argument or return value travels as its 32-bit pattern: use `Arguments::add(float)`, and read a float result with `memcpy(&f, &result, 4)`. A structure goes as its address: `args.add((int)(uintptr_t)&myStruct)`, with a script function taking a pointer.
+
+## Arguments `arguments.h`
+
+```cpp
+Arguments args;
+args.add(42);        // int
+args.add(1.5f);      // float
+exec.execute("move", &args);
+```
+
+| Method | Inputs | Returns | What it does |
+|---|---|---|---|
+| `add(int)` | an integer (also a pointer: `(int)(uintptr_t)&x`) | | Appends an argument. |
+| `add(float)` | a float | | Appends a float argument. |
+| `clear()` | | | Empties the list, to reuse it. |
+| `size()` | | `int` | Number of arguments. |
+
+## Running as a task `script_executable.h`
+
+**esp32 only.**
+
+```cpp
+bool executeAsTask(const char *name, uint32_t stackSize = 8192, UBaseType_t priority = 1,
+                   BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
+```
+
+| | |
+|---|---|
+| `name` | The script function to run. Must stay valid while the task runs (a string literal is fine). |
+| `stackSize` | The task's stack in bytes. Default `8192`. |
+| `priority` | FreeRTOS priority. Default `1`, the same as `loop()`. |
+| `core` | `0`, `1`, or `tskNO_AFFINITY` (default) to let FreeRTOS choose. |
+| `taskName` | The name FreeRTOS shows; `NULL` uses `name`. |
+| **Returns** | `true` once the task is created, `false` if FreeRTOS couldn't create it (not enough memory). A task this script already had is killed first. |
+
+| Method | Returns | What it does |
+|---|---|---|
+| `pause()` | `bool`, `false` if not running | Suspends the task where it is. |
+| `restart()` | `bool`, `false` if not paused | Resumes it from where it stopped. |
+| `kill()` | `bool`, `false` if not running or paused | Deletes the task. |
+| `state()` | `ScriptState` | `notStarted`, `running`, `paused` or `stopped` (killed, or the function returned). |
+| `isRunning()`, `isPaused()` | `bool` | Shortcuts for `state()`. |
+| `task()` | `TaskHandle_t` | The FreeRTOS handle, for statistics. |
+
+The script must give the CPU back regularly (call a bound `delay()`), or the core's lower-priority tasks, the watchdog's idle task included, never run. See [Running scripts in the background](#running-scripts-in-the-background).
+
+## Compile errors `script_executable.h`
+
+| Function | Inputs | Returns | What it does |
+|---|---|---|---|
+| `showCompileError()` | | | Prints the last error: the message, the line and a caret under the position. |
+| `lastCompileError()` | | `const CompileError &` | The last error, to show it your own way. |
+
+```cpp
+struct CompileError
+{
+   bool failed;           // false: the last compile succeeded
+   int line;              // line in your script, from 1 (0 when unknown)
+   int position;          // column, from 1
+   char message[80];      // e.g. "Expecting ;"
+   char sourceLine[120];  // the text of that line
+};
+```
+
+## Saving and loading compiled scripts `script_executable.h`
+
+| Function | Inputs | Returns | What it does |
+|---|---|---|---|
+| `parseScriptToBinary(script, size)` | `const char *script`; `uint32_t *size`: receives the length in bytes | `uint8_t *`, or `NULL` on a compile error | Compiles without loading and returns the machine code and its relocations as one buffer, to write to a file. You own it: `free()` it. |
+| `createExecutableFromBuffer(buf, size)` | `const uint8_t *buf`, `uint32_t size`: a buffer from `parseScriptToBinary()` | `ScriptExecutable` | Loads a saved script. Bind every `external` name it uses first, with the same names. Check `isExeExists()`. |
+
+See [Saving executables](#saving-executables).
+
+## Binding your C++ functions, variables and structures `binding.h`
+
+Call these **before** compiling (and before loading a saved script). A script then uses the names without declaring them.
+
+### `bindFunction()`
+
+```cpp
+void bindFunction(char *returnType, char *name, char *parameterTypes, void *function);
+```
+
+| | |
+|---|---|
+| `returnType` | The return type in script terms: `"void"`, `"int"`, `"float"`, `"uint32_t"`, `"CRGB"`... |
+| `name` | The name the script calls it by. |
+| `parameterTypes` | The parameter types, comma separated: `"int,int,float"`; `"char*,Args"` for a printf-like function; `NULL` for none. |
+| `function` | The function's address: `(void *)myFunction`. |
+
+```cpp
+bindFunction((char *)"void", (char *)"setPixel", (char *)"int,int,int", (void *)setPixel);
+```
+
+### `bindVariable()`
+
+```cpp
+void bindVariable(char *type, char *name, char *arraySize, void *address);
+```
+
+| | |
+|---|---|
+| `type` | The type in script terms: `"int"`, `"float"`, `"uint8_t"`, `"CRGB"`, a pointer such as `"uint16_t *"`, or a bound structure's name. |
+| `name` | The name the script uses. |
+| `arraySize` | `NULL` for a single variable, `"[10]"` for an array, `"[]"` when the script's own `external` declaration gives the size (a 2D `external CRGB leds[96, 128];`). |
+| `address` | The variable's address: `(void *)&value`, or `(void *)array` for an array. |
+
+Reads and writes go straight to your variable: nothing is copied.
+
+### `replaceExternal()`
+
+```cpp
+void replaceExternal(char *name, void *address);
+```
+
+Points an already bound name at another function or variable, for the scripts loaded afterwards.
+
+### `bindStruct()`
+
+```cpp
+void bindStruct(const char *definition);
+```
+
+| | |
+|---|---|
+| `definition` | A structure definition as text: `"struct key_event { char key; char code; };"`. Every script compiled afterwards knows the type. |
+
+### `SCRIPT_STRUCT()`
+
+```cpp
+SCRIPT_STRUCT(name, { fields })
+```
+
+Declares the C++ struct `name` and keeps its definition in `name_definition`, for `bindStruct(name_definition)`. At file scope.
+
+### `BIND_STRUCT()`
+
+```cpp
+bool BIND_STRUCT(type, field1, field2, ...);
+```
+
+| | |
+|---|---|
+| `type` | A struct type defined anywhere, a library's header included. |
+| `field1, ...` | Every field, in order (up to 16), each a number, `char` or `bool` of 1, 2 or 4 bytes. |
+| **Returns** | `true` once bound. `false`, with the reason printed, if the script's layout wouldn't match C's (a field missing or out of order). Other field types stop the compilation of the sketch. |
+
+See [Structures](#structures) for all three.
+
+## Runtime errors `runtime_functions.h`
+
+A script compiled with `safe_mode` checks its array indexes. An out-of-range write stops it: the call that entered the script returns `false`.
+
+```cpp
+struct runtime_error_struct
+{
+   bool error;        // true after such a stop
+   char array[32];    // the array's name in the script
+   uint32_t size;     // its number of elements
+   int32_t index;     // the index that was out of range
+};
+
+extern void (*onScriptRuntimeError)(const runtime_error_struct *error);
+```
+
+Set `onScriptRuntimeError` to your own function to report the error your way; otherwise one line is printed. See [Safe mode and arrays](#safe-mode-and-arrays).
+
+## The script scheduler `script_scheduler.h`
+
+**esp32 only.** One global object, `scriptScheduler`, holds up to 8 named scripts (`SCRIPT_SCHEDULER_MAX`), each on its own task.
+
+| Method | Inputs | Returns | What it does |
+|---|---|---|---|
+| `add(name, source)` | `const char *name` (up to 23 characters), `const char *source` | `bool`, `false` on a compile error | Compiles `source` under `name`, replacing a script of that name. |
+| `run(name, function, stackSize, priority, core)` | as `executeAsTask()`; `function` defaults to `"main"` | `bool` | Runs `function` on a new task, named after the script. |
+| `execute(name, function)` | `function` defaults to `"main"` | `bool` | Runs it on the calling task and waits. |
+| `pause(name)`, `restart(name)`, `kill(name)` | | `bool` | As on `ScriptExecutable`. |
+| `remove(name)` | | `bool` | Kills it, frees it, forgets the name. |
+| `killAll()`, `removeAll()` | | | The same for every script. |
+| `count()` | | `int` | Number of scripts. |
+| `info(index, &info)`, `info(name, &info)` | `int index` or `const char *name`, `ScriptInfo *out` | `bool`, `false` if there's no such script | Fills a `ScriptInfo`. |
+| `find(name)` | | `ScriptExecutable *`, or `NULL` | The script itself, e.g. for `executeOnly()`. |
+| `sample()` | | | Measures CPU use since the previous sample. |
+| `coreLoad(core)` | `int core`: `0` or `1` | `float` | The core's load in % at the last sample, `-1` before the first. |
+| `list()` | | | Prints a table of every script and the core loads (it samples first). |
+
+```cpp
+struct ScriptInfo
+{
+   char name[24];
+   char function[24];     // what run() started
+   ScriptState state;
+   float cpuPercent;      // % of one core since the previous sample, -1 unknown
+   uint32_t stackFree;    // bytes of its stack never used, 0 without a task
+   uint32_t codeSize;     // bytes of machine code
+   uint32_t dataSize;     // bytes of globals
+   int core;              // core it is pinned to, -1 if none
+   UBaseType_t priority;
+};
+```
+
+## Built into every script
+
+Available in every script, nothing to bind:
+
+| Name | Signature | What it does |
+|---|---|---|
+| `printf` | `void printf(char *format, ...)` | Prints like C's `printf`: integers, characters and strings (`%d`, `%u`, `%x`, `%c`, `%s`). For a float, print an integer, e.g. `(int)(x * 100)`. |
+| `printfln` | `void printfln(char *format, ...)` | The same, followed by a new line. |
+| `alloc` | `uint32_t alloc(int bytes)` | Allocates `bytes` bytes (`malloc`), returns the address, 0 if there isn't enough memory. |
+| `free` | `void free(uint32_t address)` | Frees memory from `alloc()`. |
+| `writeInt` | `void writeInt(uint32_t address, int offset, int value)` | Writes a 32-bit `value` at `address + offset` (`offset` in bytes, a multiple of 4). |
+| `readInt` | `int readInt(uint32_t address, int offset)` | Reads the 32-bit value at `address + offset`. |
+| `_handle_` | `uint32_t` | The address of the script's own `ScriptExecutable`, to hand to the sketch (`setup_keyboard(_handle_)`, `pinInterrupt(_handle_, "f", 23)`). |
+| `true`, `false` | | `1` and `0`. |
+| `safe_mode` | keyword | Turns on index checks, see [Safe mode and arrays](#safe-mode-and-arrays). |
