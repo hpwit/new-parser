@@ -3020,6 +3020,85 @@ static void runStructArgumentsTest()
     }
 }
 
+// as a library would define them: the sketch can't use SCRIPT_STRUCT
+struct LibKey
+{
+    unsigned char key_char;
+    unsigned char key_code;
+};
+typedef struct
+{
+    char a;
+    int32_t b;
+    uint16_t c;
+    bool d;
+    float e;
+    int16_t f;
+} LibMix;
+
+static void runBindStructMacroTest()
+{
+    const char *name = "BIND_STRUCT: a struct from a library, defined from its C type and checked against its layout";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+
+    if (!BIND_STRUCT(LibKey, key_char, key_code) ||
+        strcmp(binded_structs[binded_structs.size() - 1], "struct LibKey { uint8_t key_char; uint8_t key_code; };\n") != 0)
+    {
+        printf("       LibKey: %s\n", binded_structs.size() ? binded_structs[binded_structs.size() - 1] : "not bound");
+        ok = false;
+    }
+    if (!BIND_STRUCT(LibMix, a, b, c, d, e, f))
+        ok = false;
+    static LibKey hostKey;
+    static LibMix hostMix;
+    bindVariable((char *)"LibKey", (char *)"libKey", NULL, (void *)&hostKey);
+    bindVariable((char *)"LibMix", (char *)"libMix", NULL, (void *)&hostMix);
+    if (!compileForTest("external LibKey libKey;\nexternal LibMix libMix;\n"
+                        "int main(){ libMix.f = libKey.key_code; return libMix.b + libKey.key_char; }\n"))
+        ok = false;
+    else
+    {
+        varType *v = _userDefinedTypes.getptr(findStruct((char *)"LibMix"));
+        size_t expected[6] = {offsetof(LibMix, a), offsetof(LibMix, b), offsetof(LibMix, c),
+                              offsetof(LibMix, d), offsetof(LibMix, e), offsetof(LibMix, f)};
+        for (int i = 0; i < 6; i++)
+            if (v->starts[i] != expected[i])
+            {
+                printf("       LibMix field %d at %d, C says %d\n", i, v->starts[i], (int)expected[i]);
+                ok = false;
+            }
+        if (v->_varSize != sizeof(LibMix))
+        {
+            printf("       LibMix: %d bytes, C says %d\n", v->_varSize, (int)sizeof(LibMix));
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
+
+    // a field left out or out of order: refused, nothing bound
+    int before = binded_structs.size();
+    if (BIND_STRUCT(LibMix, a, b, c, d, e) || BIND_STRUCT(LibMix, b, a, c, d, e, f) || binded_structs.size() != before)
+    {
+        printf("       an incomplete or reordered field list was bound\n");
+        ok = false;
+    }
+
+    binded_structs.clear();
+    Error.error = 0;
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     registerBallEffectBindings();
@@ -3033,6 +3112,7 @@ int main()
     runPointerIndexTest();
     runStructLayoutTest();
     runStructArgumentsTest();
+    runBindStructMacroTest();
     runBuiltinHandleTest();
     runVarargsOrderTest();
     runCharPointerArgumentsTest();

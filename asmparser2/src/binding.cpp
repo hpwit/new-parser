@@ -15,6 +15,43 @@ void bindStruct(const char *definition)
     binded_structs.push_back(string_format("%s\n", definition));
 }
 
+// The script lays fields out as C does (each on a multiple of its size,
+// these being 1, 2 or 4 bytes): the definition is bound only if that gives
+// every field its C offset and the struct its C size, which a missing or
+// reordered field would not.
+bool bindStructFields(const char *name, int size, const scriptFieldInfo *fields, int count)
+{
+    int offset = 0, align = 1;
+    for (int i = 0; i < count; i++)
+    {
+        int a = fields[i].size;
+        offset = (offset + a - 1) / a * a;
+        if (offset != fields[i].offset)
+        {
+            printf("BIND_STRUCT(%s): field %s is at byte %d in C but would be at byte %d in the script; "
+                   "list every field, in order\n",
+                   name, fields[i].name, fields[i].offset, offset);
+            return false;
+        }
+        offset += a;
+        if (a > align)
+            align = a;
+    }
+    offset = (offset + align - 1) / align * align;
+    if (offset != size)
+    {
+        printf("BIND_STRUCT(%s): %d bytes in C, %d from the fields listed; a field is missing\n", name, size, offset);
+        return false;
+    }
+    char *definition = string_format("struct %s {", name);
+    for (int i = 0; i < count; i++)
+        definition = str_concat("%s %s %s;", definition, fields[i].type, fields[i].name);
+    definition = str_concat("%s };", definition);
+    bindStruct(definition);
+    free(definition);
+    return true;
+}
+
 // Resolves a symbol referenced in generated assembly (e.g. "@_rnd(d)" or
 // just "rnd") to its binded_assets entry by comparing against the bare
 // shortname -- anything from the first '(' onward is ignored, matching how

@@ -53,6 +53,7 @@ step(&balls[2]);              // &variable, &array[i], &variable.field
 - **Function arguments**: by value or by pointer, with `->`, `&` and `*`.
 - **C memory layout**: fields are aligned exactly as the ESP32 compiler aligns them, so a script and your sketch read the same bytes.
 - **`bindStruct()`**: define a structure once in your sketch and every script knows it. Bind variables or arrays of that type and the script works directly on your sketch's data.
+- **`BIND_STRUCT()`**: the same for a structure from a library's header (the USB keyboard's `key_return`, the C library's `struct tm`): its definition is made from the C type and checked against C's layout.
 - **Your sketch can call a script function with a pointer to its own structure**, e.g. a keyboard handler `void keyboard(key_event *k)`.
 - Pointer fixes on the way: a pointer passed as the first argument (or declared as a local) was overwritten by `p[i] = v`, and reading `*p` gave the wrong value.
 
@@ -119,7 +120,7 @@ The differential fuzzer (random programs run through the compiler and as plain C
 
 ### 📚 New examples
 
-[StructArguments](examples/StructArguments), [HostStructs](examples/HostStructs), [SchedulerDemo](examples/SchedulerDemo), [CompileErrors](examples/CompileErrors), [RainbowCompare](examples/RainbowCompare), [BouncingBallsCompare](examples/BouncingBallsCompare), [DirectGPIOSpeed](examples/DirectGPIOSpeed), and a [general purpose sample](#more-than-a-led-language) that has nothing to do with leds.
+[StructArguments](examples/StructArguments), [HostStructs](examples/HostStructs), [LibraryStruct](examples/LibraryStruct), [SchedulerDemo](examples/SchedulerDemo), [CompileErrors](examples/CompileErrors), [RainbowCompare](examples/RainbowCompare), [BouncingBallsCompare](examples/BouncingBallsCompare), [DirectGPIOSpeed](examples/DirectGPIOSpeed), and a [general purpose sample](#more-than-a-led-language) that has nothing to do with leds.
 
 ---
 
@@ -175,6 +176,7 @@ None of this changes what you write in a script, but it is why I can say that so
   * [Memory layout](#memory-layout)
   * [Structures as function arguments](#structures-as-function-arguments)
   * [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
+  * [A structure from a library](#a-structure-from-a-library)
   * [The sketch calling a script with a structure](#the-sketch-calling-a-script-with-a-structure)
   * [Limits and error messages](#limits-and-error-messages)
   * [Structure examples](#structure-examples)
@@ -1086,6 +1088,49 @@ void setup()
 
 See the [HostStructs](examples/HostStructs) example.
 
+## A structure from a library
+
+`SCRIPT_STRUCT` declares the structure, so it only fits structures you write. When the structure comes from a library's header, like the USB keyboard library's `key_return`, use `BIND_STRUCT` with the type and its fields:
+
+```cpp
+#include "binding.h"
+#include "keyboard.h"          // the library: struct key_return { unsigned char key_char; unsigned char key_code; };
+
+key_return key_char;           // the library fills it
+
+void setup()
+{
+   BIND_STRUCT(key_return, key_char, key_code);
+   bindVariable((char *)"key_return", (char *)"key", NULL, (void *)&key_char);
+   ...
+}
+```
+
+and the script uses it without defining it:
+
+```c
+void keyboard()
+{
+   printfln("%d:%c", key.key_code, key.key_char);
+}
+```
+
+`BIND_STRUCT` writes the script's definition from the C type itself (`unsigned char` becomes `uint8_t`, a 16-bit signed number `s_int`, and so on), then checks that the script would put every field at the same byte as C, and give the structure the same size, before binding it. If not, nothing is bound and it says why:
+
+```
+BIND_STRUCT(LibMix): 20 bytes in C, 16 from the fields listed; a field is missing
+BIND_STRUCT(LibMix): field b is at byte 4 in C but would be at byte 0 in the script; list every field, in order
+```
+
+| Rule | Why |
+|---|---|
+| List every field, in the order of the header | The script needs all of them to find the same offsets. |
+| Fields are numbers, `char` or `bool` of 1, 2 or 4 bytes | A field of another type (an array, a pointer, a `double`, a nested structure) stops the sketch's compilation with a message. |
+| At most 16 fields | |
+| It returns `true` once bound | Check it if the script can't work without the structure. |
+
+The C library's own `struct tm` works the same way: `BIND_STRUCT(tm, tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday, tm_isdst);`. See the [LibraryStruct](examples/LibraryStruct) example, which uses both.
+
 ## The sketch calling a script with a structure
 
 The arguments of `execute()` are 32-bit values, so a structure goes as its address. The script function takes a pointer:
@@ -1134,6 +1179,7 @@ A function can't return a structure yet (the call then reports *Function not fou
 |---|---|
 | [StructArguments](examples/StructArguments) | By value, by pointer, `->`, `&b[i]`, and the sketch calling `keyboard(key_event *k)` with its own struct. |
 | [HostStructs](examples/HostStructs) | `SCRIPT_STRUCT` and `bindStruct()`: a struct and an array of structs shared with the sketch. |
+| [LibraryStruct](examples/LibraryStruct) | `BIND_STRUCT()`: structures from libraries (the USB keyboard's `key_return`, `struct tm`) used by a script. |
 | [BouncingBalls](examples/BouncingBalls) | Methods, a constructor and an array of structures. |
 | [StructsAndHostBindings](examples/StructsAndHostBindings) | A structure method using bound functions and variables. |
 
@@ -1548,6 +1594,7 @@ This is the part that is really new compared to v1:
 | `StructsAndHostBindings` | Structs with `bindFunction()`/`bindVariable()`, smaller. |
 | `StructArguments` | Structures by value and by pointer, `->`, `&`, and the sketch calling a script function with a pointer to its own struct (see [Structures](#structures)). |
 | `HostStructs` | A structure defined once in the sketch with `SCRIPT_STRUCT`, shared with the script through `bindStruct()`, as a variable and an array. |
+| `LibraryStruct` | `BIND_STRUCT()`: structures defined in libraries (the USB keyboard's `key_return`, the C library's `struct tm`) bound to a script, layout checked. |
 | `KeyboardCallback` | An `external` variable, calling a loaded script again from an event handler. |
 | `LanguageBasics` | Every compiling step one by one, printing the AST and the generated assembly. |
 | `SaveScriptBinary` / `LoadScriptBinary` | Compile once, save to flash, load and run from another sketch. |
