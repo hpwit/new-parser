@@ -10,7 +10,7 @@
 ![Compiled](https://img.shields.io/badge/compiled%20to-Xtensa%20machine%20code-orange)
 ![Tested](https://img.shields.io/badge/tested-host%20%C2%B7%20QEMU%20%C2%B7%20fuzzer%20%C2%B7%20real%20board-brightgreen)
 
-[Quick start](#first-light-) · [The language](#what-you-can-do-with-the-language) · [More than leds](#more-than-a-led-language) · [Performance](#performance) · [Examples](#examples) · [Testing](#testing)
+[Quick start](#first-light-) · [The language](#what-you-can-do-with-the-language) · [More than leds](#more-than-a-led-language) · [Performance](#performance) · [Examples](#examples) · [Testing](#testing) · [Changes](changes.md)
 
 </div>
 
@@ -49,96 +49,7 @@ None of this changes what you write in a script, but it is why I can say that so
 
 ## 🆕 What's new
 
-### 🧩 Structures, the whole way
-
-Structures now behave like C's, in the script and across the border with your sketch:
-
-```c
-void step(ball *b)            // by pointer: b->x, b[i].x
-{
-   b->x = b->x + b->dx;
-}
-
-int distance2(ball b, int x)  // by value: the function gets its own copy
-{
-   b.x = b.x - x;
-   return b.x * b.x;
-}
-
-step(&balls[2]);              // &variable, &array[i], &variable.field
-```
-
-- **Function arguments**: by value or by pointer, with `->`, `&` and `*`.
-- **C memory layout**: fields are aligned exactly as the ESP32 compiler aligns them, so a script and your sketch read the same bytes.
-- **`bindStruct()`**: define a structure once in your sketch and every script knows it. Bind variables or arrays of that type and the script works directly on your sketch's data.
-- **`BIND_STRUCT()`**: the same for a structure from a library's header (the USB keyboard's `key_return`, the C library's `struct tm`): its definition is made from the C type and checked against C's layout.
-- **Your sketch can call a script function with a pointer to its own structure**, e.g. a keyboard handler `void keyboard(key_event *k)`.
-- Pointer fixes on the way: a pointer passed as the first argument (or declared as a local) was overwritten by `p[i] = v`, and reading `*p` gave the wrong value.
-
-Every case is checked against the same code compiled by GCC on an emulated ESP32. → [Structures](#structures)
-
-### 🗂️ A script scheduler, like v1's `scriptRuntime`
-
-Run several scripts at the same time, each on its own FreeRTOS task, and manage them by name:
-
-```cpp
-scriptScheduler.add("fire", fireScript);   // compile and register
-scriptScheduler.run("fire");               // main() on its own task
-scriptScheduler.pause("fire");             // ... restart(), kill(), remove()
-scriptScheduler.list();
-```
-
-```
- #  name             state      CPU%   stack   code   data core prio  function
- 1  busy             running    82.1    7296    176     32    1    1  main
- 2  blink            running     0.0    7336     64     24  any    1  main
-    core 0 load 0.0%   core 1 load 83.7%
-```
-
-`list()` shows what every script is doing and **how much CPU it uses**, measured by FreeRTOS itself, with each core's load. It is FreeRTOS all the way down (tasks, suspend/resume/delete, a mutex, run-time statistics) and uses no STL. → [The script scheduler](#the-script-scheduler), [SchedulerDemo](examples/SchedulerDemo)
-
-### 🚨 Compile errors you can show
-
-```cpp
-ScriptExecutable exec = parseScript(script);
-if (exec.isExeExists())
-   exec.execute("main");
-else
-   showCompileError();
-```
-
-```
-error   : Expecting ;
-line 5  :    a = a + 1;
-             ^
-```
-
-`showCompileError()` prints the error with the line and a `^` where it was found; `lastCompileError()` gives you the message, line and position to put on a display or a web page. → [Checking for errors](#checking-for-errors), [CompileErrors](examples/CompileErrors)
-
-### ⚡ Much faster code
-
-The compiler now keeps loop constants and array addresses in registers, moves work out of loops, compiles `a && b` as short-circuit branches like C, and only saves float registers around a call when it has to. Measured on an esp32 at 240MHz:
-
-|Test|Before|Now|Native C++|
-|:----|----:|----:|----:|
-|Mandelbrot `float`|61.7ms|**41.9ms**|33.5ms|
-|Mandelbrot `ffloat`|49.3ms|**31.5ms**|30.0ms (fixed point)|
-|Game of Life 128x128, per generation|13.7ms|**7.13ms**|5.95ms|
-|60 bouncing balls `ffloat`|7.04ms|**6.86ms**|7.02ms (fixed point)|
-
-Scripts now run at 1 to 1.3 times the time of gcc-compiled code, and the same pictures come out, checksum for checksum. → [Performance](#performance)
-
-### 🧹 No more memory lost at each compile
-
-Every successful compile used to lose about 300 bytes. Now compiling again and again keeps the free heap flat, and a large script needs about 20KB less heap while it compiles.
-
-### 🐛 More bugs found and fixed
-
-The differential fuzzer (random programs run through the compiler and as plain C) found three more miscompiles (in four failing programs), all fixed and kept as regression tests; a new frame-by-frame test covers float values kept across calls. → [Testing](#testing)
-
-### 📚 New examples
-
-[StructArguments](examples/StructArguments), [HostStructs](examples/HostStructs), [LibraryStruct](examples/LibraryStruct), [SchedulerDemo](examples/SchedulerDemo), [CompileErrors](examples/CompileErrors), [RainbowCompare](examples/RainbowCompare), [BouncingBallsCompare](examples/BouncingBallsCompare), [DirectGPIOSpeed](examples/DirectGPIOSpeed), and a [general purpose sample](#more-than-a-led-language) that has nothing to do with leds.
+Structures shared with your sketch and passed by pointer, a script scheduler, compile errors you can show, much faster code: the latest changes, with what they bring and the measurements, are in **[changes.md](changes.md)**.
 
 ---
 
@@ -1685,7 +1596,7 @@ The plasma's time is the 12288 x 11 calls to `sin()`, `hypot()` and the float di
 |Game of Life|55|0.78s|
 |`MultiEffectController`|730|11s|
 
-The compiler and runtime add about 162KB of flash and 8.6KB of RAM to a sketch. The loader alone (to run a saved binary, see [Saving executables](#saving-executables)) adds 10KB of flash and 1KB of RAM. A short script needs around 30-40KB of heap to compile; `MultiEffectController` uses most of a PSRAM-less esp32's heap but fits.
+The compiler and runtime add about 162KB of flash and 8.6KB of RAM to a sketch. The loader alone (to run a saved binary, see [Saving executables](#saving-executables)) adds 10KB of flash and 1KB of RAM. A short script needs around 30-40KB of heap to compile; `MultiEffectController` uses most of a PSRAM-less esp32's heap but fits. Compiling gives back everything it allocates except the compiled script itself, so compiling again and again (a live-coding session, a scheduler replacing scripts) keeps the free heap flat.
 
 ---
 
