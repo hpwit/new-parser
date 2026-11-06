@@ -44,9 +44,12 @@ const char *error_messages[]=
 "More than one default in a switch",
 "Expecting :",
 "switch needs an integer value",
-"A structure can't be passed as an argument: pass its fields",
+"A structure passed by value must be one of the first 6 arguments",
 "Too many fields in the structure",
-"Structure already defined differently (bindStruct)"
+"Structure already defined differently (bindStruct)",
+"This member can't be used through a pointer (only plain numbers and char)",
+"* needs a pointer variable",
+"Can't take the address of this variable"
 
 };
 void display_error(error_message_struct *err){

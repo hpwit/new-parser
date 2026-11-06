@@ -47,6 +47,9 @@ switchNeedsInteger,
 structArgument,
 structTooManyFields,
 structRedefined,
+pointerMemberType,
+derefNotPointer,
+addressNotPossible,
 };
 struct error_message_struct
 {

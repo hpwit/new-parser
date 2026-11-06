@@ -969,6 +969,23 @@ struct TernaryScope
 };
 }
 
+// A variable declared `S *p` (not an array `S p[N]`, not a member).
+static bool isStructPointer(NodeToken *nd)
+{
+    if (!nd->isPointer || nd->type != TokenUserDefinedVariable || nd->_vartype == EOF_VARTYPE)
+        return false;
+    const char *t = nd->getTargetText();
+    return t == NULL || t[0] != '@';
+}
+
+static NodeToken numberNodeOf(int value)
+{
+    Token t = Token(TokenNumber, __int__);
+    t.addText(string_format("%d", value));
+    return NodeToken(&t, numberNode);
+}
+
+
 void Parser::parseFactor()
 {
 #ifdef PARSER_DEBUG
@@ -978,19 +995,19 @@ void Parser::parseFactor()
     Error.error = 0;
     TernaryScope ownExpressions(0);
 
+    // *p and &x apply to the variable read below, and to it alone: the
+    // flags they used to set stayed on for the rest of the statement
+    bool derefRead = false;
+    bool addressOf = false;
     if (Match(TokenStar) && Match(TokenIdentifier, 1))
     {
-        _asPointer = true;
-
+        derefRead = true;
         next();
-        // return;
     }
     if (Match(TokenUppersand) && Match(TokenIdentifier, 1))
     {
-        isPointer = true;
-        // printf("qsldkqsld\n");
+        addressOf = true;
         next();
-        // return;
     }
     if (current()->getType() == TokenEndOfFile)
     {
@@ -1132,6 +1149,34 @@ void Parser::parseFactor()
         if (Error.error)
         {
             return;
+        }
+        if (derefRead)
+        {
+            // *p reads p[0]; it used to give the pointer's own address
+            if (!tmp_sav->isPointer || tmp_sav->children_size() > 0 || isStructPointer(tmp_sav))
+            {
+                RETURN_ERROR(derefNotPointer)
+            }
+            NodeToken c = NodeToken(changeTypeNode);
+            c._nodetype = changeTypeNode;
+            c.type = TokenKeywordVarType;
+            c._vartype = __int__;
+            tmp_sav->addChild(c)->addChild(numberNodeOf(0));
+        }
+        if (addressOf)
+        {
+            // the visitors' address mode: globals and bound variables
+            // (element, member included), and locals kept in the frame
+            // (an element included, not a member)
+            bool local = tmp_sav->_nodetype == localVariableNode;
+            if (!(tmp_sav->_nodetype == globalVariableNode || tmp_sav->_nodetype == extGlobalVariableNode || local) ||
+                (local && (tmp_sav->type == TokenUserDefinedVariableMember || tmp_sav->children_size() > 1)))
+            {
+                RETURN_ERROR(addressNotPossible)
+            }
+            tmp_sav->asPointer = true;
+            if (change_type.size() > 0)
+                change_type.back()->isPointer = true;
         }
 
         if (change_type.size() > 0)
@@ -2972,11 +3017,9 @@ void Parser::parseCreateArguments()
 
         return;
     }
-    // A structure of the script passed by value has no calling convention
-    // here: its parameter's type lookup read past the built-in types and
-    // crashed the compiler. Say so instead.
-    if (findStruct(current()->getText()) > -1 && !Match(TokenStar, 1))
-        RETURN_ERROR(structArgument)
+    // arguments before the one being read (a struct's method has its
+    // `this` first)
+    int nbArgs = isStructFunction ? 1 : 0;
     parseType();
     if (Error.error)
     {
@@ -3000,7 +3043,10 @@ void Parser::parseCreateArguments()
 
     _is_variable_as_register.set(false);
 
-    if (_for_depth_reg.get() <= _MAX_FOR_DEPTH_REG_2)
+    // a pointer stays in a frame slot: register variables have no code
+    // for p[i] or *p, a store to either overwrote the pointer itself
+    // (promoteFrameSlots() still moves it to a register when it can)
+    if (_for_depth_reg.get() <= _MAX_FOR_DEPTH_REG_2 && !_nd.isPointer && _nd.type != TokenUserDefinedVariable)
     {
         _is_variable_as_register.set(true);
     }
@@ -3016,10 +3062,13 @@ void Parser::parseCreateArguments()
     _is_variable_as_register.set(false);
     current_node->addChild(_nd);
     current_cntx->addChildClear(_nd);
+    nbArgs++;
     while (Match(TokenComma))
     {
         next();
-        if (findStruct(current()->getText()) > -1 && !Match(TokenStar, 1))
+        // by value, a struct comes as its address in a2..a7, which the
+        // copy at entry reads (_visitdefInputArgumentsNode())
+        if (findStruct(current()->getText()) > -1 && !Match(TokenStar, 1) && nbArgs >= 6)
             RETURN_ERROR(structArgument)
         parseType();
         if (Error.error)
@@ -3049,6 +3098,7 @@ void Parser::parseCreateArguments()
 
         current_node->addChild(_nd);
         current_cntx->addChild(_nd);
+        nbArgs++;
     }
 
     Error.error = 0;
@@ -3076,6 +3126,60 @@ char *findForWhile(bool forBreak)
         return p->getTargetText();
     }
     return NULL;
+}
+
+// p[i].field, field of type T at offset o in a struct of size S, is the
+// T at ((T *)p)[(i * S + o) / sizeof(T)]: C's alignment makes both
+// divisions exact. The node becomes that T * access, which the pointer
+// codegen (frame slot, global, external) already handles for loads,
+// stores and compound assignments. current() is the field's name.
+void Parser::lowerPointerMember(NodeToken *nd)
+{
+    varType *st = _userDefinedTypes.getptr(nd->_vartype);
+    int i = findMember(nd->_vartype, current()->getText());
+    if (i < 0)
+        RETURN_ERROR(memberdoesnotexist)
+    varType *field = &_varTypes[st->types[i]];
+    int sz = field->total_size;
+    if (st->types[i] == __userDefined__ || field->size != 1 || sz < 1 || st->_varSize % sz != 0 ||
+        st->starts[i] % sz != 0 || nd->children_size() > 1)
+        RETURN_ERROR(pointerMemberType)
+    int stride = st->_varSize / sz;
+    int offset = st->starts[i] / sz;
+    if (nd->children_size() == 0)
+    {
+        NodeToken c = NodeToken(changeTypeNode);
+        c._nodetype = changeTypeNode;
+        c.type = TokenKeywordVarType;
+        c._vartype = __int__;
+        nd->addChild(c)->addChild(numberNodeOf(offset));
+    }
+    else
+    {
+        NodeToken *c = nd->getChildPtr(0);
+        NodeToken *index = c->getChildPtr(0);
+        if (stride != 1)
+        {
+            NodeToken mul = NodeToken(binOpNode);
+            mul.type = TokenStar;
+            NodeToken *m = c->addChild(mul);
+            m->addChild(index);
+            m->addChild(numberNodeOf(stride));
+            c->erase(0);
+            index = c->getChildPtr(0);
+        }
+        if (offset != 0)
+        {
+            NodeToken add = NodeToken(binOpNode);
+            add.type = TokenAddition;
+            NodeToken *a = c->addChild(add);
+            a->addChild(index);
+            a->addChild(numberNodeOf(offset));
+            c->erase(0);
+        }
+    }
+    nd->type = TokenIdentifier;
+    nd->_vartype = st->types[i];
 }
 
 void Parser::getVariable(bool isStore)
@@ -3283,7 +3387,17 @@ void Parser::getVariable(bool isStore)
     // else
     // {
 
-    if (Match(TokenMember) && Match(TokenIdentifier, 1) && !Match(TokenOpenParenthesis, 2))
+    if (Match(TokenMember) && Match(TokenIdentifier, 1) && !Match(TokenOpenParenthesis, 2) &&
+        isStructPointer(current_node))
+    {
+        // p->field, p.field or p[i].field through a struct pointer
+        next();
+        lowerPointerMember(current_node);
+        if (Error.error)
+            return;
+        next();
+    }
+    else if (Match(TokenMember) && Match(TokenIdentifier, 1) && !Match(TokenOpenParenthesis, 2))
     {
         next();
         int i = 0;
@@ -3462,7 +3576,8 @@ NodeToken createNodeLocalVariableForCreation(NodeToken var, NodeToken nd)
     {
 
         NodeToken v = NodeToken(var, defLocalVariableNode);
-        if (_is_variable_as_register.get())
+        // pointers stay in a frame slot, see parseCreateArguments()
+        if (_is_variable_as_register.get() && !nd.isPointer && !var.isPointer)
         {
             v._nodetype = defLocalVariableNodeAsRegister;
             v.target = _for_depth_reg.get();
@@ -3479,7 +3594,8 @@ NodeToken createNodeLocalVariableForCreation(NodeToken var, NodeToken nd)
 
         copyPrty(&nd, &var);
         NodeToken v = NodeToken(var, defLocalVariableNode);
-        if (_is_variable_as_register.get())
+        // pointers stay in a frame slot, see parseCreateArguments()
+        if (_is_variable_as_register.get() && !nd.isPointer && !var.isPointer)
         {
             v._nodetype = defLocalVariableNodeAsRegister;
             v.target = _for_depth_reg.get();
@@ -3787,6 +3903,26 @@ varTypeEnum finduint32_t(NodeToken *nd)
     }
 }
 
+// The type an argument adds to the call's signature. A struct variable
+// (`g`, `arr[i]`, `&g`, an array or pointer `arr`/`p`) gives the struct's
+// name, as its declaration does, where it used to give "void". Passed by
+// value, it goes as its address: the function copies it (see
+// _visitdefInputArgumentsNode()).
+char *Parser::argumentTypeName(NodeToken *arg)
+{
+    NodeToken *e = arg->children_size() == 1 ? arg->getChildPtr(0) : NULL;
+    if (e == NULL || e->type != TokenUserDefinedVariable || e->_vartype == EOF_VARTYPE ||
+        !(e->_nodetype == globalVariableNode || e->_nodetype == localVariableNode ||
+          e->_nodetype == extGlobalVariableNode))
+        return arg->getVarTypeObj()->varName;
+    bool pointer = e->asPointer || (e->isPointer && e->children_size() == 0);
+    arg->isPointer = pointer;
+    // by value: a struct variable, or an element of an array or pointer
+    if (!pointer)
+        e->asPointer = true;
+    return _userDefinedTypes[e->_vartype].varName;
+}
+
 void Parser::parseArguments()
 {
 #ifdef PARSER_DEBUG
@@ -3861,9 +3997,10 @@ void Parser::parseArguments()
         return;
     }
     // string _signature = sigs.back() + current_node->getVarType()->varName;
-    char *_signature = string_format(_s_s_, all_text.getText(sigs.back()), current_node->getVarTypeObj()->varName);
+    char *_signature = string_format(_s_s_, all_text.getText(sigs.back()), argumentTypeName(current_node));
     sigs.pop_back();
     sigs.push_back(all_text.addText(_signature));
+    RETURN_IF_ERROR
     if (current_node->isPointer)
     {
 
@@ -3896,9 +4033,10 @@ void Parser::parseArguments()
         }
 
         // string _signature = sigs.back() + "|" + current_node->getVarType()->varName;
-        char *_signature = string_format(_s_s_s_, all_text.getText(sigs.back()), _separ_, current_node->getVarTypeObj()->varName);
+        char *_signature = string_format(_s_s_s_, all_text.getText(sigs.back()), _separ_, argumentTypeName(current_node));
         sigs.pop_back();
         sigs.push_back(all_text.addText(_signature));
+        RETURN_IF_ERROR
         if (current_node->isPointer)
         {
 

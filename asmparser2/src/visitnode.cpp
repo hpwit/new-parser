@@ -1500,7 +1500,16 @@ void _visitglobalVariableNode(NodeToken *nd)
     bufferText->sp.push(bufferText->get());
     if (nd->asPointer) //(&d)
     {
-        bufferText->addAfter(string_format(mov, register_numl.get(), point_regnum));
+        // &g.field: the field's offset on top of the struct's address
+        if (start == 0)
+            bufferText->addAfter(string_format(mov, register_numl.get(), point_regnum));
+        else if (start >= -128 && start <= 127)
+            bufferText->addAfter(string_format(addi, register_numl.get(), point_regnum, start));
+        else
+        {
+            bufferText->addAfter(string_format(movi, register_numl.get(), start));
+            bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), point_regnum));
+        }
         bufferText->sp.push(bufferText->get());
     }
     else if ((nd->children_size() > 0 or !nd->isPointer) && nd->type != TokenUserDefinedVariableMemberFunction) // leds[h] or h h being global)
@@ -1568,6 +1577,11 @@ void _visitlocalVariableNode(NodeToken *nd)
                 // bufferText->addAfter(string_format("l16si a%d,a%d,%d", register_numl.get(),register_numl.get(),start/1000));
             }
         }
+        else if (nd->isPointer && nd->children_size() > 0 && isBarePointer(nd))
+        {
+            // &p[i] with `T *p`: from the address p holds
+            bufferText->addAfter(string_format(l32i, register_numl.get(), 1, start));
+        }
         else
         {
             bufferText->addAfter(string_format(addi, register_numl.get(), 1, start));
@@ -1578,10 +1592,10 @@ void _visitlocalVariableNode(NodeToken *nd)
             register_numl.duplicate();
             nd->getChildPtr(0)->visitNode();
             register_numl.pop();
-            for (int i = 0; i < v->total_size; i++)
-            {
-                bufferText->addAfter(string_format(add, register_numl.get() + 1, register_numl.get() + 1, register_numl.get()));
-            }
+            // the element size, a struct's included, in one step rather
+            // than that many adds; the register below is free here
+            emitScaleByConstant(register_numl.get(), register_numl.get(), v->total_size, register_numl.get() - 1);
+            bufferText->addAfter(string_format(add, register_numl.get() + 1, register_numl.get() + 1, register_numl.get()));
             register_numl.increase();
         }
         bufferText->sp.push(bufferText->get());
@@ -3329,6 +3343,23 @@ void _visitextGlobalVariableNode(NodeToken *nd)
         }
     }
     bufferText->sp.push(bufferText->get());
+    if (nd->asPointer)
+    {
+        // &key, &probes[i], &key.field: the address, not the value
+        if (start == 0)
+            bufferText->addAfter(string_format(mov, register_numl.get(), point_regnum));
+        else if (start >= -128 && start <= 127)
+            bufferText->addAfter(string_format(addi, register_numl.get(), point_regnum, start));
+        else
+        {
+            bufferText->addAfter(string_format(movi, register_numl.get(), start));
+            bufferText->addAfter(string_format(add, register_numl.get(), register_numl.get(), point_regnum));
+        }
+        bufferText->sp.push(bufferText->get());
+        register_numl.pop();
+        register_numl.decrease();
+        return;
+    }
     for (int i = 0; i < v->size; i++)
     {
         // bufferText->addAfter(string_format("%s %s%d,%s%d,%d", v->load[i].c_str(), v->reg_name.c_str(), register_numl.get(), v->reg_name.c_str(), point_regnum, start));
@@ -3462,6 +3493,19 @@ int stek = ((nd->parent->stack_pos) / 8 + 1) * 8 + _FRAME_RESERVED;
                     if (nd->getChildPtr(i)->isPointer)
                     {
                         bufferText->addAfter(string_format("s32i a%d,a1,%d", reg_num, start));
+                    }
+                    else if (nd->getChildPtr(i)->type == TokenUserDefinedVariable)
+                    {
+                        // a struct by value arrives as its address: the
+                        // function's own copy is made here, as in C
+                        varType *st = nd->getChildPtr(i)->getVarTypeObj();
+                        int off = 0;
+                        for (int j = 0; j < st->size; j++)
+                        {
+                            bufferText->addAfter(string_format(st->load[j], 15, reg_num, off));
+                            bufferText->addAfter(string_format(st->store[j], 15, 1, start + off));
+                            off += st->sizes[j];
+                        }
                     }
                     else if (nd->getChildPtr(i)->getVarTypeObj()->_varType == __float__)
                     {

@@ -31,6 +31,10 @@
 
 ## 🆕 What's new
 
+### 🧩 Structures as function arguments
+
+Pass a structure by value (the function gets its own copy) or by pointer (`ball *b`, then `b->x` or `b[i].x`), and take addresses with `&g`, `&arr[i]`, `&g.field`. Your sketch can call a script function with a pointer to one of its own structs, e.g. a keyboard handler `void keyboard(key_event *k)`. Pointer parameters in general got fixes along the way: a pointer passed as the first argument, and reading `*p`, compiled wrongly. → [Structures as function arguments](#structures-as-function-arguments)
+
 ### 🧩 Structures shared with your sketch
 
 Define a `struct` once in your sketch and hand it to every script with `bindStruct()`; script structures now use the same memory layout as C, so a bound variable of that type (or an array of them) reads and writes your sketch's own fields. → [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
@@ -96,7 +100,7 @@ The differential fuzzer (random programs run through the compiler and as plain C
 
 ### 📚 New examples
 
-[HostStructs](examples/HostStructs), [SchedulerDemo](examples/SchedulerDemo), [CompileErrors](examples/CompileErrors), [RainbowCompare](examples/RainbowCompare), [BouncingBallsCompare](examples/BouncingBallsCompare), [DirectGPIOSpeed](examples/DirectGPIOSpeed), and a [general purpose sample](#more-than-a-led-language) that has nothing to do with leds.
+[StructArguments](examples/StructArguments), [HostStructs](examples/HostStructs), [SchedulerDemo](examples/SchedulerDemo), [CompileErrors](examples/CompileErrors), [RainbowCompare](examples/RainbowCompare), [BouncingBallsCompare](examples/BouncingBallsCompare), [DirectGPIOSpeed](examples/DirectGPIOSpeed), and a [general purpose sample](#more-than-a-led-language) that has nothing to do with leds.
 
 ---
 
@@ -148,6 +152,7 @@ None of this changes what you write in a script, but it is why I can say that so
   * [Fixed point: ffloat](#fixed-point-ffloat)
   * [Arrays and multidimensional arrays](#arrays-and-multidimensional-arrays)
   * [Structures](#structures)
+  * [Structures as function arguments](#structures-as-function-arguments)
 
 - [Saving executables](#saving-executables)
   * [Binded functions](#binded-functions)
@@ -732,7 +737,7 @@ void setup()
 > [!NOTE]
 > - Script structures follow C's layout: each field is aligned as in C (an `int` or `float` on 4 bytes, a `uint16_t` on 2), and the structure is padded to a multiple of its largest alignment. That is what lets the script and the sketch read the same bytes.
 > - A script can still define the structure itself (scripts written before `bindStruct()` keep working), as long as the definition is the same. A different one is an error: *Structure already defined differently*.
-> - A structure can't be passed by value as a function argument. Bind a variable (as above) or pass the fields.
+> - A bound structure can be passed to script functions like any other, by value or with `&`. → [Structures as function arguments](#structures-as-function-arguments)
 
 See the [HostStructs](examples/HostStructs) example.
 
@@ -982,6 +987,75 @@ Balls[i].updateBall();
 
 > [!NOTE]
 > Fields are laid out as in C (aligned like C does, padding added where needed), so they can be in any order, and a structure from your sketch can be shared with a script. → [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
+
+## Structures as function arguments
+
+As in C, a structure can be passed **by value**, and the function works on its own copy, or **by pointer**, and the function works on the caller's structure:
+
+```c
+struct ball
+{
+   int x;
+   int y;
+   int dx;
+   int dy;
+};
+
+ball balls[3];
+
+int distance2(ball b, int x, int y)   // by value: changes stay in the copy
+{
+   b.x = b.x - x;
+   b.y = b.y - y;
+   return b.x * b.x + b.y * b.y;
+}
+
+void step(ball *b)                    // by pointer
+{
+   b->x = b->x + b->dx;
+   b->y = b->y + b->dy;
+}
+
+void stepAll(ball *b, int n)          // a pointer to the first of n balls
+{
+   for (int i = 0; i < n; i++)
+      step(&b[i]);                    // or work on b[i].x directly
+}
+
+void main()
+{
+   ball one;
+   step(&one);
+   stepAll(balls, 3);                 // an array name is a pointer to its first element
+   int d = distance2(balls[1], 50, 50);
+}
+```
+
+| You write | It means |
+|---|---|
+| `void f(ball b)` | `b` is a copy of the argument |
+| `void f(ball *b)` | `b` points to the caller's structure |
+| `b->x`, `b.x`, `b[i].x` | a field through the pointer (`b.x` is accepted too) |
+| `&g`, `&arr[i]`, `&g.x`, `&b[i]` | the address of a variable, an element, a field |
+| `*p` | the value `p` points to (`p[0]`) |
+
+Your sketch can call a script function with a pointer to one of its own structures (bound with [`bindStruct()`](#sharing-a-structure-with-the-sketch)), which is how a keyboard handler gets its key:
+
+```cpp
+// script: void keyboard(key_event *k) { printfln("key %c code %d", k->key, k->code); }
+key_event k = {'a', 4};
+Arguments args;
+args.add((int)(uintptr_t)&k);
+exec.execute("keyboard", &args);
+```
+
+> [!NOTE]
+> - Through a pointer, a field must be a number or a `char` (not a `CRGB`).
+> - A structure passed by value must be one of the first 6 arguments.
+> - `&` works on global and bound variables, and on local structures and arrays; not on a local number (it lives in a register) or a field of a local structure.
+> - A `char` parameter needs a `char` argument: give an `int` parameter if you pass numbers.
+
+See the [StructArguments](examples/StructArguments) example.
 
 ---
 

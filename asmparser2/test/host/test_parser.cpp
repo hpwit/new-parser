@@ -2944,6 +2944,82 @@ static void runStructLayoutTest()
     }
 }
 
+static bool hasLine(const char *prefix)
+{
+    for (int i = 0; i < content.size(); i++)
+        if (strncmp(content.getText(i), prefix, strlen(prefix)) == 0)
+            return true;
+    return false;
+}
+
+static void runStructArgumentsTest()
+{
+    const char *name = "structs and pointers as arguments: by value, by pointer, ->, &, *p; errors";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+
+    // a pointer as first parameter was a register variable: p[1] = 5
+    // became `movi a2,5`, overwriting the pointer instead of storing
+    if (!compileForTest("int arr[4];\nvoid f(int *p){ p[1] = 5; }\nvoid main(){ f(arr); }\n"))
+        ok = false;
+    else
+    {
+        if (!hasLine("s32i") || hasLine("movi a2,5"))
+        {
+            printf("       p[1] = 5 does not store through p\n");
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
+
+    // every form compiles and assembles (their results are checked
+    // against GCC in test/qemu_full/StructArguments)
+    const char *forms =
+        "struct P { char c; int x; uint16_t h; };\nP g;\nP arr[3];\n"
+        "int byValue(P s){ s.x = s.x + 1; return s.x + s.h + s.c; }\n"
+        "void byPointer(P *p){ p->x = 7; p[1].h = 9; p.c = 1; }\n"
+        "int through(P *p){ byPointer(&p[1]); return byValue(p[0]); }\n"
+        "void main(){ P loc; int a = byValue(g) + byValue(arr[2]) + byValue(loc);\n"
+        "   byPointer(&g); byPointer(arr); byPointer(&arr[1]); byPointer(&loc); a = a + through(arr);\n"
+        "   int *q = &g.x; *q = 11; a = a + *q; }\n";
+    if (!compileForTest(forms) || !assembleForTest())
+    {
+        printf("       the struct argument forms don't compile\n");
+        ok = false;
+    }
+
+    struct
+    {
+        const char *script;
+        int error;
+    } errors[] = {
+        {"void main(){ int x = 3; int *p = &x; }\n", addressNotPossible},
+        {"int g;\nvoid main(){ int r = *g; }\n", derefNotPointer},
+        {"struct O { int v; CRGB col; };\nvoid f(O *o){ int r = o->col; }\n", pointerMemberType},
+        {"struct P { int x; };\nvoid f(int a, int b, int c, int d, int e, int f2, P s){ }\n", structArgument},
+    };
+    for (int i = 0; i < 4; i++)
+    {
+        if (compileForTest(errors[i].script) || Error.error != errors[i].error)
+        {
+            printf("       error case %d: error %d, expected %d\n", i, Error.error, errors[i].error);
+            ok = false;
+        }
+    }
+    Error.error = 0;
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     registerBallEffectBindings();
@@ -2956,6 +3032,7 @@ int main()
     runLargeGlobalsTest();
     runPointerIndexTest();
     runStructLayoutTest();
+    runStructArgumentsTest();
     runBuiltinHandleTest();
     runVarargsOrderTest();
     runCharPointerArgumentsTest();
@@ -3128,6 +3205,7 @@ int main()
         "void main(){int n; n=10; int a; a=0; int b; b=1; int i; "
         "for (i=0;i<n;i++) { int t; t=a+b; a=b; b=t; } int fib; fib=a;}";
     runCorrectnessTest("fibonacci: fib(10) == 55", fibonacciScript, 60, 55);
+
 
     // `else if` chain, with and without braces, ending in a plain else:
     // i=0 adds 1, i=1,2 add 10 each, i=3,4 add 100 each, i=5 adds 1000.

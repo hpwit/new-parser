@@ -39,6 +39,8 @@ public:
     void parseCreateArguments();
     void parseStatement();
     void getVariable(bool isStore);
+    void lowerPointerMember(NodeToken *nd);
+    char *argumentTypeName(NodeToken *arg);
     void parseComparaison();
     void parseArguments();
     void clean();

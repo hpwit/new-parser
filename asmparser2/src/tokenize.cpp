@@ -1847,6 +1847,20 @@ int tokenizer(Script *script, bool update, bool increae_line,
         if (c == '-')
         {
             c2 = script->nextChar();
+            if (c2 == '>')
+            {
+                // p->field: the same token as '.', the parser reads a
+                // member through a struct pointer either way
+                t = Token(TokenMember, EOF_VARTYPE, _token_line);
+                if (_for_display)
+                    t.addText("->");
+                t.line = _token_line;
+                t.pos = pos_in_line;
+                t.lineref = line_ref;
+                pos_in_line++;
+                _tks->push(t);
+                continue;
+            }
             if (c2 == '-')
             {
                 // token t;
