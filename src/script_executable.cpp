@@ -4,6 +4,7 @@
 #include "asm_serialize.h"
 #include "compiler_error.h"
 #include "tokenize.h"
+#include "json_binding.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -99,6 +100,29 @@ bool ScriptExecutable::executeOnly(const char *name, Arguments *args, int32_t *r
 bool ScriptExecutable::executeOnly(const char *name, const int32_t *args, int nargs, int32_t *result)
 {
     return callFunction(&exe, name, args, nargs, result);
+}
+
+bool ScriptExecutable::updateJson(const char *json)
+{
+    asm_error_message_struct err = updateJsonParameters(&exe, json);
+    if (err.error)
+        printf("json: %s\n", err.error_message ? err.error_message : "?");
+    return !err.error;
+}
+
+bool ScriptExecutable::execute(const char *name, const char *json, int32_t *result)
+{
+    runFooterIfAny(&exe); // initialization first: the JSON values win
+    if (!updateJson(json))
+        return false;
+    return callFunction(&exe, name, (const int32_t *)NULL, 0, result);
+}
+
+bool ScriptExecutable::executeOnly(const char *name, const char *json, int32_t *result)
+{
+    if (!updateJson(json))
+        return false;
+    return callFunction(&exe, name, (const int32_t *)NULL, 0, result);
 }
 
 ScriptExecutable::~ScriptExecutable()

@@ -180,6 +180,7 @@ static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binar
             break;
         }
         case 5:
+        case 6:
         {
             // A `json "path" as <type> name;` binding -- see asm_parser.cpp's
             // createBinaryHeader() json_binding case for the matching
@@ -196,6 +197,11 @@ static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binar
             jv.address = addr;
             jv.type = *binary_header;
             binary_header += 1;
+            if (type == 6) // the variable's size; unknown (0) in type 5
+            {
+                memcpy(&jv.size, binary_header, 2);
+                binary_header += 2;
+            }
             finalexe->jsonVars.push_back(jv);
             break;
         }

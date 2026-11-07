@@ -478,20 +478,37 @@ void Parser::parseProgram()
             // next iteration -- see the prev() calls below, the same
             // rewind trick upstream's parser uses for this.
             next(); // consume "json"
-            if (!Match(TokenString))
-                RETURN_ERROR(expectingJsonPathString)
-            // getText() on a string token includes its enclosing quotes
-            // (tokenize.cpp captures the whole "..." span) -- strip them,
-            // since this is used as a literal path/key, not displayed
-            // script text.
-            char *rawJsonPath = current()->getText();
-            int rawLen = (int)strlen(rawJsonPath);
             char *jsonPath;
-            if (rawLen >= 2 && rawJsonPath[0] == '"' && rawJsonPath[rawLen - 1] == '"')
-                jsonPath = strndup(rawJsonPath + 1, rawLen - 2);
+            if (Match(TokenString))
+            {
+                // getText() on a string token includes its enclosing quotes
+                // (tokenize.cpp captures the whole "..." span) -- strip them,
+                // since this is used as a literal path/key, not displayed
+                // script text.
+                char *rawJsonPath = current()->getText();
+                int rawLen = (int)strlen(rawJsonPath);
+                if (rawLen >= 2 && rawJsonPath[0] == '"' && rawJsonPath[rawLen - 1] == '"')
+                    jsonPath = strndup(rawJsonPath + 1, rawLen - 2);
+                else
+                    jsonPath = strdup(rawJsonPath);
+                next(); // consume the path string
+            }
+            else if (Match(TokenIdentifier) || Match(TokenUserDefinedVariable))
+            {
+                // v1's unquoted form: json dp.value as int g;
+                jsonPath = strdup(current()->getText());
+                next();
+                while (Match(TokenMember) && (Match(TokenIdentifier, 1) || Match(TokenUserDefinedVariable, 1)))
+                {
+                    next();
+                    char *joined = string_format("%s.%s", jsonPath, current()->getText());
+                    free(jsonPath);
+                    jsonPath = joined;
+                    next();
+                }
+            }
             else
-                jsonPath = strdup(rawJsonPath);
-            next(); // consume the path string
+                RETURN_ERROR(expectingJsonPathString)
             if (!Match(TokenKeywordAs))
             {
                 free(jsonPath);
@@ -517,6 +534,15 @@ void Parser::parseProgram()
             jnd.setText(jsonPath); // ownership transferred to the Text pool
             jnd.addTargetText(current()->getText());
             jnd._vartype = typeNd._vartype;
+            // the variable's size in bytes, `char name[16]` included, so a
+            // string or an array is never written past its end
+            {
+                int elementSize = typeNd.getVarTypeObj() != NULL ? typeNd.getVarTypeObj()->total_size : 4;
+                int count = 1;
+                if (Match(TokenOpenBracket, 1) && Match(TokenNumber, 2) && Match(TokenCloseBracket, 3))
+                    count = atoi(_tks->peek(2)->getText());
+                jnd._total_size = typeNd.isPointer ? 4 : elementSize * count;
+            }
             program.addChild(jnd);
 
             prev(); // undo parseType()'s next() past the type name

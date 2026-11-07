@@ -1209,7 +1209,7 @@ static uint8_t *createBinaryHeader(parsedLines *asm_parsed)
         {
             nb_objects++;
             SplitResult parts(it->getText(), " ");
-            binary_header_size += 1 + 2 + (uint16_t)(strlen(parts.get(0)) + 1) + 4 + 1;
+            binary_header_size += 1 + 2 + (uint16_t)(strlen(parts.get(0)) + 1) + 4 + 1 + 2;
         }
         else if (it->op == opCodeType::data)
         {
@@ -1317,7 +1317,9 @@ static uint8_t *createBinaryHeader(parsedLines *asm_parsed)
         }
         else if (it->op == opCodeType::json_binding)
         {
-            type = 5;
+            // type 6: type 5 (path, address, vartype) plus the variable's
+            // size; loaders still read type 5 from older saved binaries
+            type = 6;
             memcpy(binary_header, &type, 1);
             binary_header += 1;
 
@@ -1345,6 +1347,12 @@ static uint8_t *createBinaryHeader(parsedLines *asm_parsed)
             sscanf(parts.get(2), "%hhu", &vartype);
             memcpy(binary_header, &vartype, 1);
             binary_header += 1;
+
+            uint16_t varsize = 0;
+            if (parts.size() > 3)
+                sscanf(parts.get(3), "%hu", &varsize);
+            memcpy(binary_header, &varsize, 2);
+            binary_header += 2;
         }
         else if (it->op == opCodeType::data)
         {

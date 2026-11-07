@@ -2,6 +2,23 @@
 
 What changed, newest first. The [README](README.md) documents the library as it is now; this page is what is new and how much it brings.
 
+## Unreleased
+
+### 📄 Variables filled from JSON, as in v1
+
+```c
+json dp.value as int g2;
+json "name" as char label[16];
+json "speed" as int speed = 50;
+```
+
+```cpp
+#include <ArduinoJson.h>
+exec.execute("main", "{\"dp\":{\"value\":6},\"name\":\"first run\"}");
+```
+
+v1's `json` declarations and `execute(name, json)` work again, with v1's unquoted paths, plus `executeOnly(name, json)` and `updateJson(json)`. The support comes on by itself when the sketch includes `<ArduinoJson.h>` (6 or 7). Compared with v1, each variable is written at its own size (a `uint8_t` used to get 4 bytes, overwriting its neighbours), a string is cut to its array and ended, a JSON array fills an array, `ffloat` works, a quoted path can index an array (`"list.1"`), and a key the document lacks leaves its variable alone. Saved binaries record each variable's size; older ones still load. → [Filling variables from JSON](README.md#filling-variables-from-json), [JsonInput](examples/JsonInput)
+
 ## 2.0.0 (2026-11-07)
 
 The first tagged release of ESPLiveScript 2. Until now the library said 1.3.0, a number it inherited and never changed.

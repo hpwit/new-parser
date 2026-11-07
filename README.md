@@ -70,6 +70,8 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
 
 - [The function you call can have input parameters](#the-function-you-call-can-have-input-parameters)
 
+- [Filling variables from JSON](#filling-variables-from-json)
+
 - [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions)
   * [Access to pre-compiled variables](#access-to-pre-compiled-variables)
   * [Calling pre-compiled functions](#calling-pre-compiled-functions)
@@ -494,6 +496,57 @@ factorial of 7 is 5040
 
 > [!NOTE]
 > `execute()` calls the function directly, like one script function calling another, which is why you get the return value. `main()` is no exception: `exec.execute("main", &result)` works too.
+
+---
+
+# Filling variables from JSON
+
+A script can take its settings from a JSON document: a web page, an MQTT message or a file sends new values, and the script uses them without being recompiled. In the script, `json` says where each variable's value is in the document:
+
+```c
+json dp.value as int g2;              // the number at dp.value
+json dp2 as float x;
+json "name" as char label[16];        // a string, cut to fit if longer
+json "steps" as int steps[3];         // a JSON array fills an array
+json "speed" as int speed = 50;       // 50 unless the JSON has a "speed"
+
+void main()
+{
+   printfln("%s: x = %f, g2 = %d, speed %d", label, x, g2, speed);
+}
+```
+
+and the sketch gives the document when it runs a function:
+
+```cpp
+#include <ArduinoJson.h>               // switches the JSON support on
+#include "script_executable.h"
+
+static ScriptExecutable exec = parseScript(script);
+exec.execute("main", "{\"dp\":{\"value\":6},\"dp2\":4.5,\"name\":\"first run\",\"steps\":[1,2,3]}");
+```
+
+| Call | What it does |
+|---|---|
+| `execute(name, json, result)` | Runs the script's initialization, then fills the `json` variables, then calls `name`. A JSON value wins over the variable's initial value. |
+| `executeOnly(name, json, result)` | Fills the variables and calls `name`, without the initialization: the other globals keep their values. |
+| `updateJson(json)` | Only fills the variables (v1's `updateParam()`), for a script that runs on its own task, say. |
+
+Each returns `false` when the JSON can't be read, and says why on the console.
+
+| In the script | Meaning |
+|---|---|
+| `json a.b.c as int v;` | The value at key `a`, then `b`, then `c`. v1's unquoted form. |
+| `json "a.b" as int v;` | The same, quoted: needed when a key isn't a plain name, or for an array index (`"list.1"`, the second element). |
+| `json "p" as int v = 50;` | An initial value, used until a JSON sets it. |
+
+> [!NOTE]
+> - The types are `int`, `uint32_t`, `uint16_t`, `s_int`, `uint8_t`, `bool`, `char`, `float` and `ffloat`, each written at its own size. A `char` array takes a string, cut to its size and always ended by a 0; any other array takes a JSON array, as many elements as both have.
+> - A key the document doesn't have leaves its variable as it was, so a JSON can change only some of the settings.
+> - The JSON support needs the [ArduinoJson](https://arduinojson.org) library (version 6 or 7) and comes on when the sketch includes `<ArduinoJson.h>`. Without it, scripts using `json` still compile, and `execute(name, json)` says what to add.
+> - A compiled script saved with [parseScriptToBinary()](#saving-executables) keeps its `json` variables.
+
+See the [JsonInput](examples/JsonInput) example (v1's `jsonexample`, with strings and arrays added).
 
 ---
 
@@ -1709,6 +1762,7 @@ This is the part that is really new compared to v1:
 | `HostStructs` | A structure defined once in the sketch with `SCRIPT_STRUCT`, shared with the script through `bindStruct()`, as a variable and an array. |
 | `LibraryStruct` | `BIND_STRUCT()`: structures defined in libraries (the USB keyboard's `key_return`, the C library's `struct tm`) bound to a script, layout checked. |
 | `KeyboardCallback` | An `external` variable, calling a loaded script again from an event handler. |
+| `JsonInput` | Script variables filled from a JSON document given to `execute()`, as in v1's `jsonexample` (needs ArduinoJson). |
 | `KeyboardTest` | A USB keyboard on an ESP32-S3 driving a script: the library's `key_return` bound with `BIND_STRUCT`, `executeOnly()` on every key (see [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script)). Needs the `ESP32_USB_Host_HID` library. |
 | `LanguageBasics` | Every compiling step one by one, printing the AST and the generated assembly. |
 | `SaveScriptBinary` / `LoadScriptBinary` | Compile once, save to flash, load and run from another sketch. |
@@ -1855,6 +1909,9 @@ if (!exec.isExeExists())
 | `execute(name, args, result)` | `Arguments *args`: the arguments, up to 6 | `bool` | The same, with arguments. |
 | `execute(name, args, nargs, result)` | `const int32_t *args`, `int nargs`: up to 6 raw 32-bit arguments | `bool` | The same, from an array. |
 | `executeOnly(...)` | the same three forms | `bool` | Calls `name` **without** the initialization, so globals keep their values between calls. Use it for callbacks (keys, interrupts) on a script already started. |
+| `execute(name, json, result)` | `const char *json`: a JSON document | `bool` | Initialization, then the `json` variables filled from the document, then `name`. `false` if the JSON can't be read. Needs `<ArduinoJson.h>` included, see [Filling variables from JSON](#filling-variables-from-json). |
+| `executeOnly(name, json, result)` | the same | `bool` | The same without the initialization. |
+| `updateJson(json)` | `const char *json` | `bool` | Only fills the `json` variables. |
 | `free()` | | | Frees the compiled script now (also kills its task). The destructor does the same. |
 | `hasRuntimeError()` | | `bool` | `true` if the last call was stopped by a `safe_mode` check. |
 | `runtimeError()` | | `const runtime_error_struct &` | Which array, its size and the index, see [Runtime errors](#runtime-errors-runtime_functionsh). |
@@ -2076,3 +2133,4 @@ Available in every script, nothing to bind:
 | `_handle_` | `uint32_t` | The address of the script's own `ScriptExecutable`, to hand to the sketch (`setup_keyboard(_handle_)`, `pinInterrupt(_handle_, "f", 23)`). |
 | `true`, `false` | | `1` and `0`. |
 | `safe_mode` | keyword | Turns on index checks, see [Safe mode and arrays](#safe-mode-and-arrays). |
+| `json path as type name;` | declaration | A global variable the sketch's JSON fills, see [Filling variables from JSON](#filling-variables-from-json). |

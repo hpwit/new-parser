@@ -22,6 +22,7 @@
 #include "asm_parser.h"
 #include "asm_execute.h"
 #include "json_binding.h"
+#include "asm_serialize.h"
 
 static int passed = 0, failed = 0;
 
@@ -121,9 +122,140 @@ static void runUpdateJsonParametersTest()
     }
 }
 
+static jsonVariable *jsonVar(executable *exe, const char *path)
+{
+    for (int i = 0; i < exe->jsonVars.size(); i++)
+        if (strcmp(exe->jsonVars.get(i).json, path) == 0)
+            return exe->jsonVars.getptr(i);
+    return NULL;
+}
+
+static void runJsonTypesTest()
+{
+    const char *name = "json: v1's unquoted paths, each type at its own size, strings and arrays bounded, missing keys kept";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        Parser p;
+        p.clean();
+        Script s;
+        char *buf = strdup(
+            "json dp.value as int g2;\n"
+            "json dp2 as float x;\n"
+            "json \"name\" as char label[8];\n"
+            "json \"list\" as int cells[3];\n"
+            "json \"list.1\" as int second;\n"
+            "json \"neg\" as s_int small;\n"
+            "json \"ff\" as ffloat f;\n"
+            "json \"nope\" as int kept;\n"
+            "json \"byte\" as uint8_t u8;\n"
+            "uint8_t tail;\n"
+            "void main(){ tail = u8 + label[0] + cells[0] + small; }\n");
+        s.addContent(buf);
+        s.init();
+        p.parse(&s, &__allTokens);
+        bool ok = !Error.error;
+        if (!ok)
+            printf("       parse error=%d\n", Error.error);
+        Binary bin;
+        if (ok)
+        {
+            bin = createBinary(&footer, &header, &content, false);
+            ok = !bin.error.error;
+            if (!ok)
+                printf("       assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+        }
+        if (ok)
+        {
+            // and through a save and a load: the record keeps the sizes
+            uint32_t size = 0;
+            uint8_t *saved = serializeBinary(&bin, &size);
+            Binary loaded = deserializeBinary(saved, size);
+            executable exe = createExecutableFromBinary(&loaded);
+            ok = !exe.error.error;
+            if (!ok)
+                printf("       loader error: %s\n", exe.error.error_message ? exe.error.error_message : "?");
+            if (ok)
+            {
+                memset(exe.data, 0xAA, exe.data_size); // to see what gets written
+                asm_error_message_struct res = updateJsonParameters(&exe,
+                    "{\"dp\":{\"value\":6},\"dp2\":4.5,\"name\":\"a long label\",\"list\":[10,20,30,40],"
+                    "\"neg\":-5,\"ff\":1.5,\"byte\":200}");
+                if (res.error)
+                {
+                    printf("       updateJsonParameters: %s\n", res.error_message);
+                    ok = false;
+                }
+                struct { const char *path; int bytes; uint8_t expect[16]; } checks[] = {
+                    {"dp.value", 4, {6, 0, 0, 0}},
+                    {"name", 9, {'a', ' ', 'l', 'o', 'n', 'g', ' ', 0, 0xAA}},     // cut, ended, nothing after
+                    {"list", 13, {10, 0, 0, 0, 20, 0, 0, 0, 30, 0, 0, 0, 0xAA}},     // 3 cells, not 4
+                    {"list.1", 4, {20, 0, 0, 0}},
+                    {"neg", 3, {0xFB, 0xFF, 0xAA}},                                 // 2 bytes only
+                    {"ff", 4, {0x00, 0x80, 0x01, 0x00}},                            // 1.5 in 16.16
+                    {"nope", 4, {0xAA, 0xAA, 0xAA, 0xAA}},                          // not in the JSON
+                    {"byte", 2, {200, 0xAA}},                                       // 1 byte only
+                };
+                for (auto &c : checks)
+                {
+                    jsonVariable *jv = jsonVar(&exe, c.path);
+                    if (jv == NULL)
+                    {
+                        printf("       no json variable for %s\n", c.path);
+                        ok = false;
+                        continue;
+                    }
+                    if (memcmp(exe.data + jv->address, c.expect, c.bytes) != 0)
+                    {
+                        printf("       %s (size %d):", c.path, jv->size);
+                        for (int k = 0; k < c.bytes; k++)
+                            printf(" %02x", ((uint8_t *)exe.data)[jv->address + k]);
+                        printf("\n");
+                        ok = false;
+                    }
+                }
+                jsonVariable *xv = jsonVar(&exe, "dp2");
+                float x = 0;
+                if (xv != NULL)
+                    memcpy(&x, exe.data + xv->address, 4);
+                if (x != 4.5f)
+                {
+                    printf("       x = %f, expected 4.5\n", x);
+                    ok = false;
+                }
+                freeExecutable(&exe);
+            }
+        }
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     runUpdateJsonParametersTest();
+    runJsonTypesTest();
     printf("\n%d passed, %d failed (of %d)\n", passed, failed, passed + failed);
     return failed ? 1 : 0;
 }

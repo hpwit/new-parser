@@ -7,15 +7,12 @@
 // execute_asm.h updateParameters()/getfromJson().
 //
 // Real support (parsing `json` via ArduinoJson and writing the results
-// into ex->data) only compiles in when __JSON_OPTION__ is defined --
-// matching upstream's own opt-in guard, so declaring or even loading a
-// script that happens to use `json ... as ...;` never pulls in
-// ArduinoJson as a dependency; only actually wanting to *apply* a JSON
-// document does. Without __JSON_OPTION__ this is a harmless no-op that
-// reports an error if the script actually has any jsonVars to populate,
-// matching asm_execute.cpp's callXtensaDirect's own "no-op off-target"
-// pattern -- callable either way, so callers don't need their own
-// #ifdef.
+// into ex->data) compiles in when ArduinoJson is visible to the build
+// (the sketch includes <ArduinoJson.h>) or __JSON_OPTION__ is defined,
+// so declaring or even loading a script that uses `json ... as ...;`
+// never pulls in ArduinoJson; only applying a JSON document does.
+// Without it this reports an error if the script has variables to fill,
+// and is callable either way, so callers don't need their own #ifdef.
 #include "asm_types.h"
 
 // Returns error.error == 0 on success. If `json` is NULL/empty, or the

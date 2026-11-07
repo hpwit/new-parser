@@ -201,6 +201,7 @@ struct jsonVariable
     char *json = NULL;
     uint32_t address = 0;
     uint8_t type = 0;
+    uint16_t size = 0; // bytes of the variable; 0 if unknown (older binaries)
 };
 
 // What a script's safe_mode bounds check reported the last time one

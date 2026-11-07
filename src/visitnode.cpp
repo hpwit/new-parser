@@ -3628,7 +3628,9 @@ void _visitdefExtGlobalVariableNode(NodeToken *nd)
 // populate the variable from a JSON document at execution time.
 void _visitjsonBindingNode(NodeToken *nd)
 {
-    header.addAfter(string_format(".json %s @_%s %d", nd->getText(), nd->getTargetText(), nd->_vartype));
+    // the last field: the variable's size in bytes (see parser.cpp)
+    header.addAfter(string_format(".json %s @_%s %d %u", nd->getText(), nd->getTargetText(), nd->_vartype,
+                                  (unsigned)nd->_total_size));
 }
 
 void _visitdefGlobalVariableNode(NodeToken *nd)

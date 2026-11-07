@@ -148,6 +148,18 @@ public:
     bool executeOnly(const char *name, Arguments *args, int32_t *result = NULL);
     bool executeOnly(const char *name, const int32_t *args, int nargs, int32_t *result = NULL);
 
+    // v1's execute(name, json): the script's `json path as type name;`
+    // variables take their values from the JSON document, after the
+    // initialization (so a JSON value wins over the variable's initial
+    // value) and before the function runs. A key the document lacks
+    // leaves its variable as it was. Needs <ArduinoJson.h> included in
+    // the sketch; false if the JSON can't be read (the reason printed).
+    bool execute(const char *name, const char *json, int32_t *result = NULL);
+    bool executeOnly(const char *name, const char *json, int32_t *result = NULL);
+    // Only fills the variables, without running anything (v1's
+    // updateParam()): for a script running as a task, say.
+    bool updateJson(const char *json);
+
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
     // Runs execute(name) (footer included) on its own FreeRTOS task
     // instead of blocking the caller -- e.g. so setup() can hand a

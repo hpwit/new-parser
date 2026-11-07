@@ -203,6 +203,14 @@ int main(int argc, char **argv)
                 hdr += text_size;
                 hdr += 4 + 1;
             }
+            else if (type == 6)
+            {
+                uint16_t text_size;
+                memcpy(&text_size, hdr, 2);
+                hdr += 2;
+                hdr += text_size;
+                hdr += 4 + 1 + 2; // type 6: type 5 plus the variable's size
+            }
         }
     }
 
