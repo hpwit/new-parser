@@ -19,6 +19,18 @@ exec.execute("main", "{\"dp\":{\"value\":6},\"name\":\"first run\"}");
 
 v1's `json` declarations and `execute(name, json)` work again, with v1's unquoted paths, plus `executeOnly(name, json)` and `updateJson(json)`. The support comes on by itself when the sketch includes `<ArduinoJson.h>` (6 or 7). Compared with v1, each variable is written at its own size (a `uint8_t` used to get 4 bytes, overwriting its neighbours), a string is cut to its array and ended, a JSON array fills an array, `ffloat` works, a quoted path can index an array (`"list.1"`), and a key the document lacks leaves its variable alone. Saved binaries record each variable's size; older ones still load. → [Filling variables from JSON](README.md#filling-variables-from-json), [JsonInput](examples/JsonInput)
 
+### 🔄 New settings for a running script
+
+A script running as a task sees the values `updateJson()` writes at its next read of each variable. [JsonLiveSettings](examples/JsonLiveSettings) shows how to apply several settings at once, between two frames, with a function the script calls at the top of its loop. → [Changing the settings of a running script](README.md#changing-the-settings-of-a-running-script)
+
+### 🐛 printfln with many values
+
+Found while writing that example, both fixed:
+- the 7th value and those after it never reached a called function: their stores were removed by the optimizer as never read (`printfln` with 8 values printed garbage for the last two);
+- a string passed as the 4th or 5th value after the format arrived as one byte of its address, and `%s` crashed the board.
+
+The other scripts compile to exactly the same code as before.
+
 ## 2.0.0 (2026-11-07)
 
 The first tagged release of ESPLiveScript 2. Until now the library said 1.3.0, a number it inherited and never changed.

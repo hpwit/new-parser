@@ -71,6 +71,7 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
 - [The function you call can have input parameters](#the-function-you-call-can-have-input-parameters)
 
 - [Filling variables from JSON](#filling-variables-from-json)
+  * [Changing the settings of a running script](#changing-the-settings-of-a-running-script)
 
 - [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions)
   * [Access to pre-compiled variables](#access-to-pre-compiled-variables)
@@ -547,6 +548,43 @@ Each returns `false` when the JSON can't be read, and says why on the console.
 > - A compiled script saved with [parseScriptToBinary()](#saving-executables) keeps its `json` variables.
 
 See the [JsonInput](examples/JsonInput) example (v1's `jsonexample`, with strings and arrays added).
+
+## Changing the settings of a running script
+
+A script running on its own task (`executeAsTask()`) can get new settings while it runs. `updateJson()` writes the values straight into the script's variables, from whichever task calls it, and the script reads each variable from memory every time it uses it: it sees the new value at its next read, even from the other core.
+
+Two things to keep in mind:
+
+- A value the script copied into a local variable stays old: `int s = speed;` before a loop keeps the first speed. Read the `json` variable where you need the current value.
+- The values change one after another. Each number is written in one go, so the script never sees half a number, but it can use some old and some new settings in the same frame, or half of a string.
+
+When the settings must change together, let the script pick them up itself, at a point it chooses: give it a function to call at the top of its loop, which applies the waiting JSON on the script's own task.
+
+```cpp
+static ScriptExecutable *script = NULL;
+static const char *volatile pendingJson = NULL;   // set by your web or MQTT handler
+
+void applySettings()                              // called by the script
+{
+   const char *json = __atomic_exchange_n(&pendingJson, (const char *)NULL, __ATOMIC_ACQ_REL);
+   if (json != NULL && script != NULL)
+      script->updateJson(json);
+}
+```
+
+```c
+void main()
+{
+   while (true)
+   {
+      applySettings();          // the settings change here, all at once
+      ...                       // one frame with consistent settings
+      wait(50);
+   }
+}
+```
+
+Running script code from another task at the same time, with `executeOnly(name, json)` say, would run it twice at once over the same variables: on a running script, use `updateJson()` only. See the [JsonLiveSettings](examples/JsonLiveSettings) example (run on an esp32: new settings every 2 seconds, applied between two frames).
 
 ---
 
@@ -1762,6 +1800,7 @@ This is the part that is really new compared to v1:
 | `HostStructs` | A structure defined once in the sketch with `SCRIPT_STRUCT`, shared with the script through `bindStruct()`, as a variable and an array. |
 | `LibraryStruct` | `BIND_STRUCT()`: structures defined in libraries (the USB keyboard's `key_return`, the C library's `struct tm`) bound to a script, layout checked. |
 | `KeyboardCallback` | An `external` variable, calling a loaded script again from an event handler. |
+| `JsonLiveSettings` | A script on its own task getting new JSON settings every 2 seconds, applied between two frames. esp32 only. |
 | `JsonInput` | Script variables filled from a JSON document given to `execute()`, as in v1's `jsonexample` (needs ArduinoJson). |
 | `KeyboardTest` | A USB keyboard on an ESP32-S3 driving a script: the library's `key_return` bound with `BIND_STRUCT`, `executeOnly()` on every key (see [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script)). Needs the `ESP32_USB_Host_HID` library. |
 | `LanguageBasics` | Every compiling step one by one, printing the AST and the generated assembly. |

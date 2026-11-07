@@ -5381,14 +5381,11 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
                     v = &_varTypes[__uint32_t__];
                 }
 
-                if (v->_varType == __float__)
-                {
-                    bufferText->addAfter(string_format(l32i, regbase + i, 1,i * 4 + _START_2));
-                }
-                else
-                {
-                    bufferText->addAfter(string_format(v->load[0], regbase + i,1, i * 4 + _START_2));
-                }
+                // the slot holds a whole register (s32i/ssi): a char * used
+                // to be reloaded with the char type's l8ui, passing one byte
+                // of the string's address
+                (void)v;
+                bufferText->addAfter(string_format(l32i, regbase + i, 1, i * 4 + _START_2));
             }
         }
     }

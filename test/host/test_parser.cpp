@@ -3196,6 +3196,57 @@ static void runConstantIndexAndFormatTest()
     }
 }
 
+static void runManyArgumentsTest()
+{
+    const char *name = "printfln with more than six values: the 7th on reach the stack; a string as 5th value keeps its address";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+    // 8 values: the 7th and 8th go at a1+0 and a1+4, where the called
+    // function reads them (frame-slot promotion used to delete the stores)
+    if (!compileForTest("int steps[3];\nvoid main(){ printfln(\"%d %d %d %d %d %d %d\", 1, 2, 3, 4, 5, steps[1], steps[2]); }\n"))
+        ok = false;
+    else
+    {
+        bool at0 = false, at4 = false;
+        for (int i = 0; i < content.size(); i++)
+        {
+            const char *l = content.getText(i);
+            at0 |= strncmp(l, "s32i", 4) == 0 && strstr(l, ",a1,0") != NULL;
+            at4 |= strncmp(l, "s32i", 4) == 0 && strstr(l, ",a1,4") != NULL;
+        }
+        if (!at0 || !at4)
+        {
+            printf("       7th/8th values stored at a1+0: %d, a1+4: %d\n", at0, at4);
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
+    // a char array as 5th value: parked in a stack slot, reloaded whole
+    // (it used to come back through l8ui, one byte of the address)
+    if (!compileForTest("int n;\nchar color[12];\nvoid main(){ printfln(\"%d %d %d %s\", n, n, n, color); }\n"))
+        ok = false;
+    else
+    {
+        if (hasLine("l8ui"))
+        {
+            printf("       the string's address is reloaded with l8ui\n");
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     registerBallEffectBindings();
@@ -3211,6 +3262,7 @@ int main()
     runStructArgumentsTest();
     runBindStructMacroTest();
     runConstantIndexAndFormatTest();
+    runManyArgumentsTest();
     runBuiltinHandleTest();
     runVarargsOrderTest();
     runCharPointerArgumentsTest();

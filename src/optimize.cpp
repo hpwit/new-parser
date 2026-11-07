@@ -1896,7 +1896,9 @@ static int promoteFunction(Text *text, int start, int end)
             }
             offsets[s] = off;
             weights[s] = 0;
-            bad[s] = false;
+            // below _START_2: the arguments past the sixth of a call this
+            // function makes, read there by the called function
+            bad[s] = off < _START_2;
             floatOnly[s] = true;
             nslots++;
         }
@@ -2298,10 +2300,14 @@ static bool collectSlots(LineFlow *f, int frame, long *weight, LoopCandidate *ca
         if (n != 3 || strcmp(ops[1], "a1") != 0 || strcmp(ops[0], "a1") == 0 || width == 0)
             return false;
         int off = atoi(ops[2]);
-        if (width < 0 || off < 0 || off + width > frame)
+        if (width < 0 || off < 0 || off + width > frame || off < _START_2)
         {
-            // sign-extended or in the caller's frame (arguments past the
-            // sixth): stays in memory
+            // sign-extended, in the caller's frame (arguments past the
+            // sixth), or below _START_2: the arguments past the sixth of a
+            // call this function makes, read by the called function. Those
+            // stores used to be promoted away as never read here, and
+            // printfln("%d ... %d", seven values) got garbage for the 7th
+            // on. Stays in memory.
             if (nbad == PROMOTE_MAX_SLOTS)
                 return false;
             badLo[nbad] = off;
