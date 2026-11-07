@@ -93,7 +93,7 @@ void create_leds(int o)
 
 int main()
 {
-   setPixelsize(1);
+   setPixelsize(2);
    printfln("width:%d height:%d", width, height);
    while (true)
    {
