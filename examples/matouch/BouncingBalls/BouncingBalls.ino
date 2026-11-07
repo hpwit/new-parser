@@ -150,7 +150,7 @@ static void lcdInitTask(void *done) {
   vTaskDelete(NULL);
 }
 
-// the script runs on core 0
+// the script runs on core 1, away from the display interrupts
 static void scriptTask(void *exec) {
   ((ScriptExecutable *)exec)->execute("main");
   vTaskDelete(NULL);
@@ -173,7 +173,7 @@ void setup() {
   static ScriptExecutable exec = parseScript(script);
   if (exec.isExeExists()) {
     printf("bouncing balls: %u bytes of code\n", (unsigned)exec.exe.binary_size);
-    xTaskCreatePinnedToCore(scriptTask, "script", 8192, &exec, 1, NULL, 0);
+    xTaskCreatePinnedToCore(scriptTask, "script", 8192, &exec, 1, NULL, 1);
   } else {
     showCompileError();
   }
