@@ -39,6 +39,7 @@ run_case() {
     generator="$2"
     runner_src="$3"
     timeout_secs="${4:-3}"
+    qemu_extra="$5"
     case_dir="$BUILD_DIR/$name"
     mkdir -p "$case_dir"
 
@@ -61,7 +62,7 @@ run_case() {
         -I"$case_dir" -o "$case_dir/runner.elf" "$SCRIPT_DIR/$runner_src"
 
     echo "== $name: running under QEMU ($TARGET_MACHINE) =="
-    "$QEMU" -machine "$TARGET_MACHINE" -nographic -kernel "$case_dir/runner.elf" > "$case_dir/output.log" 2>&1 &
+    "$QEMU" -machine "$TARGET_MACHINE" -nographic $qemu_extra -kernel "$case_dir/runner.elf" > "$case_dir/output.log" 2>&1 &
     qemu_pid=$!
     sleep "$timeout_secs"
     kill -9 "$qemu_pid" 2>/dev/null || true
@@ -84,7 +85,9 @@ run_case "named_function" "gen_named_function" "runner_named_function.c"
 run_case "keyboard" "gen_keyboard" "runner_keyboard.c"
 run_case "saveload" "gen_saveload" "runner_saveload.c"
 run_case "large_script" "gen_large_script" "runner_large_script.c"
-run_case "fib_timing" "gen_fib_timing" "runner_fib_timing.c" 30
+# -icount: CCOUNT counts emulated instructions, so the timing check is
+# exact whatever the load of the host (see runner_fib_timing.c)
+run_case "fib_timing" "gen_fib_timing" "runner_fib_timing.c" 30 "-icount shift=0"
 run_case "arr_index" "gen_arr_index" "runner_arr_index.c"
 run_case "footer_check" "gen_footer_check" "runner_footer_check.c"
 run_case "branch_immediate" "gen_branch_immediate" "runner_branch_immediate.c"

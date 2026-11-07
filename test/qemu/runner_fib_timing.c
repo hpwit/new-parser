@@ -59,15 +59,12 @@ int main()
 
     /* The two cycles-per-call figures should agree closely (same code,
        same per-call cost, just measured over an ~11x difference in call
-       count). Repeated runs of this exact check (on both esp32 and
-       esp32s3 QEMU machines, ~15 runs total) mostly landed within 3-6%,
-       occasionally spiked to ~11%, and once reached 18% (likely periodic
-       timer-interrupt jitter in the runtime, not the fib() codegen
-       itself -- the underlying per-call cost stayed in a narrow 5.8-6.5
-       cycles/call band across every run regardless of what this ratio
-       read). 25% comfortably covers the observed noise range (including
-       that one outlier) while still catching a genuinely broken (non-
-       linear) measurement, e.g. one off by 2x. */
+       count). run.sh runs this case with -icount, where CCOUNT counts
+       emulated instructions instead of following the host's clock: the
+       ratio is then exact (1.00x) whatever else the host is doing. Without
+       it a loaded host skewed the two measurements apart (1.68x seen with
+       a load average of 70), failing the check on nothing. 25% still
+       catches a genuinely non-linear measurement, e.g. one off by 2x. */
     double ratio = perCall1 > perCall2 ? perCall1 / perCall2 : perCall2 / perCall1;
     printf("cycles/call agreement: %.2fx (want <= 1.25x)\n", ratio);
     if (ratio > 1.25)
@@ -79,20 +76,17 @@ int main()
 
     double avgPerCall = (perCall1 + perCall2) / 2.0;
 
-    double projectedCycles3 = avgPerCall * (double)FIB_N3_CALLS;
-    double projectedSeconds3 = projectedCycles3 / (double)ESP32_CLOCK_HZ;
-    printf("projected fib(%d): %ld calls * %.3f cycles/call = %.0f cycles -> %.2f s at %.0f MHz\n",
-           FIB_N3, FIB_N3_CALLS, avgPerCall, projectedCycles3, projectedSeconds3,
-           ESP32_CLOCK_HZ / 1000000.0);
-
+    /* Under -icount these are emulated cycles, a measure of how much
+       work a call is, not how long it takes on a board (for that, see
+       examples/FibonacciTiming on real hardware: about 21.7 s for
+       fib(40) at 240 MHz). */
+    printf("projected fib(%d): %ld calls * %.3f emulated cycles/call = %.0f emulated cycles\n",
+           FIB_N3, FIB_N3_CALLS, avgPerCall, avgPerCall * (double)FIB_N3_CALLS);
     /* FIB_N4_CALLS (40,730,022,147) exceeds a 32-bit long's range on this
        target -- long long, matching the LL suffix gen_fib_timing.cpp
        emits it with. */
-    double projectedCycles4 = avgPerCall * (double)FIB_N4_CALLS;
-    double projectedSeconds4 = projectedCycles4 / (double)ESP32_CLOCK_HZ;
-    printf("projected fib(%d): %lld calls * %.3f cycles/call = %.0f cycles -> %.2f s (%.2f min) at %.0f MHz\n",
-           FIB_N4, FIB_N4_CALLS, avgPerCall, projectedCycles4, projectedSeconds4,
-           projectedSeconds4 / 60.0, ESP32_CLOCK_HZ / 1000000.0);
+    printf("projected fib(%d): %lld calls * %.3f emulated cycles/call = %.0f emulated cycles\n",
+           FIB_N4, FIB_N4_CALLS, avgPerCall, avgPerCall * (double)FIB_N4_CALLS);
 
     printf("RESULT %s\n", allPass ? "PASS" : "FAIL");
     fflush(stdout);

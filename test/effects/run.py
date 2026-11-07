@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
@@ -108,11 +109,23 @@ def check(name, compiler, gcc, qemu):
                             os.path.join(HERE, "runner_effects.c"), "-lm"], capture_output=True, text=True)
         if r.returncode != 0:
             return name, False, "runner did not link: " + r.stderr[-300:]
-        try:
-            out = subprocess.run([qemu, "-machine", "esp32", "-nographic", "-kernel", elf],
-                                 capture_output=True, text=True, timeout=300).stdout
-        except subprocess.TimeoutExpired as t:
-            out = t.stdout.decode(errors="replace") if isinstance(t.stdout, bytes) else (t.stdout or "")
+        # QEMU keeps running after the runner returns: stop it at its RESULT
+        # line instead of waiting out the 300 s timeout for every effect.
+        log = os.path.join(work, "qemu.log")
+        with open(log, "w") as logf:
+            q = subprocess.Popen([qemu, "-machine", "esp32", "-nographic", "-kernel", elf],
+                                 stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+            deadline = time.time() + 300
+            while time.time() < deadline and q.poll() is None:
+                time.sleep(0.2)
+                with open(log, "rb") as f:
+                    f.seek(max(0, os.path.getsize(log) - 4096))
+                    if b"RESULT" in f.read():
+                        break
+            q.kill()
+            q.wait()
+        with open(log, errors="replace") as f:
+            out = f.read()
         if "RESULT DONE" not in out:
             last = [l for l in out.splitlines() if l.startswith("RESULT")]
             return name, False, (last[-1] if last else "no result (crash or hang)")

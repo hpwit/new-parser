@@ -44,6 +44,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # ASMPARSER_SRC points at another copy of the compiler sources, e.g. an
@@ -465,12 +466,24 @@ def run_program(script_src, c_src, compiler, gcc, qemu, timeout=20):
                            capture_output=True, text=True)
         if r.returncode != 0:
             return "harness", "runner did not link:\n" + r.stderr[-2000:]
-        try:
-            q = subprocess.run([qemu, "-machine", "esp32", "-nographic", "-kernel", elf],
-                               capture_output=True, text=True, timeout=timeout)
-            out = q.stdout
-        except subprocess.TimeoutExpired as t:
-            out = (t.stdout or b"").decode(errors="replace") if isinstance(t.stdout, bytes) else (t.stdout or "")
+        # QEMU keeps running after the runner returns: stop it as soon as the
+        # program has printed DONE (or UNSUPPORTED) rather than waiting out
+        # the timeout every time, which only a crash or a hang still does.
+        log = os.path.join(work, "qemu.log")
+        with open(log, "w") as logf:
+            q = subprocess.Popen([qemu, "-machine", "esp32", "-nographic", "-kernel", elf],
+                                 stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+            deadline = time.time() + timeout
+            while time.time() < deadline and q.poll() is None:
+                time.sleep(0.05)
+                with open(log, errors="replace") as f:
+                    tail = f.read()
+                if "\nDONE" in tail or tail.startswith("DONE") or "UNSUPPORTED" in tail:
+                    break
+            q.kill()
+            q.wait()
+        with open(log, errors="replace") as f:
+            out = f.read()
         got = trace_of(out)
         if "UNSUPPORTED" in out:
             return "harness", out[-500:]
