@@ -26,11 +26,6 @@ int scriptRand(uint32_t s) {
   return rand() % (s + 1);
 }
 
-// show16() swaps the buffers, so every frame is drawn on a fresh copy of an older frame
-void clearscreen() {
-  memset(frame_buffer, 0, 800 * 480 * 2);
-}
-
 void show16() {
   static uint32_t frames = 0, t0 = 0;
   lcd._bus_instance.show();
@@ -54,28 +49,35 @@ char script[] = R"EOF(
 struct ball
 {
    float vx, vy, xc, yc, r;
+   // positions in the two previous frames: the buffer drawn into still holds
+   // the frame from two show16() ago, the ball is erased where it was then
+   float ox1, oy1, ox2, oy2;
    uint16_t color;
-   void drawBall()
+   void drawBall(float cx, float cy, uint16_t c)
    {
-      int startx = xc - r;
+      int startx = cx - r;
       int r2 = r * r;
-      int starty = yc - r;
-      int _xc = xc;
-      int _yc = yc;
+      int starty = cy - r;
+      int _xc = cx;
+      int _yc = cy;
       for (int i = startx; i <= _xc; i++)
          for (int j = starty; j <= _yc; j++)
          {
-            int distance = (i - xc) ^ 2 + (j - yc) ^ 2;
+            int distance = (i - cx) ^ 2 + (j - cy) ^ 2;
             if (distance <= r2)
             {
                int i2 = 2 * _xc - i;
                int j2 = 2 * _yc - j;
-               led16[j * W + i] = color;
-               led16[j * W + i2] = color;
-               led16[j2 * W + i] = color;
-               led16[j2 * W + i2] = color;
+               led16[j * W + i] = c;
+               led16[j * W + i2] = c;
+               led16[j2 * W + i] = c;
+               led16[j2 * W + i2] = c;
             }
          }
+   }
+   void eraseBall()
+   {
+      drawBall(ox2, oy2, 0);
    }
    void updateBall()
    {
@@ -101,7 +103,11 @@ struct ball
          yc = r + 1;
          vy = -vy;
       }
-      drawBall();
+      ox2 = ox1;
+      oy2 = oy1;
+      ox1 = xc;
+      oy1 = yc;
+      drawBall(xc, yc, color);
    }
    ball()
    {
@@ -111,6 +117,10 @@ struct ball
       xc = W / 2 * (rand(280) / 255 + 0.3) + 15;
       yc = H / 2 * (rand(280) / 255 + 0.3) + 15;
       color = hsv2(rand(255), 255, 255);
+      ox1 = xc;
+      oy1 = yc;
+      ox2 = xc;
+      oy2 = yc;
    }
 };
 
@@ -122,7 +132,10 @@ void main()
    printfln("number of balls:%d", num);
    while (true)
    {
-      clear();
+      // erase all the balls first, then draw them all: no full screen clear,
+      // a 768 KB memset per frame starves the panel's line copy from PSRAM
+      for (int i = 0; i < num; i++)
+         Balls[i].eraseBall();
       for (int i = 0; i < num; i++)
          Balls[i].updateBall();
       show16();
@@ -130,10 +143,16 @@ void main()
 }
 )EOF";
 
-// lcd.init() on core 0 so Bus_RGB's line copy interrupts stay off core 1, where the script draws
+// lcd.init() on core 0: Bus_RGB's line copy interrupts are allocated on the core that runs it
 static void lcdInitTask(void *done) {
   lcd.init();
   xTaskNotifyGive((TaskHandle_t)done);
+  vTaskDelete(NULL);
+}
+
+// the script runs on core 0
+static void scriptTask(void *exec) {
+  ((ScriptExecutable *)exec)->execute("main");
   vTaskDelete(NULL);
 }
 
@@ -150,12 +169,11 @@ void setup() {
   bindFunction((char *)"uint16_t", (char *)"hsv2", (char *)"int,int,int", (void *)hsv16);
   bindFunction((char *)"void", (char *)"show16", NULL, (void *)show16);
   bindFunction((char *)"uint32_t", (char *)"rand", (char *)"uint32_t", (void *)scriptRand);
-  bindFunction((char *)"void", (char *)"clear", NULL, (void *)clearscreen);
 
   static ScriptExecutable exec = parseScript(script);
   if (exec.isExeExists()) {
     printf("bouncing balls: %u bytes of code\n", (unsigned)exec.exe.binary_size);
-    exec.execute("main");
+    xTaskCreatePinnedToCore(scriptTask, "script", 8192, &exec, 1, NULL, 0);
   } else {
     showCompileError();
   }
