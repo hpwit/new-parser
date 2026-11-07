@@ -2161,6 +2161,13 @@ void bindVariable(char *type, char *name, char *arraySize, void *address);
 
 Reads and writes go straight to your variable: nothing is copied.
 
+> [!IMPORTANT]
+> An array and a pointer are bound differently, as in C:
+> - an array, `CRGB leds[12288];`: type `"CRGB"`, size `"[12288]"` or `"[]"` (no need to give it), address `(void *)leds`;
+> - a pointer variable, `uint16_t *frame;`: type `"uint16_t *"`, size `NULL`, address `(void *)&frame`. The script reads the pointer stored there, so it follows `frame` when you point it elsewhere.
+>
+> Binding an array as `"CRGB *"` with `(void *)leds` makes the script read the array's first bytes as an address: a `StoreProhibited` crash at the first `leds[i] = ...`.
+
 ### `replaceExternal()`
 
 ```cpp
