@@ -909,9 +909,12 @@ void findFunction(NodeToken *nd, char *t)
 		NodeToken *it = nd->getChildPtr(i);
 		if (it->getText() != NULL)
 		{
-			if (strstr(it->getText(), "Args") != NULL)
+			// the varargs marker is in the parameters: withArgs() is a name
+			const char *open = strchr(it->getText(), '(');
+			const char *args = open != NULL ? strstr(open, "Args") : NULL;
+			if (args != NULL)
 			{
-				int l = strstr(it->getText(), "Args") - it->getText();
+				int l = args - it->getText();
 				if (l > 0)
 					l--;
 				if (strncmp(it->getText(), t, l) == 0)

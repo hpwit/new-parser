@@ -29,7 +29,13 @@ Found while writing that example, both fixed:
 - the 7th value and those after it never reached a called function: their stores were removed by the optimizer as never read (`printfln` with 8 values printed garbage for the last two);
 - a string passed as the 4th or 5th value after the format arrived as one byte of its address, and `%s` crashed the board.
 
+- a script function whose name contains `Args` (`withArgs()`) was taken for a printf-like one and matched any function starting the same way (`withJson()`: *Function already declared*).
+
 The other scripts compile to exactly the same code as before.
+
+### 📖 Arguments, JSON variables or bound variables?
+
+A new README section compares the three ways of giving values to a script: where each value lives, when a change reaches the script, what the script's writes do, and what each costs, measured on an esp32 (a call with 3 arguments 6.1 µs, with a 3-key JSON 112 µs, a bound variable nothing to pass). It also explains what happens when your C++ code changes a bound variable while the script runs (seen at the script's next read; declare it `volatile`). → [Arguments, JSON variables or bound variables?](README.md#arguments-json-variables-or-bound-variables)
 
 ## 2.0.0 (2026-11-07)
 

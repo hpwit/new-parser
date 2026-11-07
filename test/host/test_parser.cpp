@@ -3222,6 +3222,20 @@ static void runManyArgumentsTest()
         }
         ok = assembleForTest() && ok;
     }
+    // "Args" in a function's name is a name, not printf's `...`: withArgs()
+    // used to be taken as variadic and to match any function named with...
+    if (!compileForTest("int acc;\nvoid withArgs(int a, int b){ acc = a + b; }\nvoid withJson(){ acc = 1; }\n"
+                        "void main(){ withJson(); withArgs(1, 2); }\n"))
+        ok = false;
+    else
+    {
+        if (!hasLine("call8 @_withJson()") || !hasLine("call8 @_withArgs(num|num)"))
+        {
+            printf("       a call doesn't reach its own function\n");
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
     // a char array as 5th value: parked in a stack slot, reloaded whole
     // (it used to come back through l8ui, one byte of the address)
     if (!compileForTest("int n;\nchar color[12];\nvoid main(){ printfln(\"%d %d %d %s\", n, n, n, color); }\n"))

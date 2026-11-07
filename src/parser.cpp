@@ -1517,9 +1517,13 @@ void Parser::parseFunctionCall()
                 //   bool
                 found = false;
 
-                if (strstr(extern_text.getText( binded_assets[i].sign_ref), "Args") != NULL)
+                // the varargs marker is in the parameters, not the name
+                const char *sig = extern_text.getText(binded_assets[i].sign_ref);
+                const char *open = strchr(sig, '(');
+                const char *argsMark = open != NULL ? strstr(open, "Args") : NULL;
+                if (argsMark != NULL)
                 {
-                    int l = strstr(extern_text.getText( binded_assets[i].sign_ref), "Args") - extern_text.getText( binded_assets[i].sign_ref);
+                    int l = argsMark - sig;
                     if (l > 0)
                         l--;
                     if (strncmp(extern_text.getText( binded_assets[i].sign_ref), sav_t.back().getText(), l) == 0)

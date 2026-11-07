@@ -77,6 +77,9 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
   * [Access to pre-compiled variables](#access-to-pre-compiled-variables)
   * [Calling pre-compiled functions](#calling-pre-compiled-functions)
 
+- [Arguments, JSON variables or bound variables?](#arguments-json-variables-or-bound-variables)
+  * [Changing a bound variable from your C++ code](#changing-a-bound-variable-from-your-c-code)
+
 - [CRGB and the hue function](#crgb-and-the-hue-function)
 
 - [Safe mode and arrays](#safe-mode-and-arrays)
@@ -547,7 +550,7 @@ Each returns `false` when the JSON can't be read, and says why on the console.
 > - The JSON support needs the [ArduinoJson](https://arduinojson.org) library (version 6 or 7) and comes on when the sketch includes `<ArduinoJson.h>`. Without it, scripts using `json` still compile, and `execute(name, json)` says what to add.
 > - A compiled script saved with [parseScriptToBinary()](#saving-executables) keeps its `json` variables.
 
-See the [JsonInput](examples/JsonInput) example (v1's `jsonexample`, with strings and arrays added).
+See the [JsonInput](examples/JsonInput) example (v1's `jsonexample`, with strings and arrays added), and [Arguments, JSON variables or bound variables?](#arguments-json-variables-or-bound-variables) for when to use JSON rather than arguments or bound variables.
 
 ## Changing the settings of a running script
 
@@ -598,7 +601,7 @@ A script can't do everything the Espressif compiler can: no WiFi, no SPI or I2C,
 bindVariable((char *)"type", (char *)"name_in_the_script", arraySizeOrNull, (void *)&variable);
 ```
 
-The script also needs to declare the variable `external`.
+The script also needs to declare the variable `external`. The script works on your variable itself, not a copy: what happens when your code changes it while the script runs is in [Changing a bound variable from your C++ code](#changing-a-bound-variable-from-your-c-code).
 
 Example:
 
@@ -747,6 +750,63 @@ from other function
 For bigger sketches built the same way, see [StructsAndHostBindings](examples/StructsAndHostBindings) and [BouncingBalls](examples/BouncingBalls).
 
 A variable can also have the type of one of your sketch's structures: see [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch).
+
+---
+
+# Arguments, JSON variables or bound variables?
+
+There are three ways to give values to a script. They differ in where the value lives, when a change reaches the script, and what it costs.
+
+```c
+void run(int speed) { ... }                  // 1. an argument
+json "speed" as int speed;                   // 2. a JSON variable
+external int speed;                          // 3. a bound variable (bindVariable() in the sketch)
+```
+
+| | Argument | JSON variable | Bound variable |
+|---|---|---|---|
+| The sketch gives it with | `execute(name, args)`, at each call | a JSON text: `execute(name, json)` or `updateJson(json)` | nothing: the script uses the sketch's variable itself |
+| Where the value is | a register, for that call only | a variable of the script (a copy) | the sketch's own variable (no copy) |
+| A change reaches the script | at the next call | when `updateJson()` runs, at the script's next read | at once: the script's next read |
+| What the script writes | stays in the function | stays in the script | goes straight into the sketch's variable |
+| Cost per call | 6.1 µs with 3 values (4.2 µs with none) | 112 µs with a 3-key JSON, mostly ArduinoJson reading the text | nothing to pass |
+| Cost per read in the script | none: it is in a register | one load | two loads (the address, then the value) |
+| Types | numbers, `char *`, structures and pointers | numbers, `char` strings, arrays | any: arrays, structures, pointers |
+| Best for | values that change at every call | settings that arrive as text (web page, MQTT, file) | data both sides use while the script runs (a sensor, a led buffer) |
+
+Costs measured on an esp32 at 240MHz, 1000 calls each. A JSON document costs about 100 µs to read whatever the function does with it: give JSON when settings change, not at every frame.
+
+## Changing a bound variable from your C++ code
+
+The script reads a bound variable from your variable's memory every time it uses it, and writes go straight there too. So when your code changes the variable, the script sees the new value at its next read, even while it runs on its own task, even on the other core; and what the script writes, your code sees at once.
+
+```cpp
+volatile int brightness = 100;                // shared with a running script
+bindVariable((char *)"int", (char *)"brightness", NULL, (void *)&brightness);
+...
+exec.executeAsTask("main");                   // the script loops, reading brightness
+
+void loop()
+{
+   brightness = analogRead(34) / 16;          // the script's next frame uses it
+}
+```
+
+On an esp32, with `loop()` halving `brightness` every 1.5 s while the script prints it every 10 frames:
+
+```
+script: frame 30, brightness 100
+sketch: brightness = 50 (frames counted by the script: 31)
+script: frame 40, brightness 50
+sketch: brightness = 25 (frames counted by the script: 61)
+script: frame 70, brightness 25
+```
+
+> [!NOTE]
+> - Declare a variable `volatile` when your code and a running script both use it: the C++ compiler otherwise keeps it in a register in a loop and doesn't see the script's writes, or writes yours late.
+> - A copy stays old: `int b = brightness;` in the script keeps the value of that moment. Read the bound variable where you need the current one.
+> - Each number is read and written in one go, so neither side ever sees half a number. But several variables change one after another, and an array, a string or a structure can be read half old, half new. When several values must change together, let the script take them at a point it chooses, through a function it calls (as in [Changing the settings of a running script](#changing-the-settings-of-a-running-script)), or use a FreeRTOS mutex in a function both call.
+> - Between two calls from the same task, as in the example of [Access to pre-compiled variables](#access-to-pre-compiled-variables), none of this matters: each call sees the variable as it is when it starts.
 
 ---
 
