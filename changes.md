@@ -35,7 +35,7 @@ The other scripts compile to exactly the same code as before.
 
 ### 🕹️ v1's display-icon script runs
 
-`sc_examples/dsiplayicon.sc`, which v1 itself rejected, compiles and runs: a `uint8_t` array now goes to a `char *` parameter as in C (tried when nothing matches exactly), and a `CRGB` array to a `CRGB *` parameter (its call signature used to read `void *`). Its first 100 frames, from the emulated ESP32, are on the frames page. "Function not found" messages are no longer cut short on long signatures.
+`sc_examples/dsiplayicon.sc`, which v1 itself rejected, compiles and runs: a `uint8_t` array now goes to a `char *` parameter as in C (tried when nothing matches exactly), and a `CRGB` array to a `CRGB *` parameter (its call signature used to read `void *`). The new [DisplayIcon](examples/DisplayIcon) example runs it; its first 100 frames, from the emulated ESP32, are in [dsiplayicon.gif](examples/DisplayIcon/dsiplayicon.gif), and a real esp32 computes the same frames (same checksums). "Function not found" messages are no longer cut short on long signatures.
 
 ### 📖 Arguments, JSON variables or bound variables?
 
