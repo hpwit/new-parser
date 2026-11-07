@@ -3261,6 +3261,48 @@ static void runManyArgumentsTest()
     }
 }
 
+static void runUnsizedArrayTest()
+{
+    const char *name = "an unsized array name[] is indexed directly, a T* is dereferenced";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    static uint8_t hostRaw[16];
+    static uint8_t *hostPtr = hostRaw;
+    bindVariable((char *)"uint8_t", (char *)"unsizedRaw", (char *)"[]", (void *)hostRaw);
+    bindVariable((char *)"uint8_t *", (char *)"unsizedPtr", NULL, (void *)&hostPtr);
+    bool ok = compileForTest("external uint8_t unsizedRaw[];\nexternal uint8_t *unsizedPtr;\n"
+                             "void main(){ int i = 2; unsizedRaw[i] = 1; unsizedPtr[i] = 2; }\n");
+    int derefs = 0;
+    bool rawDeref = false;
+    for (int i = 0; ok && i + 1 < content.size(); i++)
+    {
+        const char *l = content.getText(i), *n = content.getText(i + 1);
+        int r1 = -1, r2 = -2, r3 = -3;
+        bool deref = sscanf(n, "l32i a%d,a%d,%d", &r1, &r2, &r3) == 3 && r1 == r2 && r3 == 0;
+        if (strstr(l, "@_ext_unsizedRaw") != NULL && deref)
+            rawDeref = true;
+        if (strstr(l, "@_ext_unsizedPtr") != NULL && deref)
+            derefs++;
+    }
+    if (ok && (rawDeref || derefs != 1))
+    {
+        printf("       unsized array dereferenced: %d, pointer dereferenced: %d (expected 0 and 1)\n", rawDeref, derefs);
+        ok = false;
+    }
+    if (ok)
+        ok = assembleForTest();
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     registerBallEffectBindings();
@@ -3272,6 +3314,7 @@ int main()
     runCompileErrorReportTest();
     runLargeGlobalsTest();
     runPointerIndexTest();
+    runUnsizedArrayTest();
     runStructLayoutTest();
     runStructArgumentsTest();
     runBindStructMacroTest();

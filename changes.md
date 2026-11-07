@@ -37,6 +37,10 @@ The other scripts compile to exactly the same code as before.
 
 A new README section compares the three ways of giving values to a script: where each value lives, when a change reaches the script, what the script's writes do, and what each costs, measured on an esp32 (a call with 3 arguments 6.1 µs, with a 3-key JSON 112 µs, a bound variable nothing to pass). It also explains what happens when your C++ code changes a bound variable while the script runs (seen at the script's next read; declare it `volatile`). → [Arguments, JSON variables or bound variables?](README.md#arguments-json-variables-or-bound-variables)
 
+### 🐛 Unsized arrays
+
+An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", leds)`, `external CRGB leds[];`) was taken for a pointer and dereferenced when indexed, since pointers are, and crashed at the first `leds[i] = ...`. It is an array again. The README's `bindVariable()` reference now says how an array and a pointer are each bound.
+
 ## 2.0.0 (2026-11-07)
 
 The first tagged release of ESPLiveScript 2. Until now the library said 1.3.0, a number it inherited and never changed.

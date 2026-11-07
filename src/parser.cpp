@@ -956,6 +956,11 @@ void Parser::parseVariableForCreation()
             var.isPointer = true;
             var._nodetype = defGlobalVariableNode; // we can't have arrays in the stack
                                                    // var._total_size = stringToInt(num->text);
+            // `name[]`: an array of one dimension, its size unknown. Without
+            // this mark it looked like `T *name`, and since pointers are
+            // dereferenced when indexed, a[i] read the array's first bytes
+            // as an address (bindVariable("CRGB", "leds", "[]", leds)).
+            var.addTargetText(string_format(_arobase_d, 1));
             next();
 
             Error.error = 0;
