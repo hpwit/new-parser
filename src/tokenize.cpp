@@ -2274,7 +2274,10 @@ int findMember(varType *v, char * member)
 }
 int findMember(uint8_t _v, char * member)
 {
-
+    // not a script structure (a CRGB, say): no member. Reading past the
+    // table asserted, and rebooted the board on `leds[3].red`
+    if (_v >= _userDefinedTypes.size())
+        return -1;
     varType *v = _userDefinedTypes.getptr(_v);
     // printf("zerk dfin %d %s\n",v->size,v->varName.c_str());
    return findMember(v,member);

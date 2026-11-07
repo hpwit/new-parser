@@ -3252,6 +3252,15 @@ static void runManyArgumentsTest()
         }
         ok = assembleForTest() && ok;
     }
+    // a member of a CRGB (not a script structure): an error, not an
+    // assertion reading past the structure table
+    if (compileForTest("external CRGB crgbLeds[4];\nvoid main(){ crgbLeds[3].red = 255; }\n") ||
+        Error.error != memberdoesnotexist)
+    {
+        printf("       crgbLeds[3].red: error %d, expected %d\n", Error.error, (int)memberdoesnotexist);
+        ok = false;
+    }
+    Error.error = 0;
     // a char array as 5th value: parked in a stack slot, reloaded whole
     // (it used to come back through l8ui, one byte of the address)
     if (!compileForTest("int n;\nchar color[12];\nvoid main(){ printfln(\"%d %d %d %s\", n, n, n, color); }\n"))

@@ -75,6 +75,7 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
 
 - [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions)
   * [Access to pre-compiled variables](#access-to-pre-compiled-variables)
+  * [Binding an array or a pointer](#binding-an-array-or-a-pointer)
   * [Calling pre-compiled functions](#calling-pre-compiled-functions)
 
 - [Arguments, JSON variables or bound variables?](#arguments-json-variables-or-bound-variables)
@@ -682,6 +683,62 @@ old value:15 new value:17
 ...
 9:27
 ```
+
+## Binding an array or a pointer
+
+An array and a pointer are bound differently, because they are different things in C:
+
+- an **array**, `CRGB leds[64];`, *is* the pixels: you give the array's own address, and its size (or `"[]"` to leave it out);
+- a **pointer**, `CRGB *frame;`, is a variable that *holds* the address of the pixels: you give the address of that variable, and the script reads the pointer each time before going to the pixels.
+
+```cpp
+#include "script_executable.h"
+#include "binding.h"
+
+CRGB leds[64];                 // an array
+CRGB bufferA[64], bufferB[64];
+CRGB *frame = bufferA;         // a pointer
+
+char script[] = R"EOF(
+void main()
+{
+   leds[3] = CRGB(255, 0, 0);     // into the array leds
+   frame[3] = CRGB(0, 255, 0);    // where frame points
+}
+)EOF";
+
+void setup()
+{
+   // the array: its own address; the size can be left out with "[]"
+   bindVariable((char *)"CRGB", (char *)"leds", (char *)"[]", (void *)leds);
+   // the pointer: the address of the pointer variable, no size
+   bindVariable((char *)"CRGB *", (char *)"frame", NULL, (void *)&frame);
+
+   static ScriptExecutable exec = parseScript(script);
+   exec.execute("main");          // leds[3] is red, bufferA[3] green
+
+   frame = bufferB;               // point elsewhere: the script follows
+   exec.execute("main");          // bufferB[3] is green
+}
+```
+
+On an esp32 it prints `leds[3].red = 255, bufferA[3].green = 255`, then `bufferB[3].green = 255`.
+
+| | Array | Pointer |
+|---|---|---|
+| Type | `"CRGB"` | `"CRGB *"` |
+| Size | `"[64]"`, or `"[]"` | `NULL` |
+| Address | `(void *)leds` | `(void *)&frame` |
+| The script, for `x[i]` | goes straight to element `i` | loads the pointer, then goes to element `i` |
+| Use it for | a buffer that stays where it is | a buffer you change while the script runs (double buffering) |
+
+> [!WARNING]
+> Mixing them up crashes the board. `bindVariable("CRGB *", "leds", "", (void *)leds)` says that a pointer is stored at the array's address: the script reads the first pixels' bytes as an address and writes there (`StoreProhibited`, with a small `EXCVADDR` such as `0x00007a34`). Before 2.0.0 that binding happened to work, because the script didn't read pointers; it broke every real pointer instead. Give the array type with `"[]"`, or bind a pointer variable with `&`.
+
+> [!IMPORTANT]
+> The script's own declaration wins over the binding's type. A script that declares `external CRGB leds[96, 128];` uses the bound address as the pixels themselves, whatever the binding says:
+> - bind an **array** for it; that suits every script, declared or not, and it is the only choice for a two-dimensional `leds[y, x]`;
+> - a **pointer** binding only suits scripts that don't declare the variable, or declare it `external CRGB *leds;`. A script declaring it as an array would take the address of your pointer variable for its pixels and write over the memory around it: on an esp32, `rainbow.ino`'s Mandelbrot script did that and the board panicked at boot ("Panic handler entered multiple times").
 
 ## Calling pre-compiled functions
 
@@ -2161,12 +2218,7 @@ void bindVariable(char *type, char *name, char *arraySize, void *address);
 
 Reads and writes go straight to your variable: nothing is copied.
 
-> [!IMPORTANT]
-> An array and a pointer are bound differently, as in C:
-> - an array, `CRGB leds[12288];`: type `"CRGB"`, size `"[12288]"` or `"[]"` (no need to give it), address `(void *)leds`;
-> - a pointer variable, `uint16_t *frame;`: type `"uint16_t *"`, size `NULL`, address `(void *)&frame`. The script reads the pointer stored there, so it follows `frame` when you point it elsewhere.
->
-> Binding an array as `"CRGB *"` with `(void *)leds` makes the script read the array's first bytes as an address: a `StoreProhibited` crash at the first `leds[i] = ...`.
+An array and a pointer are bound differently (`"CRGB"` with `"[]"` and the array's address, or `"CRGB *"` with the pointer variable's address): see [Binding an array or a pointer](#binding-an-array-or-a-pointer).
 
 ### `replaceExternal()`
 
