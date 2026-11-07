@@ -14,6 +14,19 @@ NodeToken main_context,ext_function_cntx,*sav_current_cntx;
 NodeToken functions;
 Stack<uint16_t> targetList;
 vect<uint16_t> sigs;
+// The same call signatures with byte arrays (uint8_t *) written char *:
+// tried when no function matches, so a uint8_t array goes to a char *
+// parameter as it did in v1 (and does in C).
+vect<uint16_t> byteSigs;
+static void appendSignature(const char *text, const char *byteText)
+{
+    char *s = string_format(_s_s_, all_text.getText(sigs.back()), text);
+    sigs.pop_back();
+    sigs.push_back(all_text.addText(s));
+    char *b = string_format(_s_s_, all_text.getText(byteSigs.back()), byteText);
+    byteSigs.pop_back();
+    byteSigs.push_back(all_text.addText(b));
+}
 vect<int> nb_sav_args;
 vect<int> nb_args;
 int nb_argument = 0;
@@ -1241,7 +1254,10 @@ void Parser::parseFactor()
                     // the call's signature said "none*", so no function
                     // taking a char * matched (only a string literal, which
                     // sets the type itself, did).
-                    (tmp_sav->_vartype == __char__ && change_type.back()->isPointer))
+                    (tmp_sav->_vartype == __char__ && change_type.back()->isPointer) ||
+                    // a CRGB array: the signature said "void *", and no
+                    // function taking a CRGB * could be called with one
+                    ((tmp_sav->_vartype == __CRGB__ || tmp_sav->_vartype == __CRGBW__) && change_type.back()->isPointer))
                 {
                     change_type.back()->_vartype = tmp_sav->_vartype;
                 }
@@ -1408,7 +1424,7 @@ static void readableSignature(const char *sig, char *out, int size)
 // of that name that do exist (script or bound), in error_detail.
 static void describeMissingFunction(const char *wanted)
 {
-    char text[64];
+    char text[120];
     // `P a = make();` with a struct P looks for P's method make(): when
     // a plain make() exists, the struct return is what doesn't work
     const char *method = strstr(wanted, "._@");
@@ -1490,9 +1506,29 @@ void Parser::parseFunctionCall()
     // NodeToken d = current_node->children->back();
     current_node->children_pop();
 
+    char *byteSignature = string_format(_s_s_, sav_t.back().getText(), all_text.getText(byteSigs.back()));
     sav_t.backptr()->addText(string_format(_s_s_, sav_t.back().getText(), all_text.getText(sigs.back())));
     sigs.pop_back();
+    byteSigs.pop_back();
     findFunction(&functions, sav_t.back().getText());
+    if (search_result == NULL && strcmp(byteSignature, sav_t.back().getText()) != 0)
+    {
+        // no exact match: with uint8_t arrays as char *, a script or a
+        // bound function may take them
+        bool bound = false;
+        for (int i = 0; i < binded_assets.size() && !bound; i++)
+            bound = binded_assets[i].type == function &&
+                    strcmp(extern_text.getText(binded_assets[i].sign_ref), byteSignature) == 0;
+        findFunction(&functions, byteSignature);
+        if (search_result != NULL || bound)
+        {
+            sav_t.backptr()->addText(byteSignature); // takes the string
+            byteSignature = NULL;
+        }
+        else
+            findFunction(&functions, sav_t.back().getText());
+    }
+    free(byteSignature);
     // NodeToken *t =search_result;
     if (search_result == NULL)
     {
@@ -4063,6 +4099,7 @@ void Parser::parseArguments()
     // resParse result;
     // signature="(";
     sigs.push_back(all_text.addText(_openparenthesis_));
+    byteSigs.push_back(all_text.addText(_openparenthesis_));
     nb_argument = 0;
     nb_args.push_back(0);
     // NodeInputArguments arg;
@@ -4096,10 +4133,7 @@ void Parser::parseArguments()
         // result._nd = arg;
         // printf("on retourne with argh ide\n");
         current_node = current_node->parent;
-        char *_signature = string_format(_s_s_, all_text.getText(sigs.back()), _closeparenthesis_);
-        // string _signature = sigs.back() + ")";
-        sigs.pop_back();
-        sigs.push_back(all_text.addText(_signature));
+        appendSignature(_closeparenthesis_, _closeparenthesis_);
         next();
         return;
     }
@@ -4128,18 +4162,13 @@ void Parser::parseArguments()
     {
         return;
     }
-    // string _signature = sigs.back() + current_node->getVarType()->varName;
-    char *_signature = string_format(_s_s_, all_text.getText(sigs.back()), argumentTypeName(current_node));
-    sigs.pop_back();
-    sigs.push_back(all_text.addText(_signature));
-    RETURN_IF_ERROR
-    if (current_node->isPointer)
     {
-
-        // string _signature = sigs.back() + "*";
-        char *_signature = string_format(_s_s_, all_text.getText(sigs.back()), _star_);
-        sigs.pop_back();
-        sigs.push_back(all_text.addText(_signature));
+        const char *typeName = argumentTypeName(current_node);
+        RETURN_IF_ERROR
+        bool bytes = current_node->isPointer && current_node->_vartype == __uint8_t__;
+        appendSignature(typeName, bytes ? "char" : typeName);
+        if (current_node->isPointer)
+            appendSignature(_star_, _star_);
     }
     current_node = current_node->parent;
     change_type.pop_back();
@@ -4165,16 +4194,14 @@ void Parser::parseArguments()
         }
 
         // string _signature = sigs.back() + "|" + current_node->getVarType()->varName;
-        char *_signature = string_format(_s_s_s_, all_text.getText(sigs.back()), _separ_, argumentTypeName(current_node));
-        sigs.pop_back();
-        sigs.push_back(all_text.addText(_signature));
-        RETURN_IF_ERROR
-        if (current_node->isPointer)
         {
-
-            char *_signature = string_format(_s_s_, all_text.getText(sigs.back()), _star_);
-            sigs.pop_back();
-            sigs.push_back(all_text.addText(_signature));
+            const char *typeName = argumentTypeName(current_node);
+            RETURN_IF_ERROR
+            bool bytes = current_node->isPointer && current_node->_vartype == __uint8_t__;
+            appendSignature(_separ_, _separ_);
+            appendSignature(typeName, bytes ? "char" : typeName);
+            if (current_node->isPointer)
+                appendSignature(_star_, _star_);
         }
         current_node = current_node->parent;
         change_type.pop_back();
@@ -4186,10 +4213,7 @@ void Parser::parseArguments()
     next();
     Error.error = 0;
     // result._nd = arg;
-    _signature = string_format(_s_s_, all_text.getText(sigs.back()), _closeparenthesis_);
-    // string _signature = sigs.back() + ")";
-    sigs.pop_back();
-    sigs.push_back(all_text.addText(_signature));
+    appendSignature(_closeparenthesis_, _closeparenthesis_);
     current_node = current_node->parent;
     return;
 }
@@ -4210,6 +4234,7 @@ void Parser::clean()
     targetList.clear();
   // printf("6\n");
     sigs.clear();
+    byteSigs.clear();
    // printf("7\n");
     nb_sav_args.clear();
    // printf("8\n");

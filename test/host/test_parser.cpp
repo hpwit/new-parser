@@ -3236,6 +3236,22 @@ static void runManyArgumentsTest()
         }
         ok = assembleForTest() && ok;
     }
+    // v1's dsiplayicon.sc: a uint8_t array to a char * parameter, a CRGB
+    // array to a CRGB * one (its signature said "void *")
+    if (!compileForTest("uint8_t pic[4];\nCRGB pal[2];\nint n;\n"
+                        "void show(char *p, CRGB *c){ n = p[1]; }\n"
+                        "void bytes(uint8_t *p){ n = p[0]; }\n"
+                        "void main(){ show(pic, pal); bytes(pic); }\n"))
+        ok = false;
+    else
+    {
+        if (!hasLine("call8 @_show(char*|CRGB*)") || !hasLine("call8 @_bytes(num*)"))
+        {
+            printf("       uint8_t[] / CRGB[] arguments don't reach their functions\n");
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
     // a char array as 5th value: parked in a stack slot, reloaded whole
     // (it used to come back through l8ui, one byte of the address)
     if (!compileForTest("int n;\nchar color[12];\nvoid main(){ printfln(\"%d %d %d %s\", n, n, n, color); }\n"))
