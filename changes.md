@@ -33,6 +33,10 @@ Found while writing that example, both fixed:
 
 The other scripts compile to exactly the same code as before.
 
+### 🕹️ v1's display-icon script runs
+
+`sc_examples/dsiplayicon.sc`, which v1 itself rejected, compiles and runs: a `uint8_t` array now goes to a `char *` parameter as in C (tried when nothing matches exactly), and a `CRGB` array to a `CRGB *` parameter (its call signature used to read `void *`). The new [DisplayIcon](examples/DisplayIcon) example runs it; its first 100 frames, from the emulated ESP32, are in [dsiplayicon.gif](examples/DisplayIcon/dsiplayicon.gif), and a real esp32 computes the same frames (same checksums). "Function not found" messages are no longer cut short on long signatures.
+
 ### 📖 Arguments, JSON variables or bound variables?
 
 A new README section compares the three ways of giving values to a script: where each value lives, when a change reaches the script, what the script's writes do, and what each costs, measured on an esp32 (a call with 3 arguments 6.1 µs, with a 3-key JSON 112 µs, a bound variable nothing to pass). It also explains what happens when your C++ code changes a bound variable while the script runs (seen at the script's next read; declare it `volatile`). → [Arguments, JSON variables or bound variables?](README.md#arguments-json-variables-or-bound-variables)

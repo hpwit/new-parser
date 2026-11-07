@@ -240,13 +240,13 @@ was a throwaway host build, not committed anywhere in either repo.
   in v1 too (once past the crash described above, which v1 never hit in
   the first place since it errors instead of crashing on that first
   construct).
-- **dsiplayicon.sc's `displaypic()`**: confirmed v1 rejects this script
-  too ("function displaypic(...) not found"). `displaypic()` declares its
-  pixel-map parameter as `char * pic`, but every call site passes a
-  `uint8_t[]` array (`ghostp`/`mario`/`cerise`); both v1's and v2's
-  `bindFunction()`-style type classifier treat `uint8_t` as `"num"`, not
-  `"char"`, so the call-site signature never matches the declared one. A
-  parameter-type bug in the original example script, not a v2 regression.
+- **dsiplayicon.sc's `displaypic()`**: v1 rejects this script ("function
+  displaypic(...) not found"): `displaypic()` declares its pixel-map
+  parameter as `char * pic`, every call site passes a `uint8_t[]` array,
+  and the palettes are `CRGB` arrays passed to `CRGB *palette`. v2 now
+  accepts both, as C does: when no function matches, a `uint8_t` array is
+  tried as a `char *`, and a `CRGB` array's type is recorded in the call's
+  signature (it used to read `void *`). The script compiles and runs.
 - **`import rand`**: confirmed v1-valid (see harness preprocessing item 2
   above) -- v1 parses balls.sc/ballsbw.sc/ballscardputer.sc unmodified.
 - **Bare `define`**: confirmed v1-invalid too (see harness preprocessing
@@ -273,7 +273,7 @@ was a throwaway host build, not committed anywhere in either repo.
 | gameoflifecarputer.sc | PASS | `uint16_t leds`/`hsv()` -- separate binding set (`registerGameOfLifeCarputerBindings()`). |
 | circles.sc | PASS | **Zero** `external` declarations at all -- fully exercises fix #1. |
 | scroll.sc | PASS | Bare `define` normalized; `leds`/`hsv()`/`font` all auto-declared; `and` used as bitwise op. |
-| dsiplayicon.sc | XFAIL (known v1 bug) | `displaypic(char* pic, ...)` called with `uint8_t[]` args -- confirmed broken in v1 too. |
+| dsiplayicon.sc | PASS | `displaypic(char* pic, CRGB *palette, ...)` called with `uint8_t[]` and `CRGB[]` arrays: rejected by v1, accepted by v2 as C does. |
 | balls.sc | PASS | `import rand` stripped/rebound; struct array (`ball Balls[max_nb_balls]`), zero `external` decls. |
 | ballscardputer.sc | PASS | Same as balls.sc; also exercises fix #2 (`uint32_t h` compared with `<`). |
 | ballsbw.sc | PASS | Same as balls.sc, BW variant (`setPixel` instead of `leds`). |

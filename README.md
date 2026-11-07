@@ -81,6 +81,7 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
   * [Changing a bound variable from your C++ code](#changing-a-bound-variable-from-your-c-code)
 
 - [CRGB and the hue function](#crgb-and-the-hue-function)
+  * [A v1 script: the display icon](#a-v1-script-the-display-icon)
 
 - [Safe mode and arrays](#safe-mode-and-arrays)
 
@@ -869,6 +870,40 @@ void loop()
 ```
 
 See [BouncingBalls](examples/BouncingBalls) for a complete working version.
+
+## A v1 script: the display icon
+
+[DisplayIcon](examples/DisplayIcon) runs v1's `sc_examples/dsiplayicon.sc` without changing a line: a ghost, Mario and a cherry moving over a scrolling rainbow on a 128x96 matrix. The sketch gives it what v1's runtime did: the `leds` buffer, `hsv()`, `sin()`, and `sync()`, called after each frame, which is where your display's `show()` goes.
+
+The sprites are pixel maps with a palette, drawn by a script function:
+
+```c
+void displaypic(int x, int y, char *pic, CRGB *palette, int h, int w)
+{
+   for (int i = 0; i < w; i++)
+      for (int j = 0; j < h; j++)
+         if (pic[i + j * w] < 9)
+            leds[(i + x) % 128 + ((j + y) % 96) * 128] = palette[pic[i + j * w]];
+}
+
+displaypic(m, 15, mario, palm, 14, 17);   // mario is a uint8_t[], palm a CRGB[]
+```
+
+v1 itself refused this script (*function displaypic not found*): it passes `uint8_t` arrays to `char *pic` and `CRGB` arrays to `CRGB *palette`. v2 accepts both, as C does.
+
+Its first 100 frames, compiled by v2 and rendered on an emulated esp32:
+
+![The first 100 frames of dsiplayicon.sc](examples/DisplayIcon/dsiplayicon.gif)
+
+The same frames computed on a real esp32 give the same checksums:
+
+```
+frame 1: checksum 0bc698dc
+frame 25: checksum 88153e63
+frame 50: checksum f62becc9
+frame 75: checksum 7b7c5ed4
+frame 100: checksum 8a884127
+```
 
 ---
 
@@ -1854,6 +1889,7 @@ This is the part that is really new compared to v1:
 | `CallScriptFunction` | Calling a function with a raw `int32_t[]` and using its return value. |
 | `TwoScripts` | Two scripts one after the other, freeing the first with `exec.free()`. |
 | `FibonacciTiming` | Timing a script with `micros()`. |
+| `DisplayIcon` | v1's `dsiplayicon.sc` unchanged: pixel-art sprites with palettes over a scrolling rainbow, `sync()` as the display's show (see [A v1 script: the display icon](#a-v1-script-the-display-icon)). |
 | `BouncingBalls` | Structs with methods and constructors, an array of structs, several bound functions. |
 | `StructsAndHostBindings` | Structs with `bindFunction()`/`bindVariable()`, smaller. |
 | `StructArguments` | Structures by value and by pointer, `->`, `&`, and the sketch calling a script function with a pointer to its own struct (see [Structures](#structures)). |

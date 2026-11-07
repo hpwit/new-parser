@@ -446,14 +446,14 @@ int main()
         {
             "dsiplayicon.sc",
             "dsiplayicon.sc",
-            ExpectFail,
-            "v1 ground truth: fails in v1 too (\"function displaypic(...) not "
-            "found\"). displaypic() declares its pixel-map parameter as "
-            "`char * pic` but every call site passes a `uint8_t[]` array "
-            "(ghostp/mario/cerise); binding.cpp's/v1's type classifier "
-            "treats uint8_t as \"num\", not \"char\", so the call-site "
-            "signature never matches the declared one. A parameter-type "
-            "bug in the original example script, not a v2 regression.",
+            ExpectPass,
+            "Failed in v1 (\"function displaypic(...) not found\"): "
+            "displaypic() takes `char * pic` and every call passes a "
+            "`uint8_t[]`, and its palettes are CRGB arrays passed to "
+            "`CRGB *palette`. v2 matches a uint8_t array to a char * "
+            "parameter (as C does) and records a CRGB array's type in the "
+            "call signature, so it now compiles, and runs (see "
+            "test/qemu_full and the README's frames).",
             false,
         },
         {"balls.sc", "balls.sc", ExpectPass, "`import rand` stripped/rebound and `struct ball {...}`'s missing trailing ';' inserted by this harness (see preprocess()).", false},

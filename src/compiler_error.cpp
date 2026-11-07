@@ -52,7 +52,7 @@ const char *error_messages[]=
 "Can't take the address of this variable"
 
 };
-char error_detail[160] = "";
+char error_detail[240] = "";
 
 void display_error(error_message_struct *err){
     if (error_detail[0] != 0)
