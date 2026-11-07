@@ -10,7 +10,10 @@
 //   - an ESP32-S3 (the plain ESP32 has no USB host);
 //   - the ESP32_USB_Host_HID library, in the version whose keyboard.h
 //     defines struct key_return and calls the hid_keyboard_print_char()
-//     hook on every key (the one keybard5inch uses).
+//     hook on every key (the README's "The key hook the library needs"
+//     shows the few lines to add to a copy that lacks them).
+//
+// Confirmed on an ESP32-S3 with a real USB keyboard.
 #include "keyboard.h"
 #include "script_executable.h"
 #include "binding.h"

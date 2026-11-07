@@ -2,12 +2,12 @@
   "name": "ESPLiveScript2",
   "keywords": "assembler,compiler",
   "description": "Compile C-like scripts to Xtensa machine code on the ESP32 itself (ESP32, ESP32-S2, ESP32-S3), and run them.",
-  "homepage": "",
+  "homepage": "https://github.com/hpwit/new-parser",
   "repository": {
     "type": "git",
     "url": "https://github.com/hpwit/new-parser"
   },
-  "version": "1.3.0",
+  "version": "2.0.0",
   "frameworks": "arduino",
   "platforms": "espressif32"
 }

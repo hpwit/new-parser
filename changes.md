@@ -1,8 +1,50 @@
 # ⚡ ESPLiveScript 2: changes
 
-What changed recently, newest first. The [README](README.md) documents the library as it is now; this page is what is new and how much it brings.
+What changed, newest first. The [README](README.md) documents the library as it is now; this page is what is new and how much it brings.
 
-## 🧩 Structures, the whole way
+## 2.0.0 (2026-11-07)
+
+The first tagged release of ESPLiveScript 2. Until now the library said 1.3.0, a number it inherited and never changed.
+
+### 🏎️ Constant indexes cost nothing
+
+A constant index is now part of the load or store instruction itself: `arr[3]`, `q[1]` through a pointer, `parts[2].h` and `p[2].x` through a struct pointer each compile to one instruction (`l32i a2,a6,12`) instead of computing `index × size` at run time. And a structure passed by value no longer copies its padding bytes. Measured on an esp32 at 240MHz, 20000 calls each ([the bench](README.md#constant-indexes-and-structure-copies)):
+
+|Code|Before|2.0.0| |
+|:----|----:|----:|:----|
+|struct fields through a pointer, constant indexes|6.20ms|**3.10ms**|2.0× faster|
+|array cells with constant indexes|8.29ms|**5.36ms**|1.55× faster|
+|calls passing a structure by value|2.52ms|**2.27ms**|10% faster|
+
+The benchmarks of the [Performance](README.md#performance) section compile to exactly the same code as before (they use none of this) and run at the same speed, to the microsecond.
+
+### 🖨️ `%f` in a script's `printf`
+
+`printfln("x = %.2f", x)` now prints the float. A float passed as the first value after the format arrived as nothing at all, and the floats after it were read by C's `%f` as a double, so neither printed right. Widths, precisions, `%e` and `%g` work too.
+
+### 🔎 "Function not found" says why
+
+```
+error   : Function not found: setTag(P *, number); there is setTag(P *, char)
+error   : Function not found: blink(number); no function has that name
+error   : Function not found: make() can't give a structure: functions can't return one yet
+```
+
+The message shows what the call asked for and the functions of that name that exist, with their parameter types, in `showCompileError()` and `lastCompileError()` alike. → [Calling a function the wrong way](README.md#calling-a-function-the-wrong-way)
+
+### ⌨️ A USB keyboard driving a script
+
+[KeyboardTest](examples/KeyboardTest), confirmed on an ESP32-S3 with a real keyboard: every key runs the script's `keyboard()` function, reading the keyboard library's own `key_return` structure through `BIND_STRUCT`. The README walks through it, including the few lines the keyboard library needs. → [A USB keyboard driving a script](README.md#a-usb-keyboard-driving-a-script)
+
+### 🧪 Tests in minutes, not hours
+
+QEMU doesn't stop by itself when a test program ends, and the fuzzer and the effects check waited out their whole timeout every time (20 s per fuzzed program, 300 s per effect). They now stop it as soon as the program is done: 40 fuzzed programs in 12 s instead of over 100 s, the whole effects check in 14 s instead of about 5 minutes. The `fib()` timing check runs with QEMU's `-icount`, so it no longer fails when the computer is busy.
+
+### 📦 Release
+
+Version 2.0.0, tagged `v2.0.0`. The library sits at the root of the repository, and its `library.properties` follows the Arduino Library Manager rules (an old scratch sketch moved from `examples/` to `extras/`).
+
+### 🧩 Structures, the whole way
 
 Structures now behave like C's, in the script and across the border with your sketch:
 
@@ -30,7 +72,7 @@ step(&balls[2]);              // &variable, &array[i], &variable.field
 
 Every case is checked against the same code compiled by GCC on an emulated ESP32. → [Structures](README.md#structures)
 
-## 🗂️ A script scheduler, like v1's `scriptRuntime`
+### 🗂️ A script scheduler, like v1's `scriptRuntime`
 
 Run several scripts at the same time, each on its own FreeRTOS task, and manage them by name:
 
@@ -50,7 +92,7 @@ scriptScheduler.list();
 
 `list()` shows what every script is doing and **how much CPU it uses**, measured by FreeRTOS itself, with each core's load. It is FreeRTOS all the way down (tasks, suspend/resume/delete, a mutex, run-time statistics) and uses no STL. → [The script scheduler](README.md#the-script-scheduler), [SchedulerDemo](examples/SchedulerDemo)
 
-## 🚨 Compile errors you can show
+### 🚨 Compile errors you can show
 
 ```cpp
 ScriptExecutable exec = parseScript(script);
@@ -68,7 +110,7 @@ line 5  :    a = a + 1;
 
 `showCompileError()` prints the error with the line and a `^` where it was found; `lastCompileError()` gives you the message, line and position to put on a display or a web page. → [Checking for errors](README.md#checking-for-errors), [CompileErrors](examples/CompileErrors)
 
-## ⚡ Much faster code
+### ⚡ Much faster code
 
 The compiler now keeps loop constants and array addresses in registers, moves work out of loops, compiles `a && b` as short-circuit branches like C, and only saves float registers around a call when it has to. Measured on an esp32 at 240MHz:
 
@@ -81,14 +123,14 @@ The compiler now keeps loop constants and array addresses in registers, moves wo
 
 Scripts now run at 1 to 1.3 times the time of gcc-compiled code, and the same pictures come out, checksum for checksum. → [Performance](README.md#performance)
 
-## 🧹 No more memory lost at each compile
+### 🧹 No more memory lost at each compile
 
 Every successful compile used to lose about 300 bytes. Now compiling again and again keeps the free heap flat, and a large script needs about 20KB less heap while it compiles.
 
-## 🐛 More bugs found and fixed
+### 🐛 More bugs found and fixed
 
 The differential fuzzer (random programs run through the compiler and as plain C) found three more miscompiles (in four failing programs), all fixed and kept as regression tests; a new frame-by-frame test covers float values kept across calls. → [Testing](README.md#testing)
 
-## 📚 New examples
+### 📚 New examples
 
 [KeyboardTest](examples/KeyboardTest) (a USB keyboard driving a script, → [walkthrough](README.md#a-usb-keyboard-driving-a-script)), [StructArguments](examples/StructArguments), [HostStructs](examples/HostStructs), [LibraryStruct](examples/LibraryStruct), [SchedulerDemo](examples/SchedulerDemo), [CompileErrors](examples/CompileErrors), [RainbowCompare](examples/RainbowCompare), [BouncingBallsCompare](examples/BouncingBallsCompare), [DirectGPIOSpeed](examples/DirectGPIOSpeed), and a [general purpose sample](README.md#more-than-a-led-language) that has nothing to do with leds.

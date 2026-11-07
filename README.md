@@ -6,7 +6,7 @@
 
 ![ESP32](https://img.shields.io/badge/ESP32-S2%20%7C%20S3-E7352C?logo=espressif&logoColor=white)
 ![Arduino library](https://img.shields.io/badge/Arduino-library-00979D?logo=arduino&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
 ![Compiled](https://img.shields.io/badge/compiled%20to-Xtensa%20machine%20code-orange)
 ![Tested](https://img.shields.io/badge/tested-host%20%C2%B7%20QEMU%20%C2%B7%20fuzzer%20%C2%B7%20real%20board-brightgreen)
 
@@ -115,6 +115,7 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
   * [Calling a host function per pixel: rainbow](#calling-a-host-function-per-pixel-rainbow)
   * [A real script: MultiEffectController](#a-real-script-multieffectcontroller)
   * [GPIO switching speed](#gpio-switching-speed)
+  * [Constant indexes and structure copies](#constant-indexes-and-structure-copies)
   * [Compiling](#compiling)
 
 - [Advanced stuff](#advanced-stuff)
@@ -370,6 +371,18 @@ line:  5 position:  4 "   a = a + 1;"
 ```
 
 so you see it in the console even without calling anything. `showCompileError()` is for printing it again, later or in a clearer form.
+
+### Calling a function the wrong way
+
+When a call matches no function, the message says what the call asked for and which functions of that name exist, with their parameter types:
+
+```
+error   : Function not found: setTag(P *, number); there is setTag(P *, char)
+error   : Function not found: blink(number); no function has that name
+error   : Function not found: make() can't give a structure: functions can't return one yet
+```
+
+`number` is any of `int`, `float`, `uint8_t`..., which all travel the same way; `char` and pointers must match.
 
 ### Showing the error your own way
 
@@ -816,7 +829,7 @@ What you need to know:
 - an `int` meeting an `ffloat` is converted for you, and `int i = x;` truncates toward zero like a float;
 - as for every type of the language, the type you assign to decides how the expression is computed: `ffloat r = 7 / 2;` is 3.5, `int k = m * 2;` converts `m` to an int first;
 - results outside ±32768 wrap around like an int. Watch squares and powers: [BouncingBallsFfloat](examples/BouncingBallsFfloat) computes `(distance / r²)²` instead of `distance² / r⁴`, which goes up to ~72000;
-- `printfln` prints the raw 32-bit value of an `ffloat`; print `(int)(x * 100)` or convert it to a `float` first.
+- `printfln("%f", x)` reads a `float`: for an `ffloat`, convert it first, `printfln("%f", (float)x)`.
 
 > [!TIP]
 > The esp32 has a hardware single-precision FPU, so `float` is already fast. `ffloat` wins when there are a lot of conversions, divisions and integer mixing (see [Performance](#performance)).
@@ -1096,9 +1109,9 @@ Remember `bindStruct(key_event_definition);` before compiling. Writes through `k
 | *\* needs a pointer variable* | `*x` on something that isn't a pointer. | Use `x` itself, or declare it `T *x`. |
 | *Structure already defined differently (bindStruct)* | The script defines a structure the sketch bound, with other fields. | Remove the script's definition, or make it identical. |
 | *Too many fields in the structure* | A structure holds at most 20 slots: one per number field, three per `CRGB`, one or two per padding gap. | Split it into two structures. |
-| *Function not found* on a `char` parameter | A `char` parameter wants a `char` argument; `90` is an `int`. | Give the function an `int` parameter. |
+| *Function not found: setTag(P \*, number); there is setTag(P \*, char)* | A `char` parameter wants a `char` argument; `90` is an `int`. | Give the function an `int` parameter. |
 
-A function can't return a structure yet (the call then reports *Function not found*): return a field, or write into a structure passed by pointer.
+A function can't return a structure yet (the call reports *Function not found: make() can't give a structure*): return a field, or write into a structure passed by pointer.
 
 ## Structure examples
 
@@ -1114,7 +1127,7 @@ A function can't return a structure yet (the call then reports *Function not fou
 
 # A USB keyboard driving a script
 
-[KeyboardTest](examples/KeyboardTest) connects a USB keyboard to a script: every key you press runs the script's `keyboard()` function, which echoes the key, keeps the line being typed and prints it on Enter. It is the keyboard part of a bigger sketch (a 5" screen with a script console) with everything else taken out, so it is a good starting point for your own keyboard-driven scripts.
+[KeyboardTest](examples/KeyboardTest) (confirmed on an ESP32-S3 with a real USB keyboard) connects a USB keyboard to a script: every key you press runs the script's `keyboard()` function, which echoes the key, keeps the line being typed and prints it on Enter. It is the keyboard part of a bigger sketch (a 5" screen with a script console) with everything else taken out, so it is a good starting point for your own keyboard-driven scripts.
 
 ## What you need
 
@@ -1122,8 +1135,32 @@ A function can't return a structure yet (the call then reports *Function not fou
 |---|---|
 | Board | An **ESP32-S3**. Its USB OTG port can act as a USB *host*; the plain ESP32 has no USB host. |
 | Keyboard | Any USB keyboard, plugged into the S3's USB host port (with an OTG adapter or a board that has a host socket). The port must power the keyboard. |
-| Library | `ESP32_USB_Host_HID`, in the version whose `keyboard.h` defines `struct key_return` and calls the `hid_keyboard_print_char()` hook on every key. |
+| Library | `ESP32_USB_Host_HID` (a port of Espressif's USB host HID example), in the version with the key hook below. |
 | Serial monitor | 115200 baud, on the port your board prints `Serial` to (on most S3 boards with two sockets, the UART one, since the other is busy with the keyboard). |
+
+### The key hook the library needs
+
+The sketch relies on two things in the library's `keyboard.h`, which the version used here adds to Espressif's example. If your copy doesn't have them, add them:
+
+```cpp
+// the key handed to the sketch
+struct key_return
+{
+     unsigned char key_char;   // the character, 0 for a key that types none
+     unsigned char key_code;   // the USB HID usage code
+};
+
+// set by the sketch, called on every key press
+static inline void (*hid_keyboard_print_char)(key_return key_char);
+
+// in key_event_callback(), on KEY_STATE_PRESSED:
+key_return key_char;
+key_char.key_char = 0;
+hid_keyboard_get_char(key_event->modifier, key_event->key_code, &key_char.key_char);
+key_char.key_code = key_event->key_code;
+if (hid_keyboard_print_char != NULL)
+   hid_keyboard_print_char(key_char);
+```
 
 ## How a key reaches the script
 
@@ -1587,6 +1624,18 @@ The plasma's time is the 12288 x 11 calls to `sin()`, `hypot()` and the float di
 
 `examples/DirectGPIOSpeed` switches a pin on and off 10000 times by writing the GPIO registers from the script: 1011us, against 1006us for the same loop in C++. That is 9.9MHz on the pin (10MHz on a signal analyser), about 24 cycles per on/off. Both are limited by the peripheral bus, not by the code.
 
+## Constant indexes and structure copies
+
+A constant index is part of the instruction: `arr[3]` is one `l32i a2,a6,12`, and so are `parts[2].h` and `p[2].x` through a pointer. A structure passed by value is copied field by field, without its padding. Each function below called 20000 times on an esp32 at 240MHz, against the version before 2.0.0, which computed `index × size` at run time:
+
+|Code|Before|Now|
+|:----|----:|----:|
+|`p[2].x = p[1].x + p[3].h; p->h = p[2].h + 1;` through `P *p`|6.20ms|**3.10ms**|
+|`table[3] = table[1] + table[2]; table[7] = table[3] + table[5];`|8.29ms|**5.36ms**|
+|`int byValue(P b) { return b.x + b.h; }` with a 16-byte `P`|2.52ms|**2.27ms**|
+
+A variable index (`arr[i]`) is computed as before.
+
 ## Compiling
 
 |Script|Lines|Compile time|
@@ -1637,7 +1686,7 @@ void main()
 This is the part that is really new compared to v1:
 
 - `test/host/`: the compiler built as a normal program on a computer. `make run` for the main suite, `make check-optimized` (same suite at `-Os`, the Arduino default), `make check-asan` (AddressSanitizer), `make run-sc` (every script from v1's `sc_examples`), `make run-large` (a size check for an esp32 without PSRAM).
-- `test/qemu/`: the compiled machine code executed on Espressif's QEMU emulator: arithmetic, external calls, recursion, arguments, external variables, save/load, and the `fib()` timing above. See `test/qemu/README.md`.
+- `test/qemu/`: the compiled machine code executed on Espressif's QEMU emulator: arithmetic, external calls, recursion, arguments, external variables, save/load, and the `fib()` timing above (run with QEMU's `-icount`, so its cycle counts are exact whatever else the computer is doing). See `test/qemu/README.md`.
 - `test/effects/`: the led effects of the examples (plasma, fire, voronoi, mandala, Mandelbrot...) run under QEMU and compared frame by frame with the same code written in C.
 - `test/fuzz/`: random programs run through the compiler and as plain C, results compared. Every bug found is kept in `test/fuzz/regressions/`. See `test/fuzz/README.md`.
 
@@ -1870,7 +1919,7 @@ struct CompileError
    bool failed;           // false: the last compile succeeded
    int line;              // line in your script, from 1 (0 when unknown)
    int position;          // column, from 1
-   char message[80];      // e.g. "Expecting ;"
+   char message[160];     // e.g. "Expecting ;", with details when there are any
    char sourceLine[120];  // the text of that line
 };
 ```
@@ -2018,7 +2067,7 @@ Available in every script, nothing to bind:
 
 | Name | Signature | What it does |
 |---|---|---|
-| `printf` | `void printf(char *format, ...)` | Prints like C's `printf`: integers, characters and strings (`%d`, `%u`, `%x`, `%c`, `%s`). For a float, print an integer, e.g. `(int)(x * 100)`. |
+| `printf` | `void printf(char *format, ...)` | Prints like C's `printf`: `%d`, `%i`, `%u`, `%x`, `%o`, `%c`, `%s`, `%p`, `%%`, and floats with `%f`, `%e`, `%g` (widths and precisions too: `%8.3f`, `%-6s`). Every argument is 32 bits, so length modifiers (`%ld`, `%lld`) are ignored. |
 | `printfln` | `void printfln(char *format, ...)` | The same, followed by a new line. |
 | `alloc` | `uint32_t alloc(int bytes)` | Allocates `bytes` bytes (`malloc`), returns the address, 0 if there isn't enough memory. |
 | `free` | `void free(uint32_t address)` | Frees memory from `alloc()`. |
