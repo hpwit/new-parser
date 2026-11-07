@@ -12,6 +12,10 @@ void * p_realloc(void *original,int new_size)
     // allocation lands at the edge of a page. realloc() already does this
     // correctly and is compatible with the malloc/free used everywhere
     // else in this codebase.
+    // realloc(p, 0) may free p and return NULL (AddressSanitizer's does):
+    // an emptied list keeps a minimal block instead
+    if (new_size <= 0)
+        new_size = 1;
     void * tmp=realloc(original,new_size);
     assert(tmp!=NULL);
     return tmp;

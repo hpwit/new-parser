@@ -58,5 +58,8 @@ struct error_message_struct
   Token *token;
 };
 extern const char *error_messages[];
+// More about the last error, when there is more to say (e.g. the
+// signatures a call could have matched); empty otherwise.
+extern char error_detail[160];
 void display_error(error_message_struct *err);
 #endif

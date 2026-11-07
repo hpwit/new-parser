@@ -3099,6 +3099,103 @@ static void runBindStructMacroTest()
     }
 }
 
+static int countLines(const char *prefix)
+{
+    int n = 0;
+    for (int i = 0; i < content.size(); i++)
+        if (strncmp(content.getText(i), prefix, strlen(prefix)) == 0)
+            n++;
+    return n;
+}
+
+static void runConstantIndexAndFormatTest()
+{
+    const char *name = "constant indexes in the instruction offset; by-value copies skip padding; floats to printf; Function not found details";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+
+    // arr[3] and p[2].x: the offset is in the instruction, no index maths
+    if (!compileForTest("struct P { char c; int x; uint16_t h; };\nint arr[8];\n"
+                        "int f(P *p){ p[2].x = 7; return p[1].x; }\n"
+                        "int main(){ arr[3] = 5; return arr[3]; }\n"))
+        ok = false;
+    else
+    {
+        bool storeArr = false, loadArr = false, storeP = false, loadP = false;
+        for (int i = 0; i < content.size(); i++)
+        {
+            const char *l = content.getText(i);
+            storeArr |= strncmp(l, "s32i", 4) == 0 && strstr(l, ",12") != NULL;
+            loadArr |= strncmp(l, "l32i", 4) == 0 && strstr(l, ",12") != NULL;
+            storeP |= strncmp(l, "s32i", 4) == 0 && strstr(l, ",a2,28") != NULL;
+            loadP |= strncmp(l, "l32i", 4) == 0 && strstr(l, ",a2,16") != NULL;
+        }
+        if (!storeArr || !loadArr || !storeP || !loadP || hasLine("mull") || hasLine("slli"))
+        {
+            printf("       constant indexes are still computed at run time\n");
+            for (int i = 0; i < content.size(); i++)
+                printf("         %s\n", content.getText(i));
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
+
+    // by value: 3 fields copied, the 3 padding components skipped
+    if (!compileForTest("struct P { char c; int x; uint16_t h; };\nint byValue(P s){ return s.c + s.x + s.h; }\n"))
+        ok = false;
+    else
+    {
+        int loads = countLines("l8ui") + countLines("l16ui") + countLines("l32i");
+        if (loads != 3)
+        {
+            printf("       by-value copy: %d loads, expected 3\n", loads);
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
+
+    // printfln("%f", x): the float reaches a11 (it used to pass nothing)
+    if (!compileForTest("float g = 1.5;\nvoid main(){ float x = g * 2.0; printfln(\"%f\", x); }\n"))
+        ok = false;
+    else
+    {
+        if (!hasLine("rfr a11,"))
+        {
+            printf("       the float argument doesn't reach a11\n");
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
+
+    // Function not found says what was looked for and what exists
+    if (compileForTest("struct P { int x; };\nP g;\nvoid setTag(P *p, char t){ }\nvoid main(){ setTag(&g, 90); }\n") ||
+        Error.error != functionnotfound ||
+        strcmp(error_detail, "setTag(P *, number); there is setTag(P *, char)") != 0)
+    {
+        printf("       detail: \"%s\"\n", error_detail);
+        ok = false;
+    }
+    if (compileForTest("void main(){ blink(3); }\n") ||
+        strcmp(error_detail, "blink(number); no function has that name") != 0)
+    {
+        printf("       detail: \"%s\"\n", error_detail);
+        ok = false;
+    }
+    Error.error = 0;
+    error_detail[0] = 0;
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     registerBallEffectBindings();
@@ -3113,6 +3210,7 @@ int main()
     runStructLayoutTest();
     runStructArgumentsTest();
     runBindStructMacroTest();
+    runConstantIndexAndFormatTest();
     runBuiltinHandleTest();
     runVarargsOrderTest();
     runCharPointerArgumentsTest();

@@ -281,7 +281,7 @@ struct CompileError
    bool failed;
    int line;
    int position;
-   char message[80];
+   char message[160];
    char sourceLine[120];
 };
 const CompileError &lastCompileError();

@@ -308,6 +308,8 @@ static Binary compileScriptToBinary(const char *script)
         size_t ml = strlen(e.message);
         while (ml > 0 && e.message[ml - 1] == ' ')
             e.message[--ml] = 0;
+        if (error_detail[0] != 0)
+            snprintf(e.message + ml, sizeof(e.message) - ml, ": %s", error_detail);
         if (Error.token != NULL)
         {
             e.line = Error.token->line;

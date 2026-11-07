@@ -1380,6 +1380,53 @@ static bool isIndexedMember(NodeToken *nd)
            (nd->type == TokenUserDefinedVariableMember || nd->type == TokenUserDefinedVariableMemberFunction);
 }
 
+// The bytes one index step moves over.
+static int indexStride(NodeToken *nd, varType *v)
+{
+    return isIndexedMember(nd) ? (int)nd->_total_size : v->total_size;
+}
+
+// arr[3], p[2], arr[1].x: a constant index becomes part of the load or
+// store instruction's own offset (l32i a2,a6,12) instead of being
+// scaled and added at run time. Only a single, non-negative decimal
+// index, outside safe_mode (whose check needs the index in a register),
+// and only while every component's offset fits its instruction's
+// immediate (0..255 bytes, 0..510, 0..1020). *offset gets the byte
+// offset from the element's base address.
+static bool constantIndexOffset(NodeToken *nd, varType *v, int start, int *offset)
+{
+    if (safeMode || v == NULL || !nd->isPointer || nd->children_size() != 1 ||
+        nd->type == TokenUserDefinedVariableMemberFunction) // its `this` is the base register itself
+        return false;
+    const char *t = nd->getTargetText();
+    if (t != NULL && t[0] == '@' && atoi(t + 1) > 1)
+        return false;
+    NodeToken *c = nd->getChildPtr(0);
+    if (c->_nodetype == changeTypeNode && c->children_size() == 1)
+        c = c->getChildPtr(0);
+    if (c->_nodetype != numberNode || c->children_size() != 0)
+        return false;
+    const char *digits = c->getText();
+    if (digits == NULL || *digits == 0)
+        return false;
+    for (const char *d = digits; *d; d++)
+        if (*d < '0' || *d > '9')
+            return false;
+    long k = atol(digits);
+    long off = start + k * indexStride(nd, v);
+    long o = off;
+    for (int i = 0; i < v->size; i++)
+    {
+        int sz = v->sizes[i];
+        long limit = sz == 1 ? 255 : sz == 2 ? 510 : 1020;
+        if (o < 0 || o > limit || (sz > 1 && o % sz != 0))
+            return false;
+        o += sz;
+    }
+    *offset = (int)off;
+    return true;
+}
+
 void _visitglobalVariableNode(NodeToken *nd)
 {
 
@@ -1387,7 +1434,9 @@ void _visitglobalVariableNode(NodeToken *nd)
     // int r_size = 0;
     // isInFunction = false;
     register_numl.duplicate();
-    if (nd->children_size() > 0)
+    int foldedStart = 0;
+    bool folded = constantIndexOffset(nd, nd->getVarTypeObj(), nd->stack_pos, &foldedStart);
+    if (nd->children_size() > 0 && !folded)
     {
         // int r_size = 0;
         vect<char *> tile;
@@ -1420,7 +1469,12 @@ void _visitglobalVariableNode(NodeToken *nd)
         //  regnum = point_regnum;
     }
 
-    if (nd->isPointer && nd->children_size() > 0) // leds[g];
+    if (folded)
+    {
+        bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
+        start = foldedStart;
+    }
+    else if (nd->isPointer && nd->children_size() > 0) // leds[g];
     {
         // f=f+number.f;
         if (nd->type == TokenUserDefinedVariableMember or nd->type == TokenUserDefinedVariableMemberFunction)
@@ -1610,7 +1664,10 @@ void _visitlocalVariableNode(NodeToken *nd)
     //  number = nd->getChildPtr(0)->visitNode(nd->getChildPtr(0), register_numl, register_numr);
     // }
 
-    if (nd->children_size() > 0)
+    // a constant index: in the load's offset (see constantIndexOffset())
+    int foldedStart = 0;
+    bool folded = constantIndexOffset(nd, nd->getVarTypeObj(), 0, &foldedStart);
+    if (nd->children_size() > 0 && !folded)
     {
         globalType.push(__int__);
         register_numl.duplicate();
@@ -1648,7 +1705,9 @@ void _visitlocalVariableNode(NodeToken *nd)
         else
         {
             bufferText->addAfter(string_format(l32i, point_regnum, 1, start));
-            start = 0;
+            start = folded ? foldedStart : 0;
+            if (!folded)
+            {
             // Same strength reduction as _visitglobalVariableNode()'s
             // identical case: scale the index in place with a single
             // self-referencing add/addx2/addx4/subx8 instead of
@@ -1682,6 +1741,7 @@ void _visitlocalVariableNode(NodeToken *nd)
                 {
                     bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
                 }
+            }
             }
             bufferText->sp.push(bufferText->get());
             for (int i = 0; i < v->size; i++)
@@ -3228,9 +3288,12 @@ void _visitargumentNode(NodeToken *nd) {}
 void _visitextGlobalVariableNode(NodeToken *nd)
 {
     register_numl.duplicate();
+    // a constant index: in the load's offset (see constantIndexOffset())
+    int foldedStart = 0;
+    bool folded = constantIndexOffset(nd, nd->getVarTypeObj(), nd->stack_pos, &foldedStart);
     // A single index is evaluated up front; several are combined by
     // emitFlatIndex() further down, which evaluates them itself.
-    if (nd->children_size() == 1)
+    if (nd->children_size() == 1 && !folded)
     {
         register_numl.duplicate();
         nd->getChildPtr(0)->visitNode();
@@ -3250,6 +3313,12 @@ void _visitextGlobalVariableNode(NodeToken *nd)
     if (!nd->isPointer)
     {
         bufferText->addAfter(string_format("movExt a%d,@_ext_%s", point_regnum, nd->getText()));
+    }
+    else if (folded)
+    {
+        bufferText->addAfter(string_format("movExt a%d,@_ext_%s", point_regnum, nd->getText()));
+        emitPointerLoad(nd, point_regnum);
+        start = foldedStart;
     }
     else
     {
@@ -3502,8 +3571,11 @@ int stek = ((nd->parent->stack_pos) / 8 + 1) * 8 + _FRAME_RESERVED;
                         int off = 0;
                         for (int j = 0; j < st->size; j++)
                         {
-                            bufferText->addAfter(string_format(st->load[j], 15, reg_num, off));
-                            bufferText->addAfter(string_format(st->store[j], 15, 1, start + off));
+                            if (!((st->fillers >> j) & 1)) // padding holds nothing
+                            {
+                                bufferText->addAfter(string_format(st->load[j], 15, reg_num, off));
+                                bufferText->addAfter(string_format(st->store[j], 15, 1, start + off));
+                            }
                             off += st->sizes[j];
                         }
                     }
@@ -3663,9 +3735,12 @@ void _visitstoreLocalVariableNode(NodeToken *nd)
         regnum = point_regnum;
     }
     int start = nd->stack_pos;
+    // a constant index: in the store's offset (see constantIndexOffset())
+    int foldedStart = 0;
+    bool folded = !nd->asPointer && constantIndexOffset(nd, v, 0, &foldedStart);
     if (nd->isPointer)
     {
-        start = 0;
+        start = folded ? foldedStart : 0;
     }
     int numl = register_numl.get();
     for (int h = 0; h < v->size - 1; h++)
@@ -3696,7 +3771,7 @@ void _visitstoreLocalVariableNode(NodeToken *nd)
         bufferText->sp.swap();
         bufferText->putIteratorAtPos(bufferText->sp.get());
         // bufferText->sp.displaystack("PILE");
-        if (nd->children_size() > 0)
+        if (nd->children_size() > 0 && !folded)
         {
             globalType.push(__int__);
             register_numl.duplicate();
@@ -3707,6 +3782,8 @@ void _visitstoreLocalVariableNode(NodeToken *nd)
         if (nd->children_size() > 0)
         {
             bufferText->addAfter(string_format(l32i, point_regnum, 1, nd->stack_pos));
+            if (!folded)
+            {
             // Same strength reduction as _visitglobalVariableNode()'s
             // identical case: scale the index in place with a single
             // self-referencing add/addx2/addx4/subx8 instead of
@@ -3741,6 +3818,7 @@ void _visitstoreLocalVariableNode(NodeToken *nd)
                     bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
                 }
             }
+                    }
         }
         else if (nd->asPointer)
         {
@@ -3793,6 +3871,8 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
     register_numl.duplicate();
     varType *v = nd->getVarTypeObj();
     int start = nd->stack_pos;
+    // a constant index: in the store's offset (see constantIndexOffset())
+    bool folded = constantIndexOffset(nd, v, nd->stack_pos, &start);
     // uint8_t regnum = 1;
     // int savreg_num=point_regnum;
     if (nd->asPointer or (nd->isPointer)) // && nd->children_size() == 0))
@@ -3835,7 +3915,7 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
         bufferText->putIteratorAtPos(bufferText->sp.get());
     else
         bufferText->putIteratorAtPos(j);
-    if (nd->children_size() > 0)
+    if (nd->children_size() > 0 && !folded)
     {
         vect<char *> tile;
         int nb = 0;
@@ -3857,7 +3937,11 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
     if (safeMode && nd->isPointer)
         emitSafeBoundsCheck(nd, point_regnum);
 
-    if (nd->isPointer && nd->children_size() > 0)
+    if (folded)
+    {
+        bufferText->addAfter(string_format("l32r a%d,@_%s", point_regnum, nd->getText())); emitPointerLoad(nd, point_regnum);
+    }
+    else if (nd->isPointer && nd->children_size() > 0)
     {
 
         if (nd->type == TokenUserDefinedVariableMember or nd->type == TokenUserDefinedVariableMemberFunction)
@@ -3938,6 +4022,8 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
     register_numl.duplicate();
     varType *v = nd->getVarTypeObj();
     int start = nd->stack_pos;
+    // a constant index: in the store's offset (see constantIndexOffset())
+    bool folded = constantIndexOffset(nd, v, nd->stack_pos, &start);
     uint8_t regnum = 1;
     if (nd->isPointer)
     {
@@ -3974,7 +4060,10 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
     // bufferText->sp.displaystack("PILE");
     // bufferText->addAfter(bufferText->sp.l->front(),"");
     bufferText->putIteratorAtPos(bufferText->sp.front());
-    if (nd->children_size() == 1)
+    if (folded)
+    {
+    }
+    else if (nd->children_size() == 1)
     {
         register_numl.duplicate();
         nd->getChildPtr(0)->visitNode();
@@ -4014,7 +4103,7 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
     if (safeMode && nd->isPointer)
         emitSafeBoundsCheck(nd, regnum);
     // see _visitextGlobalVariableNode(): scaled while point_regnum is free
-    bool indexedMember = isIndexedMember(nd);
+    bool indexedMember = !folded && isIndexedMember(nd);
     if (indexedMember)
         emitScaleByConstant(register_numl.get(), register_numl.get(), nd->_total_size, point_regnum);
     // boolextern (see _visitforNode()): if the enclosing for-loop already
@@ -4052,7 +4141,10 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
         bufferText->addAfter(string_format(mov, point_regnum, 7));
     }
     emitPointerLoad(nd, point_regnum);
-    if (indexedMember)
+    if (folded)
+    {
+    }
+    else if (indexedMember)
         bufferText->addAfter(string_format(add, point_regnum, point_regnum, register_numl.get()));
     else if (nd->isPointer && nd->children_size() > 0)
     {
@@ -5105,27 +5197,24 @@ void _visitCallFunctionTemplate(NodeToken *nd, int regbase, bool isExtCall)
 
             if (_vartype == __float__)
             {
-
-                if (isArg)
+                // A float in the `...` of a printf-like function goes as
+                // its 32-bit pattern too, like the floats after it (the
+                // runtime's printf reads %f that way). This position used
+                // to pass nothing: printfln("%f", x) printed garbage.
+                if (hold)
                 {
+                    // Float arguments travel as their bits in an a-register.
+                    bufferText->addAfter(string_format("rfr a9,f%d", register_numl.get()));
+                    bufferText->addAfter("push a9");
+                    heldReg[i] = 1;
+                }
+                else if (save_in_stack == true)
+                {
+                    bufferText->addAfter(string_format("ssi f%d,a1,%d", register_numl.get(), i * 4 + _START_2));
                 }
                 else
                 {
-                    if (hold)
-                    {
-                        // Float arguments travel as their bits in an a-register.
-                        bufferText->addAfter(string_format("rfr a9,f%d", register_numl.get()));
-                        bufferText->addAfter("push a9");
-                        heldReg[i] = 1;
-                    }
-                    else if (save_in_stack == true)
-                    {
-                        bufferText->addAfter(string_format("ssi f%d,a1,%d", register_numl.get(), i * 4 + _START_2));
-                    }
-                    else
-                    {
-                        bufferText->addAfter(string_format("rfr a%d,f%d", regbase + i, register_numl.get()));
-                    }
+                    bufferText->addAfter(string_format("rfr a%d,f%d", regbase + i, register_numl.get()));
                 }
             }
             else if (l->getChildPtr(i)->getVarTypeObj()->_varType == __CRGB__ or l->getChildPtr(i)->getVarTypeObj()->_varType == __CRGBW__)

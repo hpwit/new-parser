@@ -8,8 +8,8 @@
 #include <cstdlib>
 #include <cstdint>
 
-// Exactly upstream ESPLiveScript's execute_asm.h artiPrintf()/
-// artiPrintfln() -- genuine C varargs functions, called from compiled
+// Upstream ESPLiveScript's execute_asm.h artiPrintf()/artiPrintfln()
+// with their own format walk (below) -- genuine C varargs functions, called from compiled
 // script code through the same "char*,Args" external-call marshaling
 // every other Args-typed external uses (see asm_execute.h's callFunction()
 // doc comment and visitnode.cpp's _visitCallFunctionTemplate() for how
@@ -18,11 +18,86 @@
 // silently discard a string literal's actual byte values, keeping only
 // its reserved size -- so the format string pointer these receive used
 // to point at zeroed memory, not real text).
+//
+// A script passes every argument as 32 bits, a float as its bit pattern,
+// while C's %f reads a double: so the format is walked here and each
+// argument printed with its own snprintf(), %f/%e/%g reading those 32
+// bits back as a float. Length modifiers are dropped (all arguments are
+// 32 bits).
+static void scriptVprintf(const char *format, va_list ap)
+{
+    char spec[24];
+    char out[96];
+    for (const char *f = format; *f; f++)
+    {
+        if (*f != '%')
+        {
+            putchar(*f);
+            continue;
+        }
+        if (f[1] == '%')
+        {
+            putchar('%');
+            f++;
+            continue;
+        }
+        int n = 0;
+        spec[n++] = *f++;
+        while (*f && strchr("-+ #0123456789.", *f) && n < (int)sizeof(spec) - 3)
+            spec[n++] = *f++;
+        while (*f && strchr("hlLqjzt", *f))
+            f++;
+        if (*f == 0)
+            break;
+        char conv = *f;
+        spec[n++] = conv;
+        spec[n] = 0;
+        switch (conv)
+        {
+        case 'f':
+        case 'F':
+        case 'e':
+        case 'E':
+        case 'g':
+        case 'G':
+        case 'a':
+        case 'A':
+        {
+            uint32_t bits = va_arg(ap, uint32_t);
+            float value;
+            memcpy(&value, &bits, 4);
+            snprintf(out, sizeof(out), spec, (double)value);
+            break;
+        }
+        case 's':
+        {
+            const char *str = va_arg(ap, const char *);
+            if (str == NULL)
+                str = "(null)";
+            if (n == 2) // plain %s: any length
+            {
+                fputs(str, stdout);
+                continue;
+            }
+            snprintf(out, sizeof(out), spec, str);
+            break;
+        }
+        case 'p':
+            snprintf(out, sizeof(out), spec, va_arg(ap, void *));
+            break;
+        default: // d i u x X o c
+            snprintf(out, sizeof(out), spec, va_arg(ap, int));
+            break;
+        }
+        fputs(out, stdout);
+    }
+}
+
 static void artiPrintf(char const *format, ...)
 {
     va_list argp;
     va_start(argp, format);
-    vprintf(format, argp);
+    scriptVprintf(format, argp);
     va_end(argp);
 }
 
@@ -30,7 +105,7 @@ static void artiPrintfln(char const *format, ...)
 {
     va_list argp;
     va_start(argp, format);
-    vprintf(format, argp);
+    scriptVprintf(format, argp);
     printf("\r\n");
     va_end(argp);
 }

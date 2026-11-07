@@ -102,6 +102,7 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     // runtime_functions.h) need to be registered before parseProgram()
     // below has any chance of resolving a call to one of them.
     registerBuiltinRuntimeFunctions();
+    error_detail[0] = 0;
 
     // safe_mode is a property of the script being compiled, switched on
     // by the keyword in its own text -- not something a previous script
@@ -216,6 +217,7 @@ static bool padStruct(varType *usded, int *start, int *pos, int align)
         usded->load[*pos] = filler->load[0];
         usded->store[*pos] = filler->store[0];
         usded->sizes[*pos] = step;
+        usded->fillers |= 1u << *pos;
         (*pos)++;
         *start += step;
     }
@@ -278,6 +280,7 @@ void Parser::parseProgram()
             {
                 varType usded;
                 usded._varType = __userDefined__;
+                usded.fillers = 0;
                 memberpos = 0;
                 _start = 0;
                 _pos = 0;
@@ -978,6 +981,19 @@ static bool isStructPointer(NodeToken *nd)
     return t == NULL || t[0] != '@';
 }
 
+static bool isDecimalNumber(NodeToken *nd)
+{
+    if (nd == NULL || nd->_nodetype != numberNode || nd->children_size() != 0)
+        return false;
+    const char *t = nd->getText();
+    if (t == NULL || *t == 0)
+        return false;
+    for (; *t; t++)
+        if (*t < '0' || *t > '9')
+            return false;
+    return true;
+}
+
 static NodeToken numberNodeOf(int value)
 {
     Token t = Token(TokenNumber, __int__);
@@ -1336,6 +1352,82 @@ void Parser::parseFactor()
     RETURN_ERROR(impossibletofindtoken)
     return;
 }
+// "setTag(P*|num)" as a person writes it: "setTag(P *, number)".
+static void readableSignature(const char *sig, char *out, int size)
+{
+    int n = 0;
+    for (const char *c = sig; *c && n < size - 12; c++)
+    {
+        if (strncmp(c, "num", 3) == 0 && (c[3] == '|' || c[3] == ')' || c[3] == '*'))
+        {
+            n += snprintf(out + n, size - n, "number");
+            c += 2;
+        }
+        else if (strncmp(c, "Args", 4) == 0)
+        {
+            n += snprintf(out + n, size - n, "...");
+            c += 3;
+        }
+        else if (*c == '|')
+            n += snprintf(out + n, size - n, ", ");
+        else if (*c == '*')
+            n += snprintf(out + n, size - n, " *");
+        else
+            out[n++] = *c;
+    }
+    out[n] = 0;
+}
+
+// For "Function not found": what the call asked for, and the functions
+// of that name that do exist (script or bound), in error_detail.
+static void describeMissingFunction(const char *wanted)
+{
+    char text[64];
+    // `P a = make();` with a struct P looks for P's method make(): when
+    // a plain make() exists, the struct return is what doesn't work
+    const char *method = strstr(wanted, "._@");
+    if (method != NULL)
+    {
+        wanted = method + 3;
+        findFunction(&functions, (char *)wanted);
+        if (search_result != NULL)
+        {
+            readableSignature(wanted, text, sizeof(text));
+            snprintf(error_detail, sizeof(error_detail),
+                     "%s can't give a structure: functions can't return one yet", text);
+            return;
+        }
+    }
+    readableSignature(wanted, text, sizeof(text));
+    int n = snprintf(error_detail, sizeof(error_detail), "%s", text);
+    const char *paren = strchr(wanted, '(');
+    int len = paren ? (int)(paren - wanted) : (int)strlen(wanted);
+    int found = 0;
+    for (int pass = 0; pass < 2; pass++)
+    {
+        int count = pass == 0 ? functions.children_size() : binded_assets.size();
+        for (int i = 0; i < count && n < (int)sizeof(error_detail) - 1; i++)
+        {
+            const char *sig;
+            if (pass == 0)
+                sig = functions.getChildPtr(i)->getText();
+            else
+            {
+                if (binded_assets[i].type != function)
+                    continue;
+                sig = extern_text.getText(binded_assets[i].sign_ref);
+            }
+            if (sig == NULL || strncmp(sig, wanted, len) != 0 || sig[len] != '(')
+                continue;
+            readableSignature(sig, text, sizeof(text));
+            n += snprintf(error_detail + n, sizeof(error_detail) - n, "%s%s", found ? ", " : "; there is ", text);
+            found++;
+        }
+    }
+    if (found == 0)
+        snprintf(error_detail + n, sizeof(error_detail) - n, "; no function has that name");
+}
+
 void Parser::parseFunctionCall()
 {
 #ifdef PARSER_DEBUG
@@ -1526,6 +1618,7 @@ void Parser::parseFunctionCall()
             findFunction(&functions, sav_t.back().getText());
             if (search_result == NULL)
             {
+                describeMissingFunction(sav_t.back().getText());
                 RETURN_ERROR(functionnotfound)
             }
             // current()->type=TokenSemicolon;
@@ -3153,6 +3246,15 @@ void Parser::lowerPointerMember(NodeToken *nd)
         c.type = TokenKeywordVarType;
         c._vartype = __int__;
         nd->addChild(c)->addChild(numberNodeOf(offset));
+    }
+    else if (isDecimalNumber(nd->getChildPtr(0)->getChildPtr(0)))
+    {
+        // p[2].x: the element index worked out now, which the codegen
+        // then puts in the instruction's offset
+        NodeToken *c = nd->getChildPtr(0);
+        int k = atoi(c->getChildPtr(0)->getText());
+        c->addChild(numberNodeOf(k * stride + offset)); // before the erase: never 0 children
+        c->erase(0);
     }
     else
     {

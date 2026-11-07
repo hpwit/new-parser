@@ -20,6 +20,8 @@ struct varType
     uint8_t sizes[20];
     uint8_t size;
     uint8_t total_size;
+    // bit i set: component i is padding (C alignment) and holds nothing
+    uint32_t fillers;
 };
 
 /*

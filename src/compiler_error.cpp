@@ -52,8 +52,13 @@ const char *error_messages[]=
 "Can't take the address of this variable"
 
 };
+char error_detail[160] = "";
+
 void display_error(error_message_struct *err){
-    printf("%s \n",error_messages[err->error]);
+    if (error_detail[0] != 0)
+        printf("%s: %s \n", error_messages[err->error], error_detail);
+    else
+        printf("%s \n",error_messages[err->error]);
     if(err->token!=NULL)
        displayLine (err->token);
 }
