@@ -1997,6 +1997,20 @@ This is the part that is really new compared to v1:
 
 The examples in [examples/matouch](examples/matouch) are for the **ESP32-S3-Touch-LCD-7**, a 7-inch **800x480** RGB touch screen with an ESP32-S3 (16MB flash, 8MB PSRAM). Each script draws straight into the screen's frame buffer, bound as `led16` (a `uint16_t *`, see [Binding an array or a pointer](#binding-an-array-or-a-pointer)), and calls `show16()` for each frame.
 
+**Why these examples.** They are made to show what the compiler can do at a larger scale than an LED effect: whole programs of 400 to 1250 lines, with many functions, arrays of two and three dimensions, game state, `float` 3D projection, integer fixed point, strings, pixel art read from flash, keyboard input and timing, all compiled on the ESP32-S3 itself into native Xtensa code and run at full speed. Their game logic was checked against the same code compiled by gcc, step by step, and doing so found and fixed several compiler bugs on the way (binary `&`, negative values in initializers, `==` between unsigned values, `%` in a float expression).
+
+**Compile once, replay at will.** Compiling such a script on the board takes time. Measured on the ESP32-S3 at 240 MHz:
+
+| Game | Lines of script | Machine code | Compiling on the board |
+| --- | --- | --- | --- |
+| Tetris | 440 | 5.2 KB | 9.9 s |
+| PrismBreak | 1032 | 12.1 KB | 31.7 s |
+| NeonRacer | 1062 | 14.8 KB | 35.8 s |
+| MazeChase | 1163 | 13.3 KB | 36.6 s |
+| XenoWing | 1252 | 14.2 KB | 51.4 s |
+
+A game doesn't have to be compiled every time it starts. `parseScriptToBinary()` turns a script into a binary that can be saved (to the SD card, or the FFat partition), and `createExecutableFromBuffer()` loads it back: no parsing, no compiler at all, and it is instantaneous: about a millisecond (Tetris 0.8 ms, PrismBreak 1.8 ms on the board), against 10 to 50 seconds of compiling. A sketch that only loads binaries is also about 100 KB smaller, because the compiler is not linked into it. [CreateTetrisBinary](examples/matouch/CreateTetrisBinary) and [ExecuteTetrisBinary](examples/matouch/ExecuteTetrisBinary) show it with the SD card, and [GameLauncher](examples/matouch/GameLauncher) runs every game of this chapter from binaries on the FFat partition, each starting in a few milliseconds. See [Saving and loading compiled scripts](#saving-and-loading-compiled-scripts-script_executableh).
+
 | Example | What it shows |
 | --- | --- |
 | `matouch/RainbowScript` | A scrolling rainbow over the whole 800x480 screen. |
