@@ -2016,6 +2016,10 @@ Board settings: *ESP32S3 Dev Module*, PSRAM *OPI PSRAM*, Flash Size *16MB*. They
 
 The scripts are not limited to LED effects: the language is a general-purpose one, compiled on the board into native Xtensa code. [matouch/Tetris](examples/matouch/Tetris) is a complete game written as a script of about 400 lines (17 functions, compiled into 5 KB of machine code and 1.4 KB of globals), and the sketch around it only connects the screen and the keyboard. Frames from a game, played by a program pressing the keys:
 
+<img src="examples/matouch/Tetris/tetris.gif" width="400" alt="Tetris playing">
+
+*Seven seconds of a game, up to a four-row clear (emulated ESP32-S3, real time).*
+
 | | |
 | --- | --- |
 | <img src="examples/matouch/Tetris/tetris_start.png" width="400" alt="The start of a game"> | <img src="examples/matouch/Tetris/tetris_ghost.png" width="400" alt="A Z piece and its ghost"> |
@@ -2043,6 +2047,10 @@ The frames above come from this script, compiled by the library and run on an em
 
 [matouch/MazeChase](examples/matouch/MazeChase) goes further: about 1100 lines of script (13 KB of machine code, 11 KB of globals) for a maze game with its own maze, characters and rules. An orb eats the dots of the maze while four drones hunt it, each in its own way, and everything is drawn by the script each frame: the neon walls, the dots, the sprites, the text.
 
+<img src="examples/matouch/MazeChase/mazechase.gif" width="400" alt="MazeChase playing">
+
+*Eight seconds of the demo: a power cell, the drones turning blue and fleeing, the apple (emulated ESP32-S3, real time).*
+
 | | |
 | --- | --- |
 | <img src="examples/matouch/MazeChase/mazechase_start.png" width="400" alt="The start of a game"> | <img src="examples/matouch/MazeChase/mazechase_chase.png" width="400" alt="The four drones out, the bonus apple under the base"> |
@@ -2060,6 +2068,10 @@ The game's logic was checked against the same code compiled by gcc: 8000 steps o
 #### NeonRacer: a race in perspective
 
 [matouch/NeonRacer](examples/matouch/NeonRacer) draws a 3D track and 3D ships with nothing but the frame buffer and `float`s: about 1050 lines of script (15 KB of machine code, 16 KB of globals). A hover ship races three rivals over 3 laps of a neon track at sunset.
+
+<img src="examples/matouch/NeonRacer/neonracer.gif" width="400" alt="NeonRacer playing">
+
+*Eight seconds from the start: GO, the pack of rivals, the first curve (emulated ESP32-S3, real time).*
 
 | | |
 | --- | --- |
