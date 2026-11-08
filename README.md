@@ -2009,7 +2009,8 @@ The examples in [examples/matouch](examples/matouch) are for the **ESP32-S3-Touc
 | `matouch/MazeChase` | A maze game at 400x240 played with a USB keyboard (Z Q S D): an orb eats the dots while four drones hunt it, each with its own strategy; power cells, a bonus apple, score, high score, lives and levels. Plays itself until Space is pressed. |
 | `matouch/NeonRacer` | An anti-gravity race at 400x240 on a neon track in perspective (curves, hills, boost pads), against three rivals over 3 laps, played with a USB keyboard (Q D steer, S brakes). Runs by itself until Space is pressed. |
 | `matouch/PrismBreak` | A brick breaker at 400x240: patterned bevelled bricks (silver take two hits, gold none), a scrolling diamond background, a metal-framed field, sparks, falling capsules (wider paddle, three balls, slower ball, a life), five layouts. Q D move the paddle, S stops it, Space serves. Plays itself until Space is pressed. |
-| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer and PrismBreak are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
+| `matouch/XenoWing` | A horizontal shoot'em up at 400x240: an organic manta ship over an alien world in five parallax layers (a ringed planet, mountains, a forest of strange trees, crystals, plants in front), waves of bio creatures, a boss, power-ups and spore bombs. The art is pixel art in flash, bound to the script as pointers. Plays itself until Space is pressed. |
+| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer, PrismBreak and XenoWing are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
 
 In every game, **Escape** gives the game up (Tetris ends it, the others go back to their demo; in the GameLauncher it goes back to the menu), and the **arrow keys** work as Z Q S D.
 
@@ -2115,14 +2116,36 @@ Its logic, checked against gcc like MazeChase's, gives the same positions, speed
 
 Comparing its logic with gcc found how the language treats `/` and `%` between ints in an expression whose result is a `float`: they are done in floating point (`float y = 40 + (57 / 13) * 8;` is 75.1, not 72), and `%` there gives the left value. PrismBreak computes such values into `int` variables first; with that, 6000 steps of play match gcc exactly.
 
+#### XenoWing: a shoot'em up with real art
+
+[matouch/XenoWing](examples/matouch/XenoWing) goes beyond drawing with code: its sprites and backgrounds are pixel art, 650 KB of images in flash, which the script draws through bound pointers. About 1250 lines of script.
+
+<img src="examples/matouch/XenoWing/xenowing.gif" width="400" alt="XenoWing: the boss fight">
+
+*Eight seconds of the boss fight, from the demo (emulated ESP32-S3, real time).*
+
+| | |
+| --- | --- |
+| <img src="examples/matouch/XenoWing/xenowing_start.png" width="400" alt="Stage 1"> | <img src="examples/matouch/XenoWing/xenowing_wave.png" width="400" alt="A wave"> |
+| Stage 1: the manta over the alien world. | Twin shots against a jelly over the forest. |
+| <img src="examples/matouch/XenoWing/xenowing_warning.png" width="400" alt="Warning"> | <img src="examples/matouch/XenoWing/xenowing_boss.png" width="400" alt="The boss"> |
+| WARNING: the hive mother is coming. | The hive mother fires spreads and spores; its life at the bottom. |
+
+- **The art** is made by [tools/assets.py](examples/matouch/XenoWing/tools/assets.py) (pure Python, no library), which writes [xenowing_assets.h](examples/matouch/XenoWing/xenowing_assets.h): RGB565, byte-swapped as the frame buffer wants it, magenta for transparent. Every sprite is in one array, `gfx`; the script knows where each starts and its size from the `#define`s the tool writes, pasted at the script's top. The sketch binds the arrays as `uint16_t *` pointers (`bindVariable("uint16_t *", "gfx", NULL, &gfxPtr)`), so they stay in flash and cost no RAM.
+- **Five layers** scroll at their own speeds: the sky (a ringed planet, a teal moon, clouds) stays, far mountains drift, a forest of strange trees (mushroom trees with glowing caps, twisted trunks with hanging bulbs, curled ferns, balloon pods) goes by, a crystal ridge passes fast, and dark plants pass in front. The ridges and the forest tile over 512 pixels. Each layer is drawn only where the layers in front of it leave gaps: the sky stops where the far mountains are solid.
+- **The game**: the manta fires by itself; P orbs widen its shots (two, then four with a spread, then faster), B orbs give spore bombs that clear the screen. Bugs fly in waves on sine curves, jellies drift and aim spores at the ship, crawlers dash low and shoot ahead. After a minute: WARNING, and the hive mother, which sways, opens its eye and fires spreads and spores. The ship's weak point is its core only, as in arcade shooters. Each stage comes back faster.
+- **Positions** are integers in sixteenths of a pixel, and the curves come from a 64-entry sine table, so the script needs no `float` at all.
+
+Writing it found a third compiler bug, fixed: `if (rand(400) == 0)`, with `rand` returning a `uint32_t`, did not assemble ("Opcode bneu not found"). Unsigned comparisons use `bltu`/`bgeu`, but `==` and `!=` compare bits, signed or not, and Xtensa has no `bequ`/`bneu`; the compiler now uses `beq`/`bne` for them. A fuzz regression (`unsigned_equality`) checks it against gcc. No script that compiled before changes.
+
 #### GameLauncher: games from the FFat partition
 
-[matouch/GameLauncher](examples/matouch/GameLauncher) has no game in it: it lists the `.bin` files of the FFat partition, and loads and runs the one you pick. Its `data` folder holds `tetris.bin`, `mazechase.bin`, `neonracer.bin` and `prismbreak.bin`, the four games above compiled with `parseScriptToBinary()` (the same bytes as [CreateTetrisBinary](#saving-and-loading-compiled-scripts-script_executableh) makes on the board).
+[matouch/GameLauncher](examples/matouch/GameLauncher) has no game in it: it lists the `.bin` files of the FFat partition, and loads and runs the one you pick. Its `data` folder holds `tetris.bin`, `mazechase.bin`, `neonracer.bin`, `prismbreak.bin` and `xenowing.bin`, the five games above compiled with `parseScriptToBinary()` (the same bytes as [CreateTetrisBinary](#saving-and-loading-compiled-scripts-script_executableh) makes on the board).
 
 <img src="examples/matouch/GameLauncher/gamelauncher_menu.png" width="400" alt="The launcher's menu">
 
 - **Keys**: Z/S or the arrows to choose, Space or Enter to play, 1-9 to play a game at once; in a game, Escape comes back to the menu. The arrows arrive in the games as Z Q S D.
-- **Bindings**: the launcher binds the names the four games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`); any other game compiled against the same names shows up in the menu too.
+- **Bindings**: the launcher binds the names the games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`, and XenoWing's art: `gfx`, `sky`, `farRidge`, `forest`, `nearRidge`, `frontPlants`, from a copy of `xenowing_assets.h` in the launcher); any other game compiled against the same names shows up in the menu too.
 - **Coming back**: each game runs on its own task (`executeAsTask()`). Every game calls `readKey()` once per frame; after Escape, `readKey()` never returns, so the game's task waits in a function of the sketch that holds nothing, and the launcher kills it and frees the game (built with placement `new`, since a `ScriptExecutable` can't be moved). Killing it anywhere else, inside `show16()` say, could leave the screen driver half way.
 
 **Putting the data folder on the partition.** The partition scheme is *16M Flash (3MB APP/9.9MB FATFS)*: the FFat partition starts at `0x610000` and is `0x9E0000` bytes. FFat keeps a wear-levelling layer around the FAT, so the image is made with ESP-IDF's `wl_fatfsgen.py`, with the core's settings (4096-byte sectors, long names), and written with esptool:

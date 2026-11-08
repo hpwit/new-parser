@@ -2,6 +2,7 @@
 #include "parser_define.h"
 #include "binding.h"
 #include "string_constants.h"
+static const char *branchSuffix(asmInstruction op, const char *add);
 
 Stack<int> register_numr = Stack<int>(15);
 Stack<int> register_numl = Stack<int>(15);
@@ -2547,7 +2548,7 @@ static void emitTestBranch(NodeToken *nd, int totalSize, const char *target)
                     compop = bge;
                     break;
                 }
-                bufferText->addAfter(string_format(compop, _add, numl, leftl, nd->getTargetText(), "_if"));
+                bufferText->addAfter(string_format(compop, branchSuffix(compop, _add), numl, leftl, nd->getTargetText(), "_if"));
             }
             else
             {
@@ -2670,7 +2671,7 @@ static void emitTestBranch(NodeToken *nd, int totalSize, const char *target)
                     compop = bge;
                     break;
                 }
-                bufferText->addAfter(string_format(compop, _add, numl, leftl, nd->getTargetText(), "_end"));
+                bufferText->addAfter(string_format(compop, branchSuffix(compop, _add), numl, leftl, nd->getTargetText(), "_end"));
                 // bufferText->addAfter(_compare.back()+1,string_format("j %s_end", nd->target.c_str()));
                 // bufferText->addAfter(_compare.back()+2,string_format("%s_if:", nd->target.c_str()));
                // free(_add);
@@ -2689,6 +2690,16 @@ static void emitTestBranch(NodeToken *nd, int totalSize, const char *target)
     // printf("out comparator\n");
     if(_add!=NULL)
     free(_add);
+}
+
+// The "u" of an unsigned comparison: blt/bge have bltu/bgeu, but beq/bne
+// compare bits, signed or not, and Xtensa has no bequ/bneu ("Opcode bneu not
+// found" for `if (rand(4) == 0)`, rand returning a uint32_t).
+static const char *branchSuffix(asmInstruction op, const char *add)
+{
+    if (op == beq || op == bne)
+        return "";
+    return add;
 }
 
 // A comparison, or comparisons joined by && (TokenKeywordAnd): each
@@ -3055,7 +3066,7 @@ void _visitforConditionRotated(NodeToken *test, char *bodyLabel, int distance)
                 compop = bge;
                 break;
             }
-            bufferText->addAfter(string_format(compop, _add, numl, leftl, bodyLabel, ""));
+            bufferText->addAfter(string_format(compop, branchSuffix(compop, _add), numl, leftl, bodyLabel, ""));
         }
         else
         {
@@ -3125,7 +3136,7 @@ void _visitforConditionRotated(NodeToken *test, char *bodyLabel, int distance)
                 compop = bge;
                 break;
             }
-            bufferText->addAfter(string_format(compop, _add, numl, leftl, bodyLabel, "_skip"));
+            bufferText->addAfter(string_format(compop, branchSuffix(compop, _add), numl, leftl, bodyLabel, "_skip"));
         }
         else
         {
@@ -4664,7 +4675,7 @@ void _visittestNode(NodeToken *nd)
         }
 
         // bufferText->addAfter(string_format("%s%s a%d,a%d,%s_end", compop.c_str(), _add.c_str(), numl, leftl, nd->getTargetText()));
-        bufferText->addAfter(string_format(compop, _add, numl, leftl, nd->getTargetText(), "_end"));
+        bufferText->addAfter(string_format(compop, branchSuffix(compop, _add), numl, leftl, nd->getTargetText(), "_end"));
         bufferText->addAfter(string_format(movi, h, 1)); //"movi a%d,1", h));
         bufferText->addAfter(string_format("j %s_end_", nd->getTargetText()));
         bufferText->addAfter(string_format("%s_end:", nd->getTargetText()));

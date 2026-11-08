@@ -3,9 +3,10 @@
 // compiled on the board: each game is a binary made by parseScriptToBinary()
 // (see CreateTetrisBinary), so it starts at once.
 //
-// The data folder next to this sketch holds three: tetris.bin (matouch/Tetris),
-// mazechase.bin (matouch/MazeChase) and neonracer.bin (matouch/NeonRacer). Any
-// other .bin compiled with the same bindings (below) shows in the menu too.
+// The data folder next to this sketch holds the games of the matouch examples:
+// tetris.bin, mazechase.bin, neonracer.bin, prismbreak.bin and xenowing.bin
+// (XenoWing's art is in this sketch too, xenowing_assets.h). Any other .bin
+// compiled with the same bindings (below) shows in the menu too.
 // To put them on the board's FFat partition, see the README's "GameLauncher:
 // games from the FFat partition".
 //
@@ -37,8 +38,12 @@
 #include "keyboard.h"
 #include "script_executable.h"
 #include "binding.h"
+// XenoWing's art: the game reads it through six bound pointers
+#include "xenowing_assets.h"
 
 LGFX lcd;
+static uint16_t *gfxP = (uint16_t *)gfx, *skyP = (uint16_t *)sky, *farP = (uint16_t *)farRidge;
+static uint16_t *forestP = (uint16_t *)forest, *nearP = (uint16_t *)nearRidge, *frontP = (uint16_t *)frontPlants;
 uint16_t *frame_buffer;
 static uint32_t _sizex = 800;
 static uint32_t _sizey = 480;
@@ -302,6 +307,13 @@ void setup() {
   bindFunction((char *)"uint32_t", (char *)"millis", NULL, (void *)scriptMillis);
   bindFunction((char *)"uint32_t", (char *)"rand", (char *)"uint32_t", (void *)scriptRand);
   bindFunction((char *)"int", (char *)"readKey", NULL, (void *)readKey);
+  // XenoWing's sprites and the five layers of its alien world (in flash)
+  bindVariable((char *)"uint16_t *", (char *)"gfx", NULL, (void *)&gfxP);
+  bindVariable((char *)"uint16_t *", (char *)"sky", NULL, (void *)&skyP);
+  bindVariable((char *)"uint16_t *", (char *)"farRidge", NULL, (void *)&farP);
+  bindVariable((char *)"uint16_t *", (char *)"forest", NULL, (void *)&forestP);
+  bindVariable((char *)"uint16_t *", (char *)"nearRidge", NULL, (void *)&nearP);
+  bindVariable((char *)"uint16_t *", (char *)"frontPlants", NULL, (void *)&frontP);
 
   // false: a partition that doesn't mount is left alone, never formatted
   if (!FFat.begin(false))

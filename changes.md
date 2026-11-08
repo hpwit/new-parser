@@ -57,6 +57,14 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 [NeonRacer](examples/matouch/NeonRacer), an anti-gravity race on a neon track drawn in perspective (curves, hills, boost pads, three rivals, 3 laps) with 3D ships (lit polygons, rolling in the turns), in about 1050 lines of script. [GameLauncher](examples/matouch/GameLauncher) lists the compiled games on the FFat partition and runs the one you pick, with Escape back to the menu; its `data` folder has Tetris, MazeChase and NeonRacer as binaries. The README says how to make the partition's image and write it. → [NeonRacer: a race in perspective](README.md#neonracer-a-race-in-perspective), [GameLauncher: games from the FFat partition](README.md#gamelauncher-games-from-the-ffat-partition)
 
+### 🛸 XenoWing
+
+[XenoWing](examples/matouch/XenoWing), a horizontal shoot'em up with pixel art in flash: an organic manta ship over an alien world in five parallax layers (a ringed planet, far mountains, a forest of strange trees, a crystal ridge, plants in front), waves of bio creatures, a boss, power-ups and spore bombs, in about 1250 lines of script. The art comes from a Python tool in the example and reaches the script through bound pointers. Its binary is in the GameLauncher, which carries the art too. → [XenoWing: a shoot'em up with real art](README.md#xenowing-a-shootem-up-with-real-art)
+
+### 🐛 == and != between unsigned values
+
+`if (rand(400) == 0)`, `rand` returning a `uint32_t`, did not assemble: the compiler asked for `bneu`/`bequ`, which Xtensa doesn't have (equality doesn't depend on the sign). They are `bne`/`beq` now; `<` and `>=` stay unsigned. A new fuzz regression (`unsigned_equality`) checks it against gcc.
+
 ### 🧱 PrismBreak, Escape in every game, GIFs
 
 [PrismBreak](examples/matouch/PrismBreak), a brick breaker with patterned bevelled bricks, a scrolling diamond background, capsules (wider paddle, three balls, slower ball, a life) and five layouts, in about 1030 lines of script; its binary is in the GameLauncher. In every game Escape now gives the game up (in the launcher it comes back to the menu) and the arrows work as Z Q S D. The README shows each game moving: GIFs rendered frame by frame on the emulated ESP32-S3. → [PrismBreak: a brick breaker](README.md#prismbreak-a-brick-breaker)
