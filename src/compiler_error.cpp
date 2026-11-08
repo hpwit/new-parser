@@ -49,7 +49,8 @@ const char *error_messages[]=
 "Structure already defined differently (bindStruct)",
 "This member can't be used through a pointer (only plain numbers and char)",
 "* needs a pointer variable",
-"Can't take the address of this variable"
+"Can't take the address of this variable",
+"Not an array or a pointer: it can't be indexed"
 
 };
 char error_detail[240] = "";

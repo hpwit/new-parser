@@ -50,6 +50,7 @@ structRedefined,
 pointerMemberType,
 derefNotPointer,
 addressNotPossible,
+notIndexable,
 };
 struct error_message_struct
 {

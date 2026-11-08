@@ -735,10 +735,22 @@ On an esp32 it prints `leds[3].red = 255, bufferA[3].green = 255`, then `bufferB
 > [!WARNING]
 > Mixing them up crashes the board. `bindVariable("CRGB *", "leds", "", (void *)leds)` says that a pointer is stored at the array's address: the script reads the first pixels' bytes as an address and writes there (`StoreProhibited`, with a small `EXCVADDR` such as `0x00007a34`). Before 2.0.0 that binding happened to work, because the script didn't read pointers; it broke every real pointer instead. Give the array type with `"[]"`, or bind a pointer variable with `&`.
 
-> [!IMPORTANT]
-> The script's own declaration wins over the binding's type. A script that declares `external CRGB leds[96, 128];` uses the bound address as the pixels themselves, whatever the binding says:
-> - bind an **array** for it; that suits every script, declared or not, and it is the only choice for a two-dimensional `leds[y, x]`;
-> - a **pointer** binding only suits scripts that don't declare the variable, or declare it `external CRGB *leds;`. A script declaring it as an array would take the address of your pointer variable for its pixels and write over the memory around it: on an esp32, `rainbow.ino`'s Mandelbrot script did that and the board panicked at boot ("Panic handler entered multiple times").
+### What the script declares
+
+A script can use the bound variable as it is, or declare it itself, to give it dimensions:
+
+| Binding | Script declares | `leds[i]` | `leds[y, x]` |
+|---|---|---|---|
+| array (`"CRGB"`, `"[]"`) | nothing | the array | no: no dimensions |
+| array | `external CRGB leds[96, 128];` | the array | the array |
+| pointer (`"CRGB *"`, `&ptr`) | nothing | where `ptr` points | no: no dimensions |
+| pointer | `external CRGB leds[96, 128];` | where `ptr` points | where `ptr` points, row `y`, column `x` |
+
+So with a pointer binding, a script declaring `external CRGB leds[96, 128];` reads the pointer each time and uses the dimensions it declares: `leds[y, x]` and `leds[i]` both work, and both follow the pointer when you move it.
+
+> [!NOTE]
+> - Without dimensions, `leds[y, x]` is an error that says to declare them.
+> - A single value can't be indexed: with `bindVariable("CRGB", "leds", "", leds)` (no `"[]"`), `leds` is one `CRGB`, and `leds[i]` in a script that doesn't declare it is an error. It used to write that one value whatever `i` was.
 
 ## Calling pre-compiled functions
 

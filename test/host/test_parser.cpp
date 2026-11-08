@@ -3328,6 +3328,66 @@ static void runUnsizedArrayTest()
     }
 }
 
+static void runPointerDimensionsTest()
+{
+    const char *name = "a pointer binding with the script's dimensions: leds[y, x] and leds[i] through the pointer; indexing a single value is an error";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+    static uint8_t pixels[12 * 3];
+    static uint8_t *pixelPtr = pixels;
+    bindVariable((char *)"CRGB *", (char *)"dimLeds", NULL, (void *)&pixelPtr);
+    // declared with dimensions: each access loads the pointer, then indexes
+    if (!compileForTest("external CRGB dimLeds[3, 4];\nvoid main(){ CRGB c; int x = 1; int y = 2; dimLeds[y, x] = c; dimLeds[x] = c; }\n"))
+        ok = false;
+    else
+    {
+        int derefs = 0;
+        for (int i = 0; i + 1 < content.size(); i++)
+        {
+            int r1 = -1, r2 = -2, r3 = -3;
+            if (strstr(content.getText(i), "@_ext_dimLeds") != NULL &&
+                sscanf(content.getText(i + 1), "l32i a%d,a%d,%d", &r1, &r2, &r3) == 3 && r1 == r2 && r3 == 0)
+                derefs++;
+        }
+        if (derefs != 2)
+        {
+            printf("       pointer loaded %d times, expected 2\n", derefs);
+            ok = false;
+        }
+        ok = assembleForTest() && ok;
+    }
+    // not declared: leds[i] through the pointer works, leds[y, x] has no dimensions
+    if (!compileForTest("void main(){ CRGB c; dimLeds[3] = c; }\n") || !assembleForTest())
+    {
+        printf("       dimLeds[3] without a declaration doesn't compile\n");
+        ok = false;
+    }
+    if (compileForTest("void main(){ CRGB c; dimLeds[1, 2] = c; }\n") || Error.error != toomanyarguments)
+    {
+        printf("       dimLeds[1, 2] without dimensions: error %d\n", Error.error);
+        ok = false;
+    }
+    // a single value can't be indexed (it used to write the value itself)
+    if (compileForTest("int single;\nvoid main(){ single[3] = 1; }\n") || Error.error != notIndexable)
+    {
+        printf("       single[3]: error %d, expected %d\n", Error.error, (int)notIndexable);
+        ok = false;
+    }
+    Error.error = 0;
+    error_detail[0] = 0;
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     registerBallEffectBindings();
@@ -3340,6 +3400,7 @@ int main()
     runLargeGlobalsTest();
     runPointerIndexTest();
     runUnsizedArrayTest();
+    runPointerDimensionsTest();
     runStructLayoutTest();
     runStructArgumentsTest();
     runBindStructMacroTest();

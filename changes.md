@@ -45,6 +45,10 @@ A new README section compares the three ways of giving values to a script: where
 
 An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", leds)`, `external CRGB leds[];`) was taken for a pointer and dereferenced when indexed, since pointers are, and crashed at the first `leds[i] = ...`. It is an array again. The README's `bindVariable()` reference now says how an array and a pointer are each bound.
 
+### 🧭 Pointer bindings with the script's dimensions
+
+`bindVariable("CRGB *", "leds", NULL, &ptr)`, the pointer form, now works with scripts that declare `external CRGB leds[96, 128];`: they read the pointer each time, then use their dimensions, so `leds[y, x]` and `leds[i]` both go where `ptr` points (the script's array declaration used to win, and it wrote over the pointer and the memory after it). Indexing a single value (`leds[i]` on `external CRGB leds;`) is now an error instead of writing that value whatever `i` was, and `leds[y, x]` without dimensions says to declare them.
+
 ### 📖 Binding an array or a pointer
 
 A README section explains, with one example run on an esp32, how an array (`"CRGB"`, `"[]"`, its own address) and a pointer (`"CRGB *"`, the pointer variable's address) are bound, what the script does with each, and why binding an array as `"CRGB *"` crashes since 2.0.0. And `leds[3].red` on a `CRGB` (not supported) now says *Member does not exist* instead of an assertion that rebooted the board. → [Binding an array or a pointer](README.md#binding-an-array-or-a-pointer)

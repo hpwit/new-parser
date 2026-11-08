@@ -255,6 +255,45 @@ static bool sameStruct(varType *a, varType *b, int members)
     return true;
 }
 
+// Whether the sketch bound `name` as a pointer ("CRGB *"): its binding's
+// declaration reads "external CRGB * name;".
+static bool boundAsPointer(const char *name)
+{
+    for (int i = 0; i < binded_assets.size(); i++)
+    {
+        if (binded_assets[i].type != value || strcmp(extern_text.getText(binded_assets[i].shortname_ref), name) != 0)
+            continue;
+        const char *sign = extern_text.getText(binded_assets[i].sign_ref);
+        const char *at = strstr(sign, name);
+        while (at != NULL && !(at > sign && at[-1] == ' ' && (at[strlen(name)] == ';' || at[strlen(name)] == '[')))
+            at = strstr(at + 1, name);
+        if (at == NULL)
+            return false;
+        for (const char *c = sign; c < at; c++)
+            if (*c == '*')
+                return true;
+        return false;
+    }
+    return false;
+}
+
+// `external CRGB leds[96, 128];` with leds bound as a pointer ("CRGB *",
+// the address of a CRGB * variable): an array of these dimensions behind
+// that pointer. The dimensions get a trailing " *" (their readers stop at
+// the numbers), and the variable visitors load the pointer before
+// indexing, so leds[y, x] and leds[i] go where it points. The script's
+// array declaration used to win: the pointer's own address was taken for
+// the pixels, and the first store wrote over memory.
+static void markPointerToArray(NodeToken *nd)
+{
+    if (nd->_nodetype != defExtGlobalVariableNode || !nd->isPointer)
+        return;
+    const char *t = nd->getTargetText();
+    if (t == NULL || t[0] != '@' || !boundAsPointer(nd->getText()))
+        return;
+    nd->addTargetText(string_format("%s *", t));
+}
+
 void Parser::parseProgram()
 {
     // for-loop external-store tracking starts afresh with every program
@@ -637,6 +676,7 @@ void Parser::parseProgram()
                 copyPrty(&_t, &nd);
                 if (wasBarePointerDecl)
                     nd._total_size = 4;
+                markPointerToArray(&nd);
                 _t.clear();
              // PARSER_LOG("gert %s %s",nd.getText(),_t.getText());
 
@@ -677,6 +717,7 @@ void Parser::parseProgram()
                             copyPrty(&_t, &nd);
                             if (wasBarePointerDecl)
                                 nd._total_size = 4;
+                            markPointerToArray(&nd);
                         }
 
                         current_node = program.addChild(nd);
@@ -3480,6 +3521,17 @@ void Parser::getVariable(bool isStore)
     next();
     if (Match(TokenOpenBracket))
     {
+        // a single value can't be indexed: leds[i] on `external CRGB leds;`
+        // (a binding with size "" or NULL) used to write leds itself,
+        // whatever i
+        if (!current_node->isPointer)
+        {
+            snprintf(error_detail, sizeof(error_detail),
+                     "%s is a single %s: declare it as an array (%s[] or %s[96, 128]) or bind it with \"[]\"",
+                     current_node->getText(), current_node->getVarTypeObj() ? current_node->getVarTypeObj()->varName : "value",
+                     current_node->getText(), current_node->getText());
+            RETURN_ERROR(notIndexable)
+        }
         // on parse
         next();
 
@@ -3549,7 +3601,15 @@ void Parser::getVariable(bool isStore)
                 tile.empty();
                 tile.clear();
                 if (nb < _s)
+                {
+                    if (nb <= 1)
+                        snprintf(error_detail, sizeof(error_detail),
+                                 "%s has one dimension: for %s[y, x], declare its dimensions (external %s %s[96, 128];)",
+                                 current_node->getText(), current_node->getText(),
+                                 current_node->getVarTypeObj() ? current_node->getVarTypeObj()->varName : "CRGB",
+                                 current_node->getText());
                     RETURN_ERROR(toomanyarguments)
+                }
             }
             else
                 RETURN_ERROR(expectingClosingBracketorcomma)

@@ -1359,7 +1359,11 @@ static bool isBarePointer(NodeToken *nd)
         nd->type == TokenUserDefinedVariableMemberFunction)
         return false;
     const char *t = nd->getTargetText();
-    return t == NULL || t[0] != '@';
+    if (t == NULL || t[0] != '@')
+        return true;
+    // an array behind a pointer (see parser.cpp's markPointerToArray())
+    size_t n = strlen(t);
+    return n >= 2 && t[n - 1] == '*' && t[n - 2] == ' ';
 }
 
 // After the variable's own address went into `reg`: for an element of a
