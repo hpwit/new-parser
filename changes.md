@@ -53,6 +53,10 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 [MazeChase](examples/matouch/MazeChase), a maze game for the ESP32-S3-Touch-LCD-7 in about 1100 lines of script: an orb, four drones with their own strategies, power cells, a bonus apple, score, lives, levels, and a demo that plays itself until Space is pressed. The README shows frames from it. → [MazeChase: a maze game with four hunters](README.md#mazechase-a-maze-game-with-four-hunters)
 
+### 🏁 NeonRacer and the GameLauncher
+
+[NeonRacer](examples/matouch/NeonRacer), an anti-gravity race on a neon track drawn in perspective (curves, hills, boost pads, three rivals, 3 laps), in about 850 lines of script. [GameLauncher](examples/matouch/GameLauncher) lists the compiled games on the FFat partition and runs the one you pick, with Escape back to the menu; its `data` folder has Tetris, MazeChase and NeonRacer as binaries. The README says how to make the partition's image and write it. → [NeonRacer: a race in perspective](README.md#neonracer-a-race-in-perspective), [GameLauncher: games from the FFat partition](README.md#gamelauncher-games-from-the-ffat-partition)
+
 ### 🐛 Negative values in array initializers
 
 `int dys[4] = {-1, 0, 1, 0};` stored 0 for the -1: each value of a global initializer was read from its own text, and `-1` is a minus sign over a number. Signs are now read, for integer and `float` arrays. Found by MazeChase, whose drones walked into walls; a new fuzz regression (`negative_initializers`) checks it against gcc.

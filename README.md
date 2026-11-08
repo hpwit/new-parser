@@ -2007,6 +2007,8 @@ The examples in [examples/matouch](examples/matouch) are for the **ESP32-S3-Touc
 | `matouch/CreateTetrisBinary` | Compiles the Tetris script and saves the compiled binary to the microSD card as `/tetris.bin` (read back and checked). Prints only: run it once, then upload ExecuteTetrisBinary. |
 | `matouch/ExecuteTetrisBinary` | Plays Tetris from `/tetris.bin` without compiling: the sketch has no script, it loads the binary and binds its names. On the board: compiling the script takes 9.9 s, loading the binary 3 ms, and the sketch is 100 KB smaller without the compiler. See [Saving and loading compiled scripts](#saving-and-loading-compiled-scripts-script_executableh). |
 | `matouch/MazeChase` | A maze game at 400x240 played with a USB keyboard (Z Q S D): an orb eats the dots while four drones hunt it, each with its own strategy; power cells, a bonus apple, score, high score, lives and levels. Plays itself until Space is pressed. |
+| `matouch/NeonRacer` | An anti-gravity race at 400x240 on a neon track in perspective (curves, hills, boost pads), against three rivals over 3 laps, played with a USB keyboard (Q D steer, S brakes). Runs by itself until Space is pressed. |
+| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase and NeonRacer are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
 
 Board settings: *ESP32S3 Dev Module*, PSRAM *OPI PSRAM*, Flash Size *16MB*. They need FastLED and a LovyanGFX with the modified `Bus_RGB` driver (double frame buffer with `show()`); `Matouch7.h`, next to each sketch, is the screen's configuration.
 
@@ -2054,6 +2056,46 @@ The frames above come from this script, compiled by the library and run on an em
 - **Motion** at a fixed 60 steps per second, whatever the frame rate: each step adds the speed (in hundredths of a pixel) to an accumulator and moves one pixel per 100. The orb turns at tile centres, reverses at once, and takes the tunnels at the sides of the maze.
 
 The game's logic was checked against the same code compiled by gcc: 8000 steps of demo play (a cleared maze, the next level, a lost game) give the same positions and scores on the emulated ESP32. Doing so found a compiler bug, fixed: negative values in a global array initializer (`int dys[4] = {-1, 0, 1, 0};`) were stored as 0. The frames come from the emulated ESP32-S3 like Tetris's.
+
+#### NeonRacer: a race in perspective
+
+[matouch/NeonRacer](examples/matouch/NeonRacer) draws a 3D track with nothing but the frame buffer and `float`s: about 850 lines of script (12 KB of machine code). A hover ship races three rivals over 3 laps of a neon track at sunset.
+
+| | |
+| --- | --- |
+| <img src="examples/matouch/NeonRacer/neonracer_start.png" width="400" alt="The start: the countdown and the rivals on the grid"> | <img src="examples/matouch/NeonRacer/neonracer_battle.png" width="400" alt="A rival just ahead"> |
+| The countdown, the four ships on the grid. | Lap 1, third place: a rival just ahead, another far away. |
+| <img src="examples/matouch/NeonRacer/neonracer_boost.png" width="400" alt="Over a hill on a boost pad"> | <img src="examples/matouch/NeonRacer/neonracer_finish.png" width="400" alt="The finish"> |
+| Over the top of a hill, on the yellow chevrons of a boost pad. | The finish: the place and the race time. |
+
+- **The track** is a list of 1000 segments, each with its curve and its height, built from 16 sections (the curves and hills ease in and out). Each frame projects the 70 segments ahead of the ship: a segment's point gives a screen line, a scale and a road width; the road is filled row by row between two lines, and a hill hides what is behind it (each line is only drawn above the previous one). The curve of each segment is added to a running offset, which bends the road.
+- **The rivals** are drawn after the road, farthest first, at the scale of their segment and cut by the hill in front of them. Each has its top speed and its way of weaving across the track; running into one from behind bounces the ship off.
+- **The ship** is pulled outwards in the curves (more at speed), slows down in sparks off the track, and goes faster for a while after a boost pad. Speed, lap time, best lap and place are on the screen.
+- **The sky**: a sun cut by bands, a city of lit towers, both sliding with the curves.
+
+Its logic, checked against gcc like MazeChase's, gives the same positions, speeds and places until the floats part by a thousandth (gcc fuses multiplications and additions, the script rounds each).
+
+#### GameLauncher: games from the FFat partition
+
+[matouch/GameLauncher](examples/matouch/GameLauncher) has no game in it: it lists the `.bin` files of the FFat partition, and loads and runs the one you pick. Its `data` folder holds `tetris.bin`, `mazechase.bin` and `neonracer.bin`, the three games above compiled with `parseScriptToBinary()` (the same bytes as [CreateTetrisBinary](#saving-and-loading-compiled-scripts-script_executableh) makes on the board).
+
+<img src="examples/matouch/GameLauncher/gamelauncher_menu.png" width="400" alt="The launcher's menu">
+
+- **Keys**: Z/S or the arrows to choose, Space or Enter to play, 1-9 to play a game at once; in a game, Escape comes back to the menu. The arrows arrive in the games as Z Q S D.
+- **Bindings**: the launcher binds the names the three games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`); any other game compiled against the same names shows up in the menu too.
+- **Coming back**: each game runs on its own task (`executeAsTask()`). Every game calls `readKey()` once per frame; after Escape, `readKey()` never returns, so the game's task waits in a function of the sketch that holds nothing, and the launcher kills it and frees the game (built with placement `new`, since a `ScriptExecutable` can't be moved). Killing it anywhere else, inside `show16()` say, could leave the screen driver half way.
+
+**Putting the data folder on the partition.** The partition scheme is *16M Flash (3MB APP/9.9MB FATFS)*: the FFat partition starts at `0x610000` and is `0x9E0000` bytes. FFat keeps a wear-levelling layer around the FAT, so the image is made with ESP-IDF's `wl_fatfsgen.py`, with the core's settings (4096-byte sectors, long names), and written with esptool:
+
+```sh
+python $IDF_PATH/components/fatfs/wl_fatfsgen.py --output_file ffat.img \
+    --partition_size 0x9E0000 --sector_size 4096 --long_name_support examples/matouch/GameLauncher/data
+esptool.py --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ffat.img
+```
+
+(esptool comes with the core: `~/Library/Arduino15/packages/esp32/tools/esptool_py/<version>/esptool` on a Mac.) The launcher mounts the partition with `FFat.begin(false)`: a partition that doesn't mount is never formatted; the menu then says there is no game.
+
+The launcher was run on the emulated ESP32-S3 with this image (a copy with no screen and the games built for a 400-pixel-wide frame buffer): the partition mounts, the three games are listed, each loads in 1 to 6 ms, plays, and Escape brings the menu back, three times in a row.
 
 ---
 
