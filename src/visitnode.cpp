@@ -660,8 +660,54 @@ void _visitnumberNode(NodeToken *nd)
     }
 }
 
+// An expression of integers only: integer literals and variables (of any
+// integer type), and + - * / % & | << >> or a minus sign over them.
+static bool isIntegerExpr(NodeToken *nd)
+{
+    if (isIntegerOperand(nd))
+        return true;
+    if (isValueNode(nd))
+    {
+        varType *vt = nd->getVarTypeObj();
+        return vt != NULL && vt->_varType == __uint32_t__ && !(nd->isPointer && !nd->asPointer && nd->children_size() == 0);
+    }
+    if (nd->_nodetype == unitaryOpNode && nd->children_size() == 1 &&
+        (nd->type == TokenSubstraction || nd->type == TokenNegation))
+        return isIntegerExpr(nd->getChildPtr(0));
+    if (nd->_nodetype != binOpNode || nd->children_size() != 2)
+        return false;
+    switch (nd->type)
+    {
+    case TokenAddition:
+    case TokenSubstraction:
+    case TokenStar:
+    case TokenSlash:
+    case TokenModulo:
+    case TokenKeywordAnd:
+    case TokenKeywordOr:
+    case TokenShiftLeft:
+    case TokenShiftRight:
+        return isIntegerExpr(nd->getChildPtr(0)) && isIntegerExpr(nd->getChildPtr(1));
+    default:
+        return false;
+    }
+}
+
 void _visitbinOpNode(NodeToken *nd)
 {
+    // `%` between integers in an expression computed as a float: there is
+    // no float remainder, so it is done between the integers, then turned
+    // into a float (`float f = 57 % 13;` is 5; it gave 57). `/` stays as it
+    // is: in a float expression it divides as floats, as scripts expect.
+    if (globalType.get() == __float__ && nd->type == TokenModulo && nd->children_size() == 2 &&
+        isIntegerExpr(nd->getChildPtr(0)) && isIntegerExpr(nd->getChildPtr(1)))
+    {
+        globalType.push(__int__);
+        _visitbinOpNode(nd);
+        globalType.pop();
+        translateType(__float__, __int__, register_numl.get());
+        return;
+    }
     if (globalType.get() == __ffloat__)
     {
         double v;

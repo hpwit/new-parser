@@ -1636,7 +1636,7 @@ Like any normal language you can have:
 - bitwise `&` and `|` (`if (bits & 1)`, `(v >> n) & 1`). NB: they bind like `*`, not below `+` and the comparisons as in C: `a + b & 4` is `a + (b & 4)`, so put parentheses around them when mixing
 - `&&`, `||` (or `and`, `or`)
 - type conversion `(float)(expr)`, `(int)(expr)`. The parentheses around `expr` are needed: `(int)x` alone doesn't compile.
-  NB: the conversion float <-> int is automatic.
+  NB: the conversion float <-> int is automatic. In an expression whose result is a `float`, `/` between ints divides as floats, unlike C: `float f = 57 / 13;` is 4.38 (C: 4). Compute the quotient into an `int` first when you want C's. `%` between ints is the integer remainder there too (`float f = 57 % 13;` is 5).
 - `define`: see below
 - predefined functions:
   * `printf`, `printfln`
@@ -2114,7 +2114,7 @@ Its logic, checked against gcc like MazeChase's, gives the same positions, speed
 - **Five layouts** (rows, a diamond, waves between gold posts, a fortress, stairs and a checker), then they start again, faster.
 - **The demo** keeps the paddle under the ball that will come down first, working out where it lands with the side walls folded back.
 
-Comparing its logic with gcc found how the language treats `/` and `%` between ints in an expression whose result is a `float`: they are done in floating point (`float y = 40 + (57 / 13) * 8;` is 75.1, not 72), and `%` there gives the left value. PrismBreak computes such values into `int` variables first; with that, 6000 steps of play match gcc exactly.
+Comparing its logic with gcc found how the language treats `/` between ints in an expression whose result is a `float`: it divides as floats (`float y = 40 + (57 / 13) * 8;` is 75.1, not 72, see below), so PrismBreak computes such values into `int` variables first; with that, 6000 steps of play match gcc exactly. It also found `%` giving its left value there (`float f = 57 % 13;` was 57); that one is fixed.
 
 #### XenoWing: a shoot'em up with real art
 

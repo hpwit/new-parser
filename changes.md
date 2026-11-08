@@ -61,6 +61,10 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 [XenoWing](examples/matouch/XenoWing), a horizontal shoot'em up with pixel art in flash: an organic manta ship over an alien world in five parallax layers (a ringed planet, far mountains, a forest of strange trees, a crystal ridge, plants in front), waves of bio creatures, a boss, power-ups and spore bombs, in about 1250 lines of script. The art comes from a Python tool in the example and reaches the script through bound pointers. Its binary is in the GameLauncher, which carries the art too. → [XenoWing: a shoot'em up with real art](README.md#xenowing-a-shootem-up-with-real-art)
 
+### 🐛 % in a float expression
+
+`float f = 57 % 13;` was 57: in an expression computed as a `float`, `%` between ints gave its left value (there is no float remainder). It is the integer remainder now, then a float, as in C. `/` there still divides as floats, as before (the README says so). A new fuzz regression (`float_modulo`) checks it against gcc. Of the existing examples, only DisplayIcon used it (`sin(3.14 * (m % 100) / 50)`, which worked by luck: the sine repeats every 100).
+
 ### 🐛 == and != between unsigned values
 
 `if (rand(400) == 0)`, `rand` returning a `uint32_t`, did not assemble: the compiler asked for `bneu`/`bequ`, which Xtensa doesn't have (equality doesn't depend on the sign). They are `bne`/`beq` now; `<` and `>=` stay unsigned. A new fuzz regression (`unsigned_equality`) checks it against gcc.
