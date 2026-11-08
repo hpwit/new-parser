@@ -47,7 +47,11 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 ### 🖥️ Examples for the ESP32-S3-Touch-LCD-7
 
-[RainbowScript, BouncingBalls, GameOfLife and Mandelbrot](examples/matouch) for the ESP32-S3-Touch-LCD-7, a 7-inch 800x480 RGB touch screen: each script draws straight into the screen's frame buffer. Run on the board. → [On the ESP32-S3-Touch-LCD-7](README.md#on-the-esp32-s3-touch-lcd-7)
+[RainbowScript, BouncingBalls, GameOfLife, Mandelbrot and Tetris](examples/matouch) for the ESP32-S3-Touch-LCD-7, a 7-inch 800x480 RGB touch screen: each script draws straight into the screen's frame buffer. Run on the board (Tetris, played with a USB keyboard, not yet). → [On the ESP32-S3-Touch-LCD-7](README.md#on-the-esp32-s3-touch-lcd-7)
+
+### 🐛 Binary `&`
+
+`if (bits & 1)` crashed the compiler (an assertion) and `x = a & 3` did not compile: a single `&` was only read as an address-of. It is now the bitwise and after an operand, as `|` already was the bitwise or. Like `|`, it binds like `*` (`a + b & 4` is `a + (b & 4)`). Found while writing Tetris; a new fuzz regression (`bitwise_and`) checks it against gcc. No script that compiled before changes.
 
 ### 🧭 Pointer bindings with the script's dimensions
 

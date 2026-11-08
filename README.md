@@ -248,7 +248,7 @@ What you get today, led or no led:
 
 | | |
 |:--|:--|
-| 🧮 **Numbers** | `int`, `uint8_t`... `uint32_t`, `float` on the hardware FPU, `ffloat` fixed point, `^` power, `<<` `>>`, bitwise `and` / `or` |
+| 🧮 **Numbers** | `int`, `uint8_t`... `uint32_t`, `float` on the hardware FPU, `ffloat` fixed point, `^` power, `<<` `>>`, bitwise `&` / `\|` |
 | 🧱 **Data** | structs with methods and constructors, arrays of structs, structs by value and by pointer, 1D/2D/3D arrays, pointers, `char *` strings |
 | 🔀 **Control flow** | `if`/`else`, `while`, `for`, `break`/`continue`, `switch`/`case`/`default`, the ternary operator, short-circuit `&&` / `\|\|`, recursion |
 | 🧠 **Memory** | `alloc()` / `free()` with `writeInt()` / `readInt()`, `safe_mode` bounds checking |
@@ -1633,6 +1633,7 @@ Like any normal language you can have:
   NB: indexing a `char *` local (`s[0]`) is not supported yet.
 - `^` for power (`x^2` is x squared, not a xor)
 - `>>` and `<<`
+- bitwise `&` and `|` (`if (bits & 1)`, `(v >> n) & 1`). NB: they bind like `*`, not below `+` and the comparisons as in C: `a + b & 4` is `a + (b & 4)`, so put parentheses around them when mixing
 - `&&`, `||` (or `and`, `or`)
 - type conversion `(float)(expr)`, `(int)(expr)`. The parentheses around `expr` are needed: `(int)x` alone doesn't compile.
   NB: the conversion float <-> int is automatic.
@@ -2002,6 +2003,7 @@ The examples in [examples/matouch](examples/matouch) are for the **ESP32-S3-Touc
 | `matouch/BouncingBalls` | Bouncing balls, each erased and redrawn per frame, the display and the script on separate cores. |
 | `matouch/GameOfLife` | Conway's Game of Life on 800x480 cells, or bigger cells with `setPixelsize()`. |
 | `matouch/Mandelbrot` | A Mandelbrot zoom in `float` on the full 800x480 (`setPixelsize(1)` in the script; 2, 3 or 4 for bigger cells and faster frames), starting over after 300 frames. |
+| `matouch/Tetris` | Tetris at 400x240 (`setPixelsize(2)`) played with a USB keyboard (Q left, D right, Z rotate, S down, Space drop): a colour per tetromino drawn as bevelled blocks, a ghost of the landing place, score, lines, level and next piece in a 3x5 pixel font drawn by the script. Needs the ESP32_USB_Host_HID library as in [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script). |
 
 Board settings: *ESP32S3 Dev Module*, PSRAM *OPI PSRAM*, Flash Size *16MB*. They need FastLED and a LovyanGFX with the modified `Bus_RGB` driver (double frame buffer with `show()`); `Matouch7.h`, next to each sketch, is the screen's configuration.
 

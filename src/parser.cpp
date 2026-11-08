@@ -3166,9 +3166,12 @@ void Parser::parseTerm()
         current_node = current_node->parent;
     }
 
-    while (Match(TokenStar) || Match(TokenSlash) || Match(TokenModulo) || Match(TokenKeywordOr) || Match(TokenKeywordAnd) || Match(TokenPower))
+    while (Match(TokenStar) || Match(TokenSlash) || Match(TokenModulo) || Match(TokenKeywordOr) || Match(TokenKeywordAnd) || Match(TokenPower) || Match(TokenUppersand))
     {
         sav_t.push_back(*current());
+        // after an operand, & is the bitwise and, not the address of
+        if (sav_t.backptr()->type == TokenUppersand)
+            sav_t.backptr()->type = TokenKeywordAnd;
         next();
         _node_token_stack.push_back(current_node->children_back());
         current_node->children_pop();
