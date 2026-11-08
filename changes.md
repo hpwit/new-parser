@@ -47,7 +47,7 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 ### 🖥️ Examples for the ESP32-S3-Touch-LCD-7
 
-[RainbowScript, BouncingBalls and GameOfLife](examples/matouch) for the ESP32-S3-Touch-LCD-7, a 7-inch 800x480 RGB touch screen: each script draws straight into the screen's frame buffer. Run on the board. → [On the ESP32-S3-Touch-LCD-7](README.md#on-the-esp32-s3-touch-lcd-7)
+[RainbowScript, BouncingBalls, GameOfLife and Mandelbrot](examples/matouch) for the ESP32-S3-Touch-LCD-7, a 7-inch 800x480 RGB touch screen: each script draws straight into the screen's frame buffer. Run on the board. → [On the ESP32-S3-Touch-LCD-7](README.md#on-the-esp32-s3-touch-lcd-7)
 
 ### 🧭 Pointer bindings with the script's dimensions
 

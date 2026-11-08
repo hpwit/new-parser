@@ -2001,6 +2001,7 @@ The examples in [examples/matouch](examples/matouch) are for the **ESP32-S3-Touc
 | `matouch/RainbowScript` | A scrolling rainbow over the whole 800x480 screen. |
 | `matouch/BouncingBalls` | Bouncing balls, each erased and redrawn per frame, the display and the script on separate cores. |
 | `matouch/GameOfLife` | Conway's Game of Life on 800x480 cells, or bigger cells with `setPixelsize()`. |
+| `matouch/Mandelbrot` | A Mandelbrot zoom in `float` on the full 800x480 (`setPixelsize(1)` in the script; 2, 3 or 4 for bigger cells and faster frames), starting over after 300 frames. |
 
 Board settings: *ESP32S3 Dev Module*, PSRAM *OPI PSRAM*, Flash Size *16MB*. They need FastLED and a LovyanGFX with the modified `Bus_RGB` driver (double frame buffer with `show()`); `Matouch7.h`, next to each sketch, is the screen's configuration.
 
