@@ -348,6 +348,9 @@ static Binary compileScriptToBinary(const char *script)
             }
         }
         free(buf);
+        // The compiler's state is kept after a failed compile (unlike after a
+        // good one, see below): Error.token points into it, and callers read
+        // the error's line and position from there. The next compile frees it.
         Binary bin;
         bin.error.error = 1;
         bin.error.error_message = NULL;
@@ -356,6 +359,13 @@ static Binary compileScriptToBinary(const char *script)
     free(buf);
 
     Binary bin = createBinary(&footer, &header, &content, false);
+    // The parse tree, the tokens and their text, the functions and types:
+    // the binary has its own copies of everything it needs. Freed here, they
+    // used to stay until the next compile -- ~10 KB in ~500 small blocks
+    // after Tetris, ~20 KB in ~1000 after a 1200-line script, scattered
+    // through the heap, so that the next large block (a script's code and
+    // data, which must be in one piece) no longer found room.
+    p.clean();
     if (bin.error.error)
     {
         printf("assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");

@@ -248,7 +248,9 @@
 
             if (strcmp(*_it,s) == 0)
             {
-
+                // the same line again: not added, and not kept either (it
+                // leaked, a few hundred bytes per float-heavy script)
+                free(s);
                 return;
             }
   

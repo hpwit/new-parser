@@ -408,6 +408,15 @@ static const char *branchTarget(const char *line, char *buf, size_t n)
     return buf;
 }
 
+// The loop heads are needed while assembling only: freed when the binary is
+// made, so they don't stay in the heap between compiles.
+static void freeLoopHeads()
+{
+    for (int i = 0; i < _loopHeads.size(); i++)
+        free(_loopHeads.get(i));
+    _loopHeads.clear();
+}
+
 static void findLoopHeads(Text *t)
 {
     char name[96], target[96];
@@ -1043,9 +1052,7 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
     // function's tail -- up to and including its own retw.n, so execution
     // runs off the end of the copied buffer into whatever memory follows.
     int nb_callExt = 0;
-    for (int i = 0; i < _loopHeads.size(); i++)
-        free(_loopHeads.get(i));
-    _loopHeads.clear();
+    freeLoopHeads();
     findLoopHeads(_content);
     findLoopHeads(_footer);
     for (int pass = 0; pass < 2; pass++)
@@ -1538,6 +1545,7 @@ Binary createBinary(Text *_footer, Text *_header, Text *_content, bool display)
             bin.error = error;
             _asm_parsed.clear();
             asm_text.clear();
+            freeLoopHeads();
             return bin;
         }
 
@@ -1570,5 +1578,6 @@ Binary createBinary(Text *_footer, Text *_header, Text *_content, bool display)
     }
     _asm_parsed.clear();
     asm_text.clear();
+    freeLoopHeads();
     return bin;
 }

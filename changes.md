@@ -61,6 +61,10 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 [XenoWing](examples/matouch/XenoWing), a horizontal shoot'em up with pixel art in flash: an organic manta ship over an alien world in five parallax layers (a ringed planet, far mountains, a forest of strange trees, a crystal ridge, plants in front), waves of bio creatures, a boss, power-ups and spore bombs, in about 1250 lines of script. The art comes from a Python tool in the example and reaches the script through bound pointers. Its binary is in the GameLauncher, which carries the art too. → [XenoWing: a shoot'em up with real art](README.md#xenowing-a-shootem-up-with-real-art)
 
+### 🧹 The compiler gives its memory back after each compile
+
+After a compile, the parse tree, the tokens and their text, and the assembler's loop list stayed in the heap until the next compile: about 21 KB in some 600 small blocks after Tetris, scattered through the heap. With several compiles in a row, a script's code and data (which need one free block) could no longer find room: on the ESP32-S3, MazeChase, NeonRacer and XenoWing failed to load after Tetris had been compiled. They are freed as soon as the binary is made now (after a failed compile, the state stays until the next one: the error's position points into it), and a line the code generator dropped as a repeat is freed instead of leaked (a few hundred bytes per float-heavy script). Measured: after five Tetris compiles, the ESP32's free heap is 250.5 KB instead of 230.8 KB (QEMU esp32 and esp32-S3 alike), and the S3 compiles and loads all five matouch games in a row. The generated code is the same.
+
 ### 🐛 % in a float expression
 
 `float f = 57 % 13;` was 57: in an expression computed as a `float`, `%` between ints gave its left value (there is no float remainder). It is the integer remainder now, then a float, as in C. `/` there still divides as floats, as before (the README says so). A new fuzz regression (`float_modulo`) checks it against gcc. Of the existing examples, only DisplayIcon used it (`sin(3.14 * (m % 100) / 50)`, which worked by luck: the sine repeats every 100).
