@@ -6,6 +6,9 @@
 // Needs the modified LovyanGFX Bus_RGB driver (double frame buffer with show(),
 // _frame_buffer, pixel_size, offset) and FastLED (CHSV). Matouch7.h is the panel
 // configuration (Waveshare ESP32-S3-Touch-LCD 800x480 pinout).
+//
+// For the ESP32-S3-Touch-LCD-7: a 7-inch 800x480 RGB touch screen with an
+// ESP32-S3 (16MB flash, 8MB OPI PSRAM).
 // Board: ESP32S3 Dev Module, PSRAM "OPI PSRAM", Flash Size 16MB.
 #include "Matouch7.h"
 #include "FastLED.h"

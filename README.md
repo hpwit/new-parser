@@ -1992,6 +1992,18 @@ This is the part that is really new compared to v1:
 | `MemoryAllocator` | `alloc()`/`free()`/`writeInt()`/`readInt()`. |
 | `SafeMode` | `safe_mode`: an out-of-range write stops the script and reports the array and index. |
 
+### On the ESP32-S3-Touch-LCD-7
+
+The examples in [examples/matouch](examples/matouch) are for the **ESP32-S3-Touch-LCD-7**, a 7-inch **800x480** RGB touch screen with an ESP32-S3 (16MB flash, 8MB PSRAM). Each script draws straight into the screen's frame buffer, bound as `led16` (a `uint16_t *`, see [Binding an array or a pointer](#binding-an-array-or-a-pointer)), and calls `show16()` for each frame.
+
+| Example | What it shows |
+| --- | --- |
+| `matouch/RainbowScript` | A scrolling rainbow over the whole 800x480 screen. |
+| `matouch/BouncingBalls` | Bouncing balls, each erased and redrawn per frame, the display and the script on separate cores. |
+| `matouch/GameOfLife` | Conway's Game of Life on 800x480 cells, or bigger cells with `setPixelsize()`. |
+
+Board settings: *ESP32S3 Dev Module*, PSRAM *OPI PSRAM*, Flash Size *16MB*. They need FastLED and a LovyanGFX with the modified `Bus_RGB` driver (double frame buffer with `show()`); `Matouch7.h`, next to each sketch, is the screen's configuration.
+
 ---
 
 # Known limitations
