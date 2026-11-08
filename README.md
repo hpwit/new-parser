@@ -2007,6 +2007,31 @@ The examples in [examples/matouch](examples/matouch) are for the **ESP32-S3-Touc
 
 Board settings: *ESP32S3 Dev Module*, PSRAM *OPI PSRAM*, Flash Size *16MB*. They need FastLED and a LovyanGFX with the modified `Bus_RGB` driver (double frame buffer with `show()`); `Matouch7.h`, next to each sketch, is the screen's configuration.
 
+#### Tetris: a whole game in a script
+
+The scripts are not limited to LED effects: the language is a general-purpose one, compiled on the board into native Xtensa code. [matouch/Tetris](examples/matouch/Tetris) is a complete game written as a script of about 400 lines (17 functions, compiled into 5 KB of machine code and 1.4 KB of globals), and the sketch around it only connects the screen and the keyboard. Frames from a game, played by a program pressing the keys:
+
+| | |
+| --- | --- |
+| <img src="examples/matouch/Tetris/tetris_start.png" width="400" alt="The start of a game"> | <img src="examples/matouch/Tetris/tetris_ghost.png" width="400" alt="A Z piece and its ghost"> |
+| The start of a game: each tetromino has its colour and is drawn as a bevelled block. | A falling piece and its ghost, the outline of where it will land. |
+| <img src="examples/matouch/Tetris/tetris_four_lines.png" width="400" alt="An I piece above a four-row hole"> | <img src="examples/matouch/Tetris/tetris_game_over.png" width="400" alt="Game over"> |
+| Level 5: the I piece is about to clear four rows at once (800 points × the level). | Game over, with the score, the lines and the level. Z starts a new game. |
+
+Everything on the screen is drawn by the script, pixel by pixel, into the frame buffer: the background, the well, the blocks, the text. What the game uses from the language:
+
+- **arrays of 2 and 3 dimensions with initializers**: the well is `uint8_t board[BH, BW]`, the seven tetrominoes `uint8_t shapes[7, 4, 4] = {...}`, indexed `board[y, x]` or as one row of values (`shapes[p * 16 + i]`);
+- **`#define` constants** for the layout (`CELL`, `BX`, `BW`...);
+- **functions** with parameters and return values: `bool collide(int dx, int dy)` tells whether the piece fits after a move, and is used for moving, rotating (with a step aside when the piece hits a wall), dropping and the ghost;
+- **strings**: `drawText(PANEL, 14, "SCORE", 2, grey)` passes a `char *` and walks it with `s[i]` until the 0;
+- **a pixel font in an `int` table**: each character of the 3x5 font is 15 bits, read with `>>` and `&`; numbers are cut into digits with `%` and `/`;
+- **game state in globals** (score, lines, level, the current and next piece), changed by the rules: lines are cleared by moving the rows down, the level goes up every 10 lines and the pieces fall faster;
+- **the C++ side through bound functions**: `readKey()` for the USB keyboard, `millis()` for the falling speed, `rand(7)` for the next piece, `hsv2()` for the colours, `show16()` to show the frame; `led16`, the frame buffer, is a bound pointer.
+
+As with any script, it is compiled from text when the sketch runs, so the game could come from an SD card, a file uploaded over WiFi or the serial port, and be changed without rebuilding the sketch.
+
+The frames above come from this script, compiled by the library and run on an emulated ESP32-S3 (Espressif QEMU), with `STRIDE` set to 400 because the emulator has no PSRAM for an 800-pixel-wide frame buffer.
+
 ---
 
 # Known limitations

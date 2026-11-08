@@ -113,8 +113,8 @@ uint8_t shapes[7, 4, 4] = {
    0, 0, 0, 0, 5, 5, 0, 0, 0, 5, 5, 0, 0, 0, 0, 0,
    0, 0, 0, 0, 6, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0,
    0, 0, 0, 0, 0, 0, 7, 0, 7, 7, 7, 0, 0, 0, 0, 0};
-// the hue of each piece: cyan, yellow, purple, green, red, blue, orange
-uint8_t hues[7] = {128, 42, 192, 90, 0, 160, 18};
+// the hue of each piece (FastLED's rainbow): cyan, yellow, purple, green, red, blue, orange
+uint8_t hues[7] = {136, 64, 196, 96, 0, 160, 30};
 // 3x5 pixel font, 0-9 then A-Z: 5 rows of 3 bits, the top row first
 int font[36] = {31599, 11415, 29671, 29647, 23497, 31183, 31215, 29330, 31727, 31695,
                 11245, 27566, 14627, 27502, 31143, 31140, 14699, 23533, 29847, 4714,
@@ -134,7 +134,7 @@ int level;
 bool gameOver;
 uint32_t lastDrop;
 
-uint16_t pal[32];         // per piece: light edge, face, dark edge, shine
+uint16_t pal[64];         // per piece: light edge, face, dark edge, shine, soft ring
 uint16_t sky[240];        // the background, row by row
 uint16_t wellColor;
 uint16_t frameLight;
@@ -147,10 +147,12 @@ void makeColors()
    for (int p = 0; p < 7; p++)
    {
       int h = hues[p];
-      pal[(p + 1) * 4] = hsv2(h, 110, 255);
-      pal[(p + 1) * 4 + 1] = hsv2(h, 240, 215);
-      pal[(p + 1) * 4 + 2] = hsv2(h, 255, 110);
-      pal[(p + 1) * 4 + 3] = hsv2(h, 30, 255);
+      int c = (p + 1) * 8;
+      pal[c] = hsv2(h, 120, 255);
+      pal[c + 1] = hsv2(h, 255, 235);
+      pal[c + 2] = hsv2(h, 255, 120);
+      pal[c + 3] = hsv2(h, 20, 255);
+      pal[c + 4] = hsv2(h, 200, 255);
    }
    for (int y = 0; y < 240; y++)
       sky[y] = hsv2(165, 200, 20 + y / 6);
@@ -171,18 +173,22 @@ void fillRect(int x, int y, int w, int h, uint16_t c)
    }
 }
 
-// a bevelled block: light top and left, dark bottom and right, a shine
+// a bevelled block: light top and left, dark bottom and right, a soft
+// ring inside the light edges, a shine
 void drawBlock(int px, int py, int p)
 {
-   uint16_t light = pal[p * 4];
-   uint16_t face = pal[p * 4 + 1];
-   uint16_t dark = pal[p * 4 + 2];
+   uint16_t light = pal[p * 8];
+   uint16_t face = pal[p * 8 + 1];
+   uint16_t dark = pal[p * 8 + 2];
+   uint16_t soft = pal[p * 8 + 4];
    for (int j = 0; j < 10; j++)
    {
       int row = (py + j) * STRIDE + px;
       for (int i = 0; i < 10; i++)
       {
          uint16_t c = face;
+         if ((i == 1 || j == 1) && i < 9 && j < 9)
+            c = soft;
          if (i == 0 || j == 0)
             c = light;
          if (i == 9 || j == 9)
@@ -190,16 +196,16 @@ void drawBlock(int px, int py, int p)
          led16[row + i] = c;
       }
    }
-   uint16_t shine = pal[p * 4 + 3];
+   uint16_t shine = pal[p * 8 + 3];
    led16[(py + 2) * STRIDE + px + 2] = shine;
    led16[(py + 2) * STRIDE + px + 3] = shine;
    led16[(py + 3) * STRIDE + px + 2] = shine;
 }
 
-// where the piece will land: an outline in its dark colour
+// where the piece will land: an outline in its colour
 void drawGhost(int px, int py, int p)
 {
-   uint16_t c = pal[p * 4 + 2];
+   uint16_t c = pal[p * 8 + 1];
    for (int i = 0; i < 10; i++)
    {
       led16[py * STRIDE + px + i] = c;
@@ -465,7 +471,7 @@ void drawScene()
          letter = 18;
       if (i == 5)
          letter = 28;
-      drawGlyph(20 + i * 18, 22, letter, 4, pal[(i + 1) * 4 + 1]);
+      drawGlyph(20 + i * 18, 22, letter, 4, pal[(i + 1) * 8 + 1]);
    }
    drawText(22, 150, "Q LEFT", 2, grey);
    drawText(22, 166, "D RIGHT", 2, grey);
@@ -486,10 +492,11 @@ void drawScene()
             drawBlock(PANEL + x * CELL, 166 + y * CELL, nextP + 1);
    if (gameOver)
    {
-      fillRect(BX + 4, BY + 80, BW * CELL - 8, 56, frameDark);
-      drawText(BX + 13, BY + 88, "GAME", 4, white);
-      drawText(BX + 13, BY + 112, "OVER", 4, white);
-      drawText(BX + 22, BY + 140, "Z AGAIN", 2, white);
+      fillRect(BX + 2, BY + 74, BW * CELL - 4, 86, frameLight);
+      fillRect(BX + 4, BY + 76, BW * CELL - 8, 82, frameDark);
+      drawText(BX + 25, BY + 84, "GAME", 4, white);
+      drawText(BX + 25, BY + 108, "OVER", 4, white);
+      drawText(BX + 28, BY + 138, "Z AGAIN", 2, white);
    }
 }
 

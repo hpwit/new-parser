@@ -47,7 +47,7 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 ### 🖥️ Examples for the ESP32-S3-Touch-LCD-7
 
-[RainbowScript, BouncingBalls, GameOfLife, Mandelbrot and Tetris](examples/matouch) for the ESP32-S3-Touch-LCD-7, a 7-inch 800x480 RGB touch screen: each script draws straight into the screen's frame buffer. Run on the board (Tetris, played with a USB keyboard, not yet). → [On the ESP32-S3-Touch-LCD-7](README.md#on-the-esp32-s3-touch-lcd-7)
+[RainbowScript, BouncingBalls, GameOfLife, Mandelbrot and Tetris](examples/matouch) for the ESP32-S3-Touch-LCD-7, a 7-inch 800x480 RGB touch screen: each script draws straight into the screen's frame buffer. Run on the board (Tetris, played with a USB keyboard, not yet). Tetris is a whole game in about 400 lines of script; the README shows frames from it and what it uses from the language. → [Tetris: a whole game in a script](README.md#tetris-a-whole-game-in-a-script) → [On the ESP32-S3-Touch-LCD-7](README.md#on-the-esp32-s3-touch-lcd-7)
 
 ### 🐛 Binary `&`
 
