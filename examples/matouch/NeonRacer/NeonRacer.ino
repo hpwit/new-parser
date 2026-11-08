@@ -6,7 +6,9 @@
 // track is a list of segments, each with its curve and its height, drawn in
 // perspective from the ship (each segment projected, the road filled between
 // two segments, the hills hiding what is behind them); the city and the sun
-// slide with the curves. Yellow chevrons are boost pads; off the track the
+// slide with the curves. The ships are 3D models (35 faces, lit by where
+// each face points) seen from behind, rolling in the turns. Yellow chevrons
+// are boost pads; off the track the
 // ship slows down in sparks; running into a rival from behind bounces off.
 // Lap time, best lap, place, speed.
 //
@@ -543,101 +545,295 @@ void drawRoad()
    }
 }
 
-// an anti-gravity racer seen from behind: a low wide hull, a tail fin,
-// two engine pods with the team's stripe, glowing engines, and the glow
-// of the field that keeps it above the track
+// the ships: a 3D model (63 points, 35 faces, model.py), seen from behind and
+// above, rolled when it turns; the faces drawn from the farthest, each lit by
+// where it faces
+#define NV 63
+#define NF 35
+float mvx[63] = {0, 0, 0, -0.48, -0.95, -0.85, 0.48, 0.95, 0.85, -0.1, -0.16, 0.1, 0.16, 0, 0, 0, -0.38, 0.38, 2.3, 2.62, 1.98, 2.78, 1.82, 2.62, 1.98, 2.78, 1.82, 2.36, 2.24, 2.36, 2.24, 0.9, 0.52, 1.98, 1.82, 2.3, 2.3, 2.55, 2.52, 2.3, -2.3, -2.62, -1.98, -2.78, -1.82, -2.62, -1.98, -2.78, -1.82, -2.36, -2.24, -2.36, -2.24, -0.9, -0.52, -1.98, -1.82, -2.3, -2.3, -2.55, -2.52, -2.3, 0};
+float mvy[63] = {0.3, 0.72, 0.95, 0.4, 0.52, 0.08, 0.4, 0.52, 0.08, 0.79, 0.97, 0.79, 0.97, 0.8, 1.18, 1.02, 0.84, 0.84, 0.36, 0.7, 0.7, 0.82, 0.82, 0.08, 0.08, 0.04, 0.04, 0.74, 0.74, 0.85, 0.85, 0.44, 0.4, 0.46, 0.5, 0.82, 0.82, 1.45, 1.45, 0.43, 0.36, 0.7, 0.7, 0.82, 0.82, 0.08, 0.08, 0.04, 0.04, 0.74, 0.74, 0.85, 0.85, 0.44, 0.4, 0.46, 0.5, 0.82, 0.82, 1.45, 1.45, 0.43, 0.4};
+float mvz[63] = {6.6, 3.4, -1.9, 3.3, -1.9, -2.1, 3.3, -1.9, -2.1, 2.6, -1.8, 2.6, -1.8, 3, 1.3, 0.1, 1.2, 1.2, 4.4, 2.8, 2.8, -2.4, -2.4, 2.8, 2.8, -2.4, -2.4, 2.4, 2.4, -2.3, -2.3, -1.6, 1.9, 1.5, -2.2, -0.9, -2.4, -2.6, -1.9, -2.42, 4.4, 2.8, 2.8, -2.4, -2.4, 2.8, 2.8, -2.4, -2.4, 2.4, 2.4, -2.3, -2.3, -1.6, 1.9, 1.5, -2.2, -0.9, -2.4, -2.6, -1.9, -2.42, -2.12};
+int fv0[35] = {0, 0, 1, 1, 0, 0, 0, 0, 2, 4, 9, 13, 13, 14, 14, 18, 18, 18, 19, 19, 20, 21, 27, 31, 35, 40, 40, 40, 41, 41, 42, 43, 49, 53, 57};
+int fv1[35] = {1, 1, 2, 2, 3, 6, 4, 7, 4, 5, 10, 14, 14, 15, 15, 19, 19, 20, 20, 21, 22, 22, 28, 32, 36, 41, 41, 42, 42, 43, 44, 44, 50, 54, 58};
+int fv2[35] = {3, 6, 4, 7, 4, 7, 5, 8, 7, 8, 12, 16, 17, 16, 17, 20, 23, 24, 22, 25, 26, 26, 30, 33, 37, 42, 45, 46, 44, 47, 48, 48, 52, 55, 59};
+int fv3[35] = {-1, -1, 3, 6, -1, -1, -1, -1, -1, 7, 11, -1, -1, -1, -1, -1, -1, -1, 21, 23, 24, 25, 29, 34, 38, -1, -1, -1, 43, 45, 46, 47, 51, 56, 60};
+int frole[35] = {0, 0, 0, 0, 1, 1, 1, 1, 4, 4, 2, 3, 3, 3, 3, 0, 1, 1, 0, 1, 1, 4, 2, 1, 2, 0, 1, 1, 0, 1, 1, 4, 2, 1, 2};
+int engineV[3] = {39, 61, 62};
+float camXv[NV];
+float camYv[NV];
+float camZv[NV];
+float scrX[NV];
+float scrY[NV];
+float fdepth[NF];
+int forder[NF];
+float tx[3];
+float ty[3];
+int triClip;
+float shipK;
+// per team: hull, second colour and stripe (hue, saturation, value)
+int teamH[12] = {140, 160, 45, 0, 0, 0, 96, 170, 45, 40, 200, 0};
+int teamS[12] = {40, 255, 230, 235, 0, 0, 230, 90, 230, 220, 230, 0};
+int teamV[12] = {255, 210, 255, 240, 230, 255, 220, 100, 255, 255, 190, 255};
+
+float mySqrt(float a)
+{
+   if (a <= 0)
+      return 0;
+   float x = a;
+   if (x < 1)
+      x = 1;
+   for (int i = 0; i < 10; i++)
+      x = (x + a / x) * 0.5;
+   return x;
+}
+
+// a filled triangle (tx, ty), cut at triClip
+void fillTri(uint16_t c)
+{
+   float x0 = tx[0];
+   float y0 = ty[0];
+   float x1 = tx[1];
+   float y1 = ty[1];
+   float x2 = tx[2];
+   float y2 = ty[2];
+   float s;
+   if (y1 < y0)
+   {
+      s = x0;
+      x0 = x1;
+      x1 = s;
+      s = y0;
+      y0 = y1;
+      y1 = s;
+   }
+   if (y2 < y0)
+   {
+      s = x0;
+      x0 = x2;
+      x2 = s;
+      s = y0;
+      y0 = y2;
+      y2 = s;
+   }
+   if (y2 < y1)
+   {
+      s = x1;
+      x1 = x2;
+      x2 = s;
+      s = y1;
+      y1 = y2;
+      y2 = s;
+   }
+   if (y2 - y0 < 0.3)
+      return;
+   int ys = (int)(y0 + 0.5);
+   int ye = (int)(y2 + 0.5);
+   if (ys < 0)
+      ys = 0;
+   if (ye > triClip)
+      ye = triClip;
+   for (int y = ys; y < ye; y++)
+   {
+      float fy = y + 0.5;
+      float xa = x0 + (x2 - x0) * (fy - y0) / (y2 - y0);
+      float xb = x1;
+      if (fy < y1)
+      {
+         if (y1 - y0 > 0.01)
+            xb = x0 + (x1 - x0) * (fy - y0) / (y1 - y0);
+      }
+      else if (y2 - y1 > 0.01)
+         xb = x1 + (x2 - x1) * (fy - y1) / (y2 - y1);
+      int l = (int)(xa + 0.5);
+      int r = (int)(xb + 0.5);
+      if (xb < xa)
+      {
+         l = (int)(xb + 0.5);
+         r = (int)(xa + 0.5);
+      }
+      if (r <= l)
+         r = l + 1;
+      span(y, l, r, c);
+   }
+}
+
+void disc(int x, int y, int r, uint16_t c)
+{
+   for (int j = -r; j <= r; j++)
+      if (y + j >= 0 && y + j < triClip)
+      {
+         int w = 0;
+         while ((w + 1) * (w + 1) + j * j <= r * r)
+            w++;
+         span(y + j, x - w, x + w + 1, c);
+      }
+}
+
+// the model's points on the screen: the back of the hull, on the ground,
+// at (cx, bottom); w pixels across the pods
+void projectShip(int cx, int bottom, int w, float roll)
+{
+   float sr = roll;
+   float cr = 1.0 - roll * roll * 0.5;
+   float refYc = -5.0 * 0.917 + 8.6 * 0.4;
+   float refZc = 5.0 * 0.4 + 8.6 * 0.917;
+   shipK = w * refZc / 5.8;
+   float yref = refYc / refZc;
+   for (int i = 0; i < NV; i++)
+   {
+      float x = mvx[i];
+      float y = mvy[i];
+      float x1 = x * cr - y * sr;
+      float y1 = x * sr + y * cr;
+      float yc0 = y1 - 5.0;
+      float zc0 = mvz[i] + 11.0;
+      float zc = zc0 * 0.917 - yc0 * 0.4;
+      float yc = yc0 * 0.917 + zc0 * 0.4;
+      camXv[i] = x1;
+      camYv[i] = yc;
+      camZv[i] = zc;
+      scrX[i] = cx + shipK * x1 / zc;
+      scrY[i] = bottom - shipK * (yc / zc - yref);
+   }
+}
+
 void drawShip(int cx, int bottom, int w, int k, int clip, int tilt)
 {
    if (w < 6)
       return;
-   int h = w / 3;
-   int top = bottom - h;
-   uint16_t body = shipBody[k];
-   uint16_t dark = shipDark[k];
-   uint16_t light = shipLight[k];
-   uint16_t stripe = shipStripe[k];
+   triClip = clip;
+   if (triClip > SH)
+      triClip = SH;
    // the field under the hull
-   int gy = bottom + h / 5 + 1;
-   if (gy < clip && gy < SH)
+   int gy = bottom + w / 30 + 1;
+   if (gy < triClip)
    {
       span(gy, cx - w * 2 / 5, cx + w * 2 / 5, fieldDark);
       if ((frame + k) % 3 != 0)
          span(gy, cx - w / 4, cx + w / 4, fieldGlow);
    }
-   for (int j = 0; j < h; j++)
+   projectShip(cx, bottom, w, -tilt / 50.0);
+   for (int f = 0; f < NF; f++)
    {
-      int y = top + j;
-      if (y >= 0 && y < clip && y < SH)
+      float z = camZv[fv0[f]] + camZv[fv1[f]] + camZv[fv2[f]];
+      int n = 3;
+      if (fv3[f] >= 0)
       {
-         int lean = tilt * (h / 2 - j) / h;
-         int x = cx + lean;
-         // the tail fin, on top in the middle
-         if (j < h * 2 / 5)
-         {
-            int fw = w / 36 + 1;
-            span(y, x - fw, x + fw, light);
-            if (j < 2)
-               span(y, x - fw, x + fw, stripe);
-         }
-         else
-         {
-            // the hull: a wedge, wider at the back
-            int jj = j - h * 2 / 5;
-            int hh = h - h * 2 / 5;
-            int half = w / 6 + (w / 4) * jj / hh;
-            span(y, x - half, x + half, body);
-            span(y, x - half, x - half + w / 30 + 1, light);
-            span(y, x + half - w / 30 - 1, x + half, dark);
-            // the cockpit, a dark slit at the front of the deck
-            if (jj < hh / 3)
-               span(y, x - w / 12, x + w / 12, canopy);
-            // the team's stripe across the deck
-            if (jj == hh / 2)
-               span(y, x - half, x + half, stripe);
-         }
-         // the pods, on both sides in the lower half
-         if (j >= h / 3)
-         {
-            int pw = w / 7;
-            int px = w * 2 / 5;
-            uint16_t pc = dark;
-            if (j == h / 3 || j == h / 3 + 1)
-               pc = stripe;
-            span(y, x - px - pw / 2, x - px + pw / 2, pc);
-            span(y, x + px - pw / 2, x + px + pw / 2, pc);
-            span(y, x - px - pw / 2, x - px - pw / 2 + 1, light);
-            span(y, x + px + pw / 2 - 1, x + px + pw / 2, light);
-         }
+         z = z + camZv[fv3[f]];
+         n = 4;
+      }
+      fdepth[f] = z / n;
+      // insertion sort, the farthest first
+      int at = f;
+      while (at > 0 && fdepth[forder[at - 1]] < fdepth[f])
+      {
+         forder[at] = forder[at - 1];
+         at--;
+      }
+      forder[at] = f;
+   }
+   for (int o = 0; o < NF; o++)
+   {
+      int f = forder[o];
+      int a = fv0[f];
+      int b = fv1[f];
+      int c = fv2[f];
+      float ux = camXv[b] - camXv[a];
+      float uy = camYv[b] - camYv[a];
+      float uz = camZv[b] - camZv[a];
+      float wx = camXv[c] - camXv[a];
+      float wy = camYv[c] - camYv[a];
+      float wz = camZv[c] - camZv[a];
+      float nx = uy * wz - uz * wy;
+      float ny = uz * wx - ux * wz;
+      float nz = ux * wy - uy * wx;
+      // turned towards the camera, at the origin
+      if (nx * camXv[a] + ny * camYv[a] + nz * camZv[a] > 0)
+      {
+         nx = -nx;
+         ny = -ny;
+         nz = -nz;
+      }
+      float len = mySqrt(nx * nx + ny * ny + nz * nz);
+      float lit = 0;
+      if (len > 0.000001)
+         lit = (nx * 0.35 + ny * 0.85 - nz * 0.39) / len;
+      if (lit < 0)
+         lit = 0;
+      float shade = 0.3 + 0.7 * lit;
+      int role = frole[f];
+      int h = teamH[k * 3];
+      int s = teamS[k * 3];
+      int v = teamV[k * 3];
+      if (role == 1 || role == 5)
+      {
+         h = teamH[k * 3 + 1];
+         s = teamS[k * 3 + 1];
+         v = teamV[k * 3 + 1];
+      }
+      if (role == 2)
+      {
+         h = teamH[k * 3 + 2];
+         s = teamS[k * 3 + 2];
+         v = teamV[k * 3 + 2];
+      }
+      if (role == 3)
+      {
+         h = 135;
+         s = 200;
+         v = 150;
+         // a reflection on the glass
+         if (lit > 0.8)
+            v = 255;
+      }
+      if (role == 4)
+      {
+         h = 170;
+         s = 40;
+         v = 120;
+      }
+      uint16_t col = hsv2(h, s, (int)(v * shade));
+      tx[0] = scrX[a];
+      ty[0] = scrY[a];
+      tx[1] = scrX[b];
+      ty[1] = scrY[b];
+      tx[2] = scrX[c];
+      ty[2] = scrY[c];
+      fillTri(col);
+      int d = fv3[f];
+      if (d >= 0)
+      {
+         tx[1] = scrX[c];
+         ty[1] = scrY[c];
+         tx[2] = scrX[d];
+         ty[2] = scrY[d];
+         fillTri(col);
       }
    }
-   // the engines: a glowing ring in each pod and a smaller one in the hull
-   uint16_t f = flame1;
-   uint16_t g = flame2;
+   // the engines: a hot core, a coloured ring, and the exhaust towards us
+   uint16_t f1 = flame1;
+   uint16_t f2 = flame2;
    if ((frame + k) % 4 < 2)
    {
-      f = flame2;
-      g = flame1;
+      f1 = flame2;
+      f2 = flame1;
    }
-   int er = w / 16 + 1;
-   int ey = bottom - er - 1;
-   for (int j = -er; j <= er; j++)
+   for (int e = 0; e < 3; e++)
    {
-      int y = ey + j;
-      if (y >= 0 && y < clip && y < SH)
-      {
-         int ew = 0;
-         while ((ew + 1) * (ew + 1) + j * j <= er * er)
-            ew++;
-         int x = cx - tilt * (j + er) / (h + 1);
-         span(y, x - w * 2 / 5 - ew, x - w * 2 / 5 + ew + 1, f);
-         span(y, x + w * 2 / 5 - ew, x + w * 2 / 5 + ew + 1, f);
-         if (ew > 1)
-         {
-            span(y, x - w * 2 / 5 - ew / 2, x - w * 2 / 5 + ew / 2 + 1, white);
-            span(y, x + w * 2 / 5 - ew / 2, x + w * 2 / 5 + ew / 2 + 1, white);
-         }
-         span(y, x - ew / 2, x + ew / 2 + 1, g);
-      }
+      int ev = engineV[e];
+      float rr = shipK * 0.30 / camZv[ev];
+      if (e == 2)
+         rr = rr * 0.8;
+      int x = (int)(scrX[ev]);
+      int y = (int)(scrY[ev]);
+      int r = (int)(rr + 0.5);
+      if (r < 1)
+         r = 1;
+      for (int j = 3; j >= 1; j--)
+         disc(x, y + (int)(rr * j * 0.55), (int)(rr * (1.0 - j * 0.25) + 0.5), f2);
+      disc(x, y, r, f1);
+      if (r > 2)
+         disc(x, y, r / 2, white);
    }
 }
 
@@ -725,7 +921,7 @@ void drawPlayer()
    int y = 214;
    if (bump > 0)
       y = y - (bump / 2) % 3;
-   drawShip(200, y, 120, 0, SH, tilt);
+   drawShip(200, y, 132, 0, SH, tilt);
    if (playerX < -1.0 || playerX > 1.0)
       if ((frame / 2) % 2 == 0)
       {

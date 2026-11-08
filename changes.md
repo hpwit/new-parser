@@ -55,7 +55,7 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 ### 🏁 NeonRacer and the GameLauncher
 
-[NeonRacer](examples/matouch/NeonRacer), an anti-gravity race on a neon track drawn in perspective (curves, hills, boost pads, three rivals, 3 laps), in about 850 lines of script. [GameLauncher](examples/matouch/GameLauncher) lists the compiled games on the FFat partition and runs the one you pick, with Escape back to the menu; its `data` folder has Tetris, MazeChase and NeonRacer as binaries. The README says how to make the partition's image and write it. → [NeonRacer: a race in perspective](README.md#neonracer-a-race-in-perspective), [GameLauncher: games from the FFat partition](README.md#gamelauncher-games-from-the-ffat-partition)
+[NeonRacer](examples/matouch/NeonRacer), an anti-gravity race on a neon track drawn in perspective (curves, hills, boost pads, three rivals, 3 laps) with 3D ships (lit polygons, rolling in the turns), in about 1050 lines of script. [GameLauncher](examples/matouch/GameLauncher) lists the compiled games on the FFat partition and runs the one you pick, with Escape back to the menu; its `data` folder has Tetris, MazeChase and NeonRacer as binaries. The README says how to make the partition's image and write it. → [NeonRacer: a race in perspective](README.md#neonracer-a-race-in-perspective), [GameLauncher: games from the FFat partition](README.md#gamelauncher-games-from-the-ffat-partition)
 
 ### 🐛 Negative values in array initializers
 

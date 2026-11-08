@@ -2059,16 +2059,17 @@ The game's logic was checked against the same code compiled by gcc: 8000 steps o
 
 #### NeonRacer: a race in perspective
 
-[matouch/NeonRacer](examples/matouch/NeonRacer) draws a 3D track with nothing but the frame buffer and `float`s: about 850 lines of script (12 KB of machine code). A hover ship races three rivals over 3 laps of a neon track at sunset.
+[matouch/NeonRacer](examples/matouch/NeonRacer) draws a 3D track and 3D ships with nothing but the frame buffer and `float`s: about 1050 lines of script (15 KB of machine code, 16 KB of globals). A hover ship races three rivals over 3 laps of a neon track at sunset.
 
 | | |
 | --- | --- |
 | <img src="examples/matouch/NeonRacer/neonracer_start.png" width="400" alt="The start: the countdown and the rivals on the grid"> | <img src="examples/matouch/NeonRacer/neonracer_battle.png" width="400" alt="A rival just ahead"> |
-| The countdown, the four ships on the grid. | Lap 1, third place: a rival just ahead, another far away. |
+| The countdown, the four ships on the grid. | Side by side with a rival on a climb. |
 | <img src="examples/matouch/NeonRacer/neonracer_boost.png" width="400" alt="Over a hill on a boost pad"> | <img src="examples/matouch/NeonRacer/neonracer_finish.png" width="400" alt="The finish"> |
 | Over the top of a hill, on the yellow chevrons of a boost pad. | The finish: the place and the race time. |
 
 - **The track** is a list of 1000 segments, each with its curve and its height, built from 16 sections (the curves and hills ease in and out). Each frame projects the 70 segments ahead of the ship: a segment's point gives a screen line, a scale and a road width; the road is filled row by row between two lines, and a hill hides what is behind it (each line is only drawn above the previous one). The curve of each segment is added to a running offset, which bends the road.
+- **The ships** are 3D models: 63 points and 35 faces (an arrowhead hull with a spine stripe and a glass canopy, two long engine pods on swept wings, canted fins, the team's two colours), seen from a camera behind and above. Each frame turns the points (rolled when the ship turns), projects them, sorts the faces from the farthest, and fills each as triangles in a shade given by the angle between the face and the light; the engines glow on top, with their exhaust. The model is a table of points and faces in the script, generated from a short description.
 - **The rivals** are drawn after the road, farthest first, at the scale of their segment and cut by the hill in front of them. Each has its top speed and its way of weaving across the track; running into one from behind bounces the ship off.
 - **The ship** is pulled outwards in the curves (more at speed), slows down in sparks off the track, and goes faster for a while after a boost pad. Speed, lap time, best lap and place are on the screen.
 - **The sky**: a sun cut by bands, a city of lit towers, both sliding with the curves.
@@ -2095,7 +2096,7 @@ esptool.py --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ff
 
 (esptool comes with the core: `~/Library/Arduino15/packages/esp32/tools/esptool_py/<version>/esptool` on a Mac.) The launcher mounts the partition with `FFat.begin(false)`: a partition that doesn't mount is never formatted; the menu then says there is no game.
 
-The launcher was run on the emulated ESP32-S3 with this image (a copy with no screen and the games built for a 400-pixel-wide frame buffer): the partition mounts, the three games are listed, each loads in 1 to 6 ms, plays, and Escape brings the menu back, three times in a row.
+The launcher was run on the emulated ESP32-S3 with this image (a copy with no screen and the games built for a 400-pixel-wide frame buffer): the partition mounts, the three games are listed and read back byte for byte, Tetris and MazeChase load in a few milliseconds, play, and Escape brings the menu back. NeonRacer does not fit there: the emulator has no PSRAM, so its 192 KB frame buffer leaves about 96 KB of internal RAM, short of what the racer's code and globals need beside the file; on the board the frame buffers are in PSRAM. The racer itself was run from the same binary on the emulator.
 
 ---
 
