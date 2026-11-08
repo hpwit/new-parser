@@ -6,7 +6,8 @@
 //
 // The keys, the look and the bindings are those of matouch/Tetris:
 //   Q left, D right, Z rotate, S down one row, Space drop.
-//   After a game over, Z starts a new one.
+//   After a game over, Z starts a new one; Escape gives a game up.
+//   The arrows work too (up turns).
 // The bindings must give the names and types the script was compiled with
 // (CreateTetrisBinary's); a name the binary needs and doesn't find is an error.
 //
@@ -81,11 +82,23 @@ static volatile uint8_t keyQueue[KEY_QUEUE];
 static volatile uint8_t keyHead = 0, keyTail = 0;
 
 void print_char(key_return k) {
-  if (k.key_char == 0)
+  // Escape (no character of its own) quits the game; the arrows are Z Q S D
+  uint8_t c = k.key_char;
+  if (k.key_code == HID_KEY_ESC)
+    c = 27;
+  else if (k.key_code == HID_KEY_UP)
+    c = 'z';
+  else if (k.key_code == HID_KEY_LEFT)
+    c = 'q';
+  else if (k.key_code == HID_KEY_DOWN)
+    c = 's';
+  else if (k.key_code == HID_KEY_RIGHT)
+    c = 'd';
+  if (c == 0)
     return;
   uint8_t next = (keyHead + 1) % KEY_QUEUE;
   if (next != keyTail) {  // full: the key is dropped
-    keyQueue[keyHead] = k.key_char;
+    keyQueue[keyHead] = c;
     keyHead = next;
   }
 }

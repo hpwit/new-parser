@@ -57,6 +57,10 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 [NeonRacer](examples/matouch/NeonRacer), an anti-gravity race on a neon track drawn in perspective (curves, hills, boost pads, three rivals, 3 laps) with 3D ships (lit polygons, rolling in the turns), in about 1050 lines of script. [GameLauncher](examples/matouch/GameLauncher) lists the compiled games on the FFat partition and runs the one you pick, with Escape back to the menu; its `data` folder has Tetris, MazeChase and NeonRacer as binaries. The README says how to make the partition's image and write it. → [NeonRacer: a race in perspective](README.md#neonracer-a-race-in-perspective), [GameLauncher: games from the FFat partition](README.md#gamelauncher-games-from-the-ffat-partition)
 
+### 🧱 PrismBreak, Escape in every game, GIFs
+
+[PrismBreak](examples/matouch/PrismBreak), a brick breaker with patterned bevelled bricks, a scrolling diamond background, capsules (wider paddle, three balls, slower ball, a life) and five layouts, in about 1030 lines of script; its binary is in the GameLauncher. In every game Escape now gives the game up (in the launcher it comes back to the menu) and the arrows work as Z Q S D. The README shows each game moving: GIFs rendered frame by frame on the emulated ESP32-S3. → [PrismBreak: a brick breaker](README.md#prismbreak-a-brick-breaker)
+
 ### 🐛 Negative values in array initializers
 
 `int dys[4] = {-1, 0, 1, 0};` stored 0 for the -1: each value of a global initializer was read from its own text, and `-1` is a minus sign over a number. Signs are now read, for integer and `float` arrays. Found by MazeChase, whose drones walked into walls; a new fuzz regression (`negative_initializers`) checks it against gcc.

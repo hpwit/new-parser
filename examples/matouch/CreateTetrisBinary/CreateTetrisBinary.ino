@@ -325,6 +325,11 @@ int dropInterval()
 
 void handleKey(int k)
 {
+   if (k == 27)                             // Escape: the game is given up
+   {
+      gameOver = true;
+      return;
+   }
    if (gameOver)
    {
       if (k == 122 || k == 90)              // Z: a new game

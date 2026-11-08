@@ -14,7 +14,8 @@
 //
 // Until Space is pressed, the race runs by itself (demo); then:
 //   Q left, D right (each press steers a bit more), S brakes; the ship
-//   accelerates by itself. After the finish, Space starts a new race.
+//   accelerates by itself. After the finish, Space starts a new race;
+//   Escape gives a race up (back to the demo). The arrows work too.
 //
 // The keys: the keyboard library calls print_char() on its USB task for
 // every key; it only stores the character, and the script takes them with
@@ -82,11 +83,23 @@ static volatile uint8_t keyQueue[KEY_QUEUE];
 static volatile uint8_t keyHead = 0, keyTail = 0;
 
 void print_char(key_return k) {
-  if (k.key_char == 0)
+  // Escape (no character of its own) quits the game; the arrows are Z Q S D
+  uint8_t c = k.key_char;
+  if (k.key_code == HID_KEY_ESC)
+    c = 27;
+  else if (k.key_code == HID_KEY_UP)
+    c = 'z';
+  else if (k.key_code == HID_KEY_LEFT)
+    c = 'q';
+  else if (k.key_code == HID_KEY_DOWN)
+    c = 's';
+  else if (k.key_code == HID_KEY_RIGHT)
+    c = 'd';
+  if (c == 0)
     return;
   uint8_t next = (keyHead + 1) % KEY_QUEUE;
   if (next != keyTail) {  // full: the key is dropped
-    keyQueue[keyHead] = k.key_char;
+    keyQueue[keyHead] = c;
     keyHead = next;
   }
 }
@@ -987,6 +1000,13 @@ void autopilot(int seg)
 
 void handleKey(int k)
 {
+   if (k == 27)
+   {
+      // Escape: the race is given up, back to the demo
+      if (!demo)
+         newRace(1);
+      return;
+   }
    if (k == 32 && (demo || phase == 2))
    {
       newRace(0);

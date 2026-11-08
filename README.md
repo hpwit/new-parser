@@ -2008,7 +2008,10 @@ The examples in [examples/matouch](examples/matouch) are for the **ESP32-S3-Touc
 | `matouch/ExecuteTetrisBinary` | Plays Tetris from `/tetris.bin` without compiling: the sketch has no script, it loads the binary and binds its names. On the board: compiling the script takes 9.9 s, loading the binary 3 ms, and the sketch is 100 KB smaller without the compiler. See [Saving and loading compiled scripts](#saving-and-loading-compiled-scripts-script_executableh). |
 | `matouch/MazeChase` | A maze game at 400x240 played with a USB keyboard (Z Q S D): an orb eats the dots while four drones hunt it, each with its own strategy; power cells, a bonus apple, score, high score, lives and levels. Plays itself until Space is pressed. |
 | `matouch/NeonRacer` | An anti-gravity race at 400x240 on a neon track in perspective (curves, hills, boost pads), against three rivals over 3 laps, played with a USB keyboard (Q D steer, S brakes). Runs by itself until Space is pressed. |
-| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase and NeonRacer are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
+| `matouch/PrismBreak` | A brick breaker at 400x240: patterned bevelled bricks (silver take two hits, gold none), a scrolling diamond background, a metal-framed field, sparks, falling capsules (wider paddle, three balls, slower ball, a life), five layouts. Q D move the paddle, S stops it, Space serves. Plays itself until Space is pressed. |
+| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer and PrismBreak are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
+
+In every game, **Escape** gives the game up (Tetris ends it, the others go back to their demo; in the GameLauncher it goes back to the menu), and the **arrow keys** work as Z Q S D.
 
 Board settings: *ESP32S3 Dev Module*, PSRAM *OPI PSRAM*, Flash Size *16MB*. They need FastLED and a LovyanGFX with the modified `Bus_RGB` driver (double frame buffer with `show()`); `Matouch7.h`, next to each sketch, is the screen's configuration.
 
@@ -2086,16 +2089,40 @@ The game's logic was checked against the same code compiled by gcc: 8000 steps o
 - **The ship** is pulled outwards in the curves (more at speed), slows down in sparks off the track, and goes faster for a while after a boost pad. Speed, lap time, best lap and place are on the screen.
 - **The sky**: a sun cut by bands, a city of lit towers, both sliding with the curves.
 
-Its logic, checked against gcc like MazeChase's, gives the same positions, speeds and places until the floats part by a thousandth (gcc fuses multiplications and additions, the script rounds each).
+Its logic, checked against gcc like MazeChase's, gives the same positions, speeds, places and laps bit for bit, once the C side writes its constants as floats (`0.9f`): a script's `0.9` is a single-precision float, C's is a double.
+
+#### PrismBreak: a brick breaker
+
+[matouch/PrismBreak](examples/matouch/PrismBreak): about 1030 lines of script (12 KB of machine code, 8.5 KB of globals).
+
+<img src="examples/matouch/PrismBreak/prismbreak.gif" width="400" alt="PrismBreak playing">
+
+*Eight seconds of the demo (emulated ESP32-S3, real time).*
+
+| | |
+| --- | --- |
+| <img src="examples/matouch/PrismBreak/prismbreak_start.png" width="400" alt="The first layout"> | <img src="examples/matouch/PrismBreak/prismbreak_capsule.png" width="400" alt="A capsule falling"> |
+| The first layout: silver, then the six patterned colours. | A capsule falls from a broken brick. |
+| <img src="examples/matouch/PrismBreak/prismbreak_silver.png" width="400" alt="Cracked silver bricks"> | <img src="examples/matouch/PrismBreak/prismbreak_late.png" width="400" alt="Late in the level"> |
+| Silver bricks crack at the first hit; a slow-ball capsule. | Late in the level, a wide-paddle capsule on the diamond background. |
+
+- **Bricks** are textures made once at the start, 16 x 8 pixels per kind: each colour has its pattern (diagonal stripes, checks, bands, dots, vertical stripes, chevrons, cross hatching) inside a bevel; silver is a metal gradient with a shine and cracks at the first hit, gold has rivets and never breaks. Drawing a brick copies its texture; a hit makes it flash.
+- **The background** is a 32 x 32 tile of diamonds in rings, made for each level in its colours and scrolled down slowly; the field is framed by metal pipes with joints and a glowing line.
+- **The ball** moves in sub-steps, one axis at a time, so it can't pass through a brick, and bounces off the side it hit; where it meets the paddle sets its angle. It goes a little faster with each brick, up to a limit.
+- **Capsules** fall from about one brick in five: W widens the paddle, M splits the ball in three, S slows it down for ten seconds, + is a life. Broken bricks throw sparks that fall.
+- **Five layouts** (rows, a diamond, waves between gold posts, a fortress, stairs and a checker), then they start again, faster.
+- **The demo** keeps the paddle under the ball that will come down first, working out where it lands with the side walls folded back.
+
+Comparing its logic with gcc found how the language treats `/` and `%` between ints in an expression whose result is a `float`: they are done in floating point (`float y = 40 + (57 / 13) * 8;` is 75.1, not 72), and `%` there gives the left value. PrismBreak computes such values into `int` variables first; with that, 6000 steps of play match gcc exactly.
 
 #### GameLauncher: games from the FFat partition
 
-[matouch/GameLauncher](examples/matouch/GameLauncher) has no game in it: it lists the `.bin` files of the FFat partition, and loads and runs the one you pick. Its `data` folder holds `tetris.bin`, `mazechase.bin` and `neonracer.bin`, the three games above compiled with `parseScriptToBinary()` (the same bytes as [CreateTetrisBinary](#saving-and-loading-compiled-scripts-script_executableh) makes on the board).
+[matouch/GameLauncher](examples/matouch/GameLauncher) has no game in it: it lists the `.bin` files of the FFat partition, and loads and runs the one you pick. Its `data` folder holds `tetris.bin`, `mazechase.bin`, `neonracer.bin` and `prismbreak.bin`, the four games above compiled with `parseScriptToBinary()` (the same bytes as [CreateTetrisBinary](#saving-and-loading-compiled-scripts-script_executableh) makes on the board).
 
 <img src="examples/matouch/GameLauncher/gamelauncher_menu.png" width="400" alt="The launcher's menu">
 
 - **Keys**: Z/S or the arrows to choose, Space or Enter to play, 1-9 to play a game at once; in a game, Escape comes back to the menu. The arrows arrive in the games as Z Q S D.
-- **Bindings**: the launcher binds the names the three games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`); any other game compiled against the same names shows up in the menu too.
+- **Bindings**: the launcher binds the names the four games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`); any other game compiled against the same names shows up in the menu too.
 - **Coming back**: each game runs on its own task (`executeAsTask()`). Every game calls `readKey()` once per frame; after Escape, `readKey()` never returns, so the game's task waits in a function of the sketch that holds nothing, and the launcher kills it and frees the game (built with placement `new`, since a `ScriptExecutable` can't be moved). Killing it anywhere else, inside `show16()` say, could leave the screen driver half way.
 
 **Putting the data folder on the partition.** The partition scheme is *16M Flash (3MB APP/9.9MB FATFS)*: the FFat partition starts at `0x610000` and is `0x9E0000` bytes. FFat keeps a wear-levelling layer around the FAT, so the image is made with ESP-IDF's `wl_fatfsgen.py`, with the core's settings (4096-byte sectors, long names), and written with esptool:
@@ -2108,7 +2135,7 @@ esptool.py --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ff
 
 (esptool comes with the core: `~/Library/Arduino15/packages/esp32/tools/esptool_py/<version>/esptool` on a Mac.) The launcher mounts the partition with `FFat.begin(false)`: a partition that doesn't mount is never formatted; the menu then says there is no game.
 
-The launcher was run on the emulated ESP32-S3 with this image (a copy with no screen and the games built for a 400-pixel-wide frame buffer): the partition mounts, the three games are listed and read back byte for byte, Tetris and MazeChase load in a few milliseconds, play, and Escape brings the menu back. NeonRacer does not fit there: the emulator has no PSRAM, so its 192 KB frame buffer leaves about 96 KB of internal RAM, short of what the racer's code and globals need beside the file; on the board the frame buffers are in PSRAM. The racer itself was run from the same binary on the emulator.
+The launcher was run on the emulated ESP32-S3 with this image (a copy with no screen and the games built for a 400-pixel-wide frame buffer): the partition mounts, the four games are listed and read back byte for byte, Tetris, MazeChase and PrismBreak load in a few milliseconds, play, and Escape brings the menu back. NeonRacer does not fit there: the emulator has no PSRAM, so its 192 KB frame buffer leaves about 96 KB of internal RAM, short of what the racer's code and globals need beside the file; on the board the frame buffers are in PSRAM. The racer itself was run from the same binary on the emulator.
 
 ---
 
