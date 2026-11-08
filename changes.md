@@ -49,6 +49,14 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 [RainbowScript, BouncingBalls, GameOfLife, Mandelbrot and Tetris](examples/matouch) for the ESP32-S3-Touch-LCD-7, a 7-inch 800x480 RGB touch screen: each script draws straight into the screen's frame buffer. Run on the board, Tetris played with a USB keyboard. Tetris is a whole game in about 400 lines of script; the README shows frames from it and what it uses from the language. → [Tetris: a whole game in a script](README.md#tetris-a-whole-game-in-a-script) [CreateTetrisBinary](examples/matouch/CreateTetrisBinary) compiles it and saves the binary to the microSD card, [ExecuteTetrisBinary](examples/matouch/ExecuteTetrisBinary) plays it from there: loaded in 3 ms instead of compiled in 9.9 s, run on the board. → [On the ESP32-S3-Touch-LCD-7](README.md#on-the-esp32-s3-touch-lcd-7)
 
+### 🕹️ MazeChase
+
+[MazeChase](examples/matouch/MazeChase), a maze game for the ESP32-S3-Touch-LCD-7 in about 1100 lines of script: an orb, four drones with their own strategies, power cells, a bonus apple, score, lives, levels, and a demo that plays itself until Space is pressed. The README shows frames from it. → [MazeChase: a maze game with four hunters](README.md#mazechase-a-maze-game-with-four-hunters)
+
+### 🐛 Negative values in array initializers
+
+`int dys[4] = {-1, 0, 1, 0};` stored 0 for the -1: each value of a global initializer was read from its own text, and `-1` is a minus sign over a number. Signs are now read, for integer and `float` arrays. Found by MazeChase, whose drones walked into walls; a new fuzz regression (`negative_initializers`) checks it against gcc.
+
 ### 🐛 Binary `&`
 
 `if (bits & 1)` crashed the compiler (an assertion) and `x = a & 3` did not compile: a single `&` was only read as an address-of. It is now the bitwise and after an operand, as `|` already was the bitwise or. Like `|`, it binds like `*` (`a + b & 4` is `a + (b & 4)`). Found while writing Tetris; a new fuzz regression (`bitwise_and`) checks it against gcc. No script that compiled before changes.

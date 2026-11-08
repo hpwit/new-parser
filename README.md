@@ -2006,6 +2006,7 @@ The examples in [examples/matouch](examples/matouch) are for the **ESP32-S3-Touc
 | `matouch/Tetris` | Tetris at 400x240 (`setPixelsize(2)`) played with a USB keyboard (Q left, D right, Z rotate, S down, Space drop): a colour per tetromino drawn as bevelled blocks, a ghost of the landing place, score, lines, level and next piece in a 3x5 pixel font drawn by the script. Needs the ESP32_USB_Host_HID library as in [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script). |
 | `matouch/CreateTetrisBinary` | Compiles the Tetris script and saves the compiled binary to the microSD card as `/tetris.bin` (read back and checked). Prints only: run it once, then upload ExecuteTetrisBinary. |
 | `matouch/ExecuteTetrisBinary` | Plays Tetris from `/tetris.bin` without compiling: the sketch has no script, it loads the binary and binds its names. On the board: compiling the script takes 9.9 s, loading the binary 3 ms, and the sketch is 100 KB smaller without the compiler. See [Saving and loading compiled scripts](#saving-and-loading-compiled-scripts-script_executableh). |
+| `matouch/MazeChase` | A maze game at 400x240 played with a USB keyboard (Z Q S D): an orb eats the dots while four drones hunt it, each with its own strategy; power cells, a bonus apple, score, high score, lives and levels. Plays itself until Space is pressed. |
 
 Board settings: *ESP32S3 Dev Module*, PSRAM *OPI PSRAM*, Flash Size *16MB*. They need FastLED and a LovyanGFX with the modified `Bus_RGB` driver (double frame buffer with `show()`); `Matouch7.h`, next to each sketch, is the screen's configuration.
 
@@ -2035,6 +2036,24 @@ As with any script, it is compiled from text when the sketch runs, so the game c
 The game can also be compiled once and kept on the SD card: CreateTetrisBinary saves the compiled binary, ExecuteTetrisBinary loads it in 3 ms instead of compiling for 9.9 s, the same 5152 bytes of code.
 
 The frames above come from this script, compiled by the library and run on an emulated ESP32-S3 (Espressif QEMU), with `STRIDE` set to 400 because the emulator has no PSRAM for an 800-pixel-wide frame buffer.
+
+#### MazeChase: a maze game with four hunters
+
+[matouch/MazeChase](examples/matouch/MazeChase) goes further: about 1100 lines of script (13 KB of machine code, 11 KB of globals) for a maze game with its own maze, characters and rules. An orb eats the dots of the maze while four drones hunt it, each in its own way, and everything is drawn by the script each frame: the neon walls, the dots, the sprites, the text.
+
+| | |
+| --- | --- |
+| <img src="examples/matouch/MazeChase/mazechase_start.png" width="400" alt="The start of a game"> | <img src="examples/matouch/MazeChase/mazechase_chase.png" width="400" alt="The four drones out, the bonus apple under the base"> |
+| GET SET: the drones wait in their base, crimson already out. | The four drones hunt the orb; the bonus apple waits under the base. |
+| <img src="examples/matouch/MazeChase/mazechase_frightened.png" width="400" alt="Frightened drones"> | <img src="examples/matouch/MazeChase/mazechase_cleared.png" width="400" alt="The cleared maze flashing"> |
+| After a power cell the drones turn blue and flee: the orb can eat them (200, 400, 800, 1600). | The last dot eaten: the maze flashes before the next, faster level. |
+
+- **Four strategies**, one function: at each crossing a drone takes the way that brings it closest to its target, never turning back. Crimson targets the orb, violet 3 tiles ahead of it, teal the point opposite crimson across the orb (they close in from two sides), gold the orb when far away, and a random way when close. Waves of "go to your corner" and "chase" alternate on a timer, and every drone turns around when the wave changes.
+- **Power cells** frighten the drones for a few seconds (shorter at each level); they flash before it ends. An eaten drone goes home as an eye, enters its base and comes out again.
+- **The demo** is a player written in the script: a breadth-first search over the maze (arrays used as a queue) finds the nearest dot, power cell, apple or frightened drone, keeping 3 tiles away from the drones that can catch it. The frames above come from it.
+- **Motion** at a fixed 60 steps per second, whatever the frame rate: each step adds the speed (in hundredths of a pixel) to an accumulator and moves one pixel per 100. The orb turns at tile centres, reverses at once, and takes the tunnels at the sides of the maze.
+
+The game's logic was checked against the same code compiled by gcc: 8000 steps of demo play (a cleared maze, the next level, a lost game) give the same positions and scores on the emulated ESP32. Doing so found a compiler bug, fixed: negative values in a global array initializer (`int dys[4] = {-1, 0, 1, 0};`) were stored as 0. The frames come from the emulated ESP32-S3 like Tetris's.
 
 ---
 

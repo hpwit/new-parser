@@ -3695,16 +3695,30 @@ void _visitdefGlobalVariableNode(NodeToken *nd)
                 for (int ndindex = 0; ndindex < nd->children_size(); ndindex++)
                 {
                     NodeToken *ndt = nd->getChildPtr(ndindex);
+                    // -1 is a unary minus over the number 1: read through
+                    // the signs down to the number (it used to read as 0)
+                    bool negative = false;
+                    while (ndt->_nodetype == unitaryOpNode && ndt->children_size() == 1 &&
+                           (ndt->type == TokenSubstraction || ndt->type == TokenNegation || ndt->type == TokenAddition))
+                    {
+                        if (ndt->type != TokenAddition)
+                            negative = !negative;
+                        ndt = ndt->getChildPtr(0);
+                    }
                     if (nd->getVarTypeObj()->_varType == __float__)
                     {
                         float __f = 0;
                         sscanf(ndt->getText(), "%f", &__f);
+                        if (negative)
+                            __f = -__f;
                         __num = (uint32_t)(*((uint32_t *)&__f));
                     }
                     else
                     {
                         __num = 0;
                         sscanf(ndt->getText(), "%u", &__num);
+                        if (negative)
+                            __num = 0u - __num;
                     }
                     for (int i = 0; i < nd->getVarTypeObj()->total_size; i++)
                     {
