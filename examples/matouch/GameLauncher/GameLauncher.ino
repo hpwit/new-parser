@@ -121,6 +121,22 @@ void print_char(key_return k) {
     pushKey(k.key_char);
 }
 
+// a direction let go, as its letter + 128 (XenoWing moves while a key is
+// held; the other games ignore these)
+void release_char(key_return k) {
+  uint8_t c = tolower(k.key_char);
+  if (k.key_code == HID_KEY_UP)
+    c = 'z';
+  else if (k.key_code == HID_KEY_LEFT)
+    c = 'q';
+  else if (k.key_code == HID_KEY_DOWN)
+    c = 's';
+  else if (k.key_code == HID_KEY_RIGHT)
+    c = 'd';
+  if (c == 'z' || c == 'q' || c == 's' || c == 'd')
+    pushKey(c | 0x80);
+}
+
 // the game that runs, built in place: a ScriptExecutable can't be copied or
 // moved, and it has to be freed when the game stops
 alignas(ScriptExecutable) static uint8_t gameSlot[sizeof(ScriptExecutable)];
@@ -324,6 +340,7 @@ void setup() {
   setPixelsize(2);
 
   hid_keyboard_print_char = print_char;
+  hid_keyboard_release_char = release_char;
   app_main_keyboard();
 }
 

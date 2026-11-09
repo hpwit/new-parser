@@ -17,10 +17,10 @@
 // sprite is from the #defines assets.py writes, pasted at its top.
 //
 // Until Space is pressed, the game plays itself (demo); then:
-//   Z up, Q left, S down, D right (or the arrows): the ship keeps going that
-//   way (the keyboard sends a key when it goes down, not while it is held);
-//   the same direction again stops it. The ship fires by itself. Space: a
-//   spore bomb. Escape gives the game up (back to the demo).
+//   Z up, Q left, S down, D right (or the arrows): the ship moves while the
+//   key is held (release_char() tells the script when a key is let go; it
+//   needs the key-release hook in keyboard.h, see the README). The ship
+//   fires by itself. Space: a spore bomb. Escape gives the game up.
 // After the game is over, Space starts a new one.
 //
 // The keys: the keyboard library calls print_char() on its USB task for
@@ -111,6 +111,27 @@ void print_char(key_return k) {
   uint8_t next = (keyHead + 1) % KEY_QUEUE;
   if (next != keyTail) {  // full: the key is dropped
     keyQueue[keyHead] = c;
+    keyHead = next;
+  }
+}
+
+// a direction let go: its letter + 128, so the ship stops (the other keys'
+// releases don't matter)
+void release_char(key_return k) {
+  uint8_t c = tolower(k.key_char);
+  if (k.key_code == HID_KEY_UP)
+    c = 'z';
+  else if (k.key_code == HID_KEY_LEFT)
+    c = 'q';
+  else if (k.key_code == HID_KEY_DOWN)
+    c = 's';
+  else if (k.key_code == HID_KEY_RIGHT)
+    c = 'd';
+  if (c != 'z' && c != 'q' && c != 's' && c != 'd')
+    return;
+  uint8_t next = (keyHead + 1) % KEY_QUEUE;
+  if (next != keyTail) {
+    keyQueue[keyHead] = c | 0x80;
     keyHead = next;
   }
 }
@@ -1135,35 +1156,29 @@ void handleKey(int k)
    }
    if (demo)
       return;
-   // a direction keeps the ship going; the same one again stops it
+   // a direction moves the ship while it is held: its release comes as
+   // its letter + 128 and stops that way, if the ship still goes that way
+   if (k >= 128)
+   {
+      int r = k - 128;
+      if (r == 122 && pvy == -1)
+         pvy = 0;
+      if (r == 115 && pvy == 1)
+         pvy = 0;
+      if (r == 113 && pvx == -1)
+         pvx = 0;
+      if (r == 100 && pvx == 1)
+         pvx = 0;
+      return;
+   }
    if (k == 122 || k == 90)
-   {
-      if (pvy == -1)
-         pvy = 0;
-      else
-         pvy = -1;
-   }
+      pvy = -1;
    if (k == 115 || k == 83)
-   {
-      if (pvy == 1)
-         pvy = 0;
-      else
-         pvy = 1;
-   }
+      pvy = 1;
    if (k == 113 || k == 81)
-   {
-      if (pvx == -1)
-         pvx = 0;
-      else
-         pvx = -1;
-   }
+      pvx = -1;
    if (k == 100 || k == 68)
-   {
-      if (pvx == 1)
-         pvx = 0;
-      else
-         pvx = 1;
-   }
+      pvx = 1;
    if (k == 32)
       bomb();
 }
@@ -1417,6 +1432,7 @@ void setup() {
 
   // the USB keyboard: keys go to print_char()
   hid_keyboard_print_char = print_char;
+  hid_keyboard_release_char = release_char;  // the ship moves while a key is held
   app_main_keyboard();
 
   exec.execute("main");

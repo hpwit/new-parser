@@ -1417,6 +1417,22 @@ if (hid_keyboard_print_char != NULL)
    hid_keyboard_print_char(key_char);
 ```
 
+A game that moves something while a key is **held** also needs to know when the key is let go. The library already sees releases (it compares each keyboard report with the previous one) but reports only presses; an optional second hook passes the releases on, and sketches that don't set it see no change:
+
+```cpp
+// set by the sketch if it wants them, called when a key is released
+static inline void (*hid_keyboard_release_char)(key_return key_char);
+
+// in key_event_callback(), after the KEY_STATE_PRESSED branch:
+else if (hid_keyboard_release_char != NULL) {
+  hid_keyboard_get_char(0, key_event->key_code, &key_char.key_char);
+  key_char.key_code = key_event->key_code;
+  hid_keyboard_release_char(key_char);
+}
+```
+
+[XenoWing](examples/matouch/XenoWing) and the [GameLauncher](examples/matouch/GameLauncher) use it: a released direction goes into the key queue as its letter plus 128, and the script stops the ship on that axis.
+
 ## How a key reaches the script
 
 ```mermaid
@@ -2147,6 +2163,7 @@ Comparing its logic with gcc found how the language treats `/` between ints in a
 
 - **The art** is made by [tools/assets.py](examples/matouch/XenoWing/tools/assets.py) (pure Python, no library), which writes [xenowing_assets.h](examples/matouch/XenoWing/xenowing_assets.h): RGB565, byte-swapped as the frame buffer wants it, magenta for transparent. Every sprite is in one array, `gfx`; the script knows where each starts and its size from the `#define`s the tool writes, pasted at the script's top. The sketch binds the arrays as `uint16_t *` pointers (`bindVariable("uint16_t *", "gfx", NULL, &gfxPtr)`), so they stay in flash and cost no RAM.
 - **Five layers** scroll at their own speeds: the sky (a ringed planet, a teal moon, clouds) stays, far mountains drift, a forest of strange trees (mushroom trees with glowing caps, twisted trunks with hanging bulbs, curled ferns, balloon pods) goes by, a crystal ridge passes fast, and dark plants pass in front. The ridges and the forest tile over 512 pixels. Each layer is drawn only where the layers in front of it leave gaps: the sky stops where the far mountains are solid.
+- **The keys**: Z Q S D or the arrows move the ship while they are held (with the key-release hook described in [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script)), Space drops a spore bomb, Escape gives the game up.
 - **The game**: the manta fires by itself; P orbs widen its shots (two, then four with a spread, then faster), B orbs give spore bombs that clear the screen. Bugs fly in waves on sine curves, jellies drift and aim spores at the ship, crawlers dash low and shoot ahead. After a minute: WARNING, and the hive mother, which sways, opens its eye and fires spreads and spores. The ship's weak point is its core only, as in arcade shooters. Each stage comes back faster.
 - **Positions** are integers in sixteenths of a pixel, and the curves come from a 64-entry sine table, so the script needs no `float` at all.
 
