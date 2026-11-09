@@ -1726,7 +1726,7 @@ void main()
 - **Instructions**: the assembler knows what the compiler emits (moves, loads and stores of 8/16/32 bits, arithmetic and logic, shifts, branches, `extui`, `quou`/`quos`/`remu`/`rems`, `mull`, the single-precision float instructions...) and, for assembly functions, `min`, `max`, `minu`, `maxu`, `nsau`, `nsa`, `clamps`, `sext`, `mul16u`, `mul16s`, `memw`, `extw`, `isync`, `nop`, and `rsr`/`wsr` with a special register by number or by name (`sar`, `ccount`, `prid`, `ccompare0` to `2`): `rsr a2,ccount` reads the cycle counter. Every encoding added was checked byte for byte against the GNU assembler of the Xtensa toolchain. Not supported: the zero-overhead `loop` instructions and windowed calls from inside.
 - **Errors**: an unknown instruction or a wrong operand is reported with the line as written: `assembler error: "frobnicate a2,a2": Opcode frobnicate not found`.
 
-[AssemblyFunctions](examples/AssemblyFunctions) times C against assembly with the cycle counter and uses `nsau` and `clamps`; [AssemblyGPIO](examples/AssemblyGPIO) switches a pin from assembly through the GPIO registers, reads the BOOT button, and packs a colour (`rgb565(r, g, b)`, three values in, one out).
+[AssemblyFunctions](examples/AssemblyFunctions) times C against assembly with the cycle counter and uses `nsau` and `clamps`: on an ESP32 at 240 MHz, adding up 64 values takes 666 cycles in assembly, 865 in C. [AssemblyGPIO](examples/AssemblyGPIO) switches a pin from assembly through the GPIO registers, reads the BOOT button, and packs a colour (`rgb565(r, g, b)`, three values in, one out); its burst of pulses reaches 9.96 MHz, the same as the C loop of DirectGPIOSpeed: the GPIO bus sets the pace, not the code.
 
 # Running scripts in the background
 
