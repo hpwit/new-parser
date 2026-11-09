@@ -110,6 +110,7 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
 
 - [What you can do with the language](#what-you-can-do-with-the-language)
   * [Use of define](#use-of-define)
+  * [Assembly functions: `__ASM__`](#assembly-functions-__asm__)
 
 - [Running scripts in the background](#running-scripts-in-the-background)
   * [The script scheduler](#the-script-scheduler)
@@ -1683,6 +1684,50 @@ if (i < 25)
 
 ---
 
+## Assembly functions: `__ASM__`
+
+A function can be written in Xtensa assembly instead of C, as in v1: `__ASM__` before its type, and its body is one quoted instruction per line. The script calls it like any other function, and it can call nothing (no `call8` inside).
+
+```c
+int counter;
+
+// two int arguments in, one int out
+__ASM__ int addTwo(int a, int b)
+{
+"entry a1,32"
+"add a2,a2,a3"
+"retw.n"
+}
+
+// a script variable, a loop with a label
+__ASM__ void addToCounter(int times)
+{
+"entry a1,32"
+"l32r a4,@_counter"
+"add_loop:"
+"l32i a5,a4,0"
+"addi a5,a5,1"
+"s32i a5,a4,0"
+"addi a2,a2,-1"
+"bnez a2,add_loop"
+"retw.n"
+}
+
+void main()
+{
+   addToCounter(addTwo(40, 2));
+   printfln("%d", counter);   // 42
+}
+```
+
+- **Calling convention**: the script's own (the windowed `call8` ABI). The arguments arrive in `a2`, `a3`, ... `a7`; a `float` argument arrives as its bits in an `a` register (`wfr f0,a2` moves it to a float register). An `int` result goes back in `a2`, a `float` result in `f2`. Start with `entry a1,32` and end with `retw.n`; `a2` to `a15` and the float registers are free to use.
+- **Variables**: a variable of the script is reached with `l32r a4,@_name` (its address in `a4`); a variable bound by the sketch (an `external` one) with `movExt a4,@_ext_name`, which the loader patches with the bound address: a GPIO register bound by its address is then one `s32i` away.
+- **Labels**: anything ending with `:`, unique in the script (two functions can't both have `loop:`).
+- **Instructions**: the assembler knows what the compiler emits (moves, loads and stores of 8/16/32 bits, arithmetic and logic, shifts, branches, `extui`, `quou`/`quos`/`remu`/`rems`, `mull`, the single-precision float instructions...) and, for assembly functions, `min`, `max`, `minu`, `maxu`, `nsau`, `nsa`, `clamps`, `sext`, `mul16u`, `mul16s`, `memw`, `extw`, `isync`, `nop`, and `rsr`/`wsr` with a special register by number or by name (`sar`, `ccount`, `prid`, `ccompare0` to `2`): `rsr a2,ccount` reads the cycle counter. Every encoding added was checked byte for byte against the GNU assembler of the Xtensa toolchain. Not supported: the zero-overhead `loop` instructions and windowed calls from inside.
+- **Errors**: an unknown instruction or a wrong operand is reported with the line as written: `assembler error: "frobnicate a2,a2": Opcode frobnicate not found`.
+
+[AssemblyFunctions](examples/AssemblyFunctions) times C against assembly with the cycle counter and uses `nsau` and `clamps`; [AssemblyGPIO](examples/AssemblyGPIO) switches a pin from assembly through the GPIO registers, reads the BOOT button, and packs a colour (`rgb565(r, g, b)`, three values in, one out).
+
 # Running scripts in the background
 
 You can run a script function as a task in the background (esp32 only): it runs on its own FreeRTOS task and `executeAsTask()` returns at once, so your sketch carries on.
@@ -2003,6 +2048,8 @@ This is the part that is really new compared to v1:
 | `PinInterrupt` | A GPIO interrupt calling back into the running script. esp32 only. |
 | `DirectGPIO` | Driving pins from a script through the GPIO and IO_MUX registers; esp32 and esp32-S3. |
 | `RainbowCompare` | A scrolling rainbow drawn by a script and natively, 100 frames timed, with a hash showing they are identical (see [Performance](#calling-a-host-function-per-pixel-rainbow)). |
+| `AssemblyFunctions` | Functions written in Xtensa assembly (`__ASM__`) next to C ones: the cycle counter, `nsau`, `clamps`, a loop over a global array timed against C (see [Assembly functions](#assembly-functions-__asm__)). |
+| `AssemblyGPIO` | A pin switched from assembly through the GPIO registers, the BOOT button read, and `rgb565(r, g, b)`: three values in, one out. esp32 and esp32-S3. |
 | `DirectGPIOSpeed` | The fastest a script can switch a pin through the registers, timed against native code (see [GPIO switching speed](#gpio-switching-speed)). |
 | `SwitchCase` | `switch`/`case`/`default`: a state machine, shared cases, fall-through, `break` vs `continue`. |
 | `StringFunctions` | `char *` in and out of functions, `%s`. |

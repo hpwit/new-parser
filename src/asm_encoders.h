@@ -354,6 +354,33 @@ uint32_t bin_xor(uint32_t *values)
 {
     return 0x300000 + ((values[0] << 12) & 0xF000) + ((values[1] << 8) & 0xF00) + ((values[2] << 4) & 0xF0);
 }
+// Min/max, count of leading zeros, clamp, sign extension and 16-bit
+// multiplies (for __ASM__ functions; the compiler doesn't emit them). RRR
+// format: op2 op1 r s t op0. Checked byte for byte against GNU as.
+static uint32_t rrr(uint32_t op2, uint32_t op1, uint32_t r, uint32_t s, uint32_t t)
+{
+    return (op2 << 20) + (op1 << 16) + ((r & 0xF) << 12) + ((s & 0xF) << 8) + ((t & 0xF) << 4);
+}
+// ar, as, at
+uint32_t bin_min(uint32_t *v) { return rrr(4, 3, v[0], v[1], v[2]); }
+uint32_t bin_max(uint32_t *v) { return rrr(5, 3, v[0], v[1], v[2]); }
+uint32_t bin_minu(uint32_t *v) { return rrr(6, 3, v[0], v[1], v[2]); }
+uint32_t bin_maxu(uint32_t *v) { return rrr(7, 3, v[0], v[1], v[2]); }
+uint32_t bin_mul16u(uint32_t *v) { return rrr(0xC, 1, v[0], v[1], v[2]); }
+uint32_t bin_mul16s(uint32_t *v) { return rrr(0xD, 1, v[0], v[1], v[2]); }
+// ar, as: the result goes in t, the operand in s
+uint32_t bin_nsau(uint32_t *v) { return rrr(4, 0, 0xF, v[1], v[0]); }
+uint32_t bin_nsa(uint32_t *v) { return rrr(4, 0, 0xE, v[1], v[0]); }
+// ar, as, imm (7..22, encoded as imm - 7)
+uint32_t bin_clamps(uint32_t *v) { return rrr(3, 3, v[0], v[1], v[2] - 7); }
+uint32_t bin_sext(uint32_t *v) { return rrr(2, 3, v[0], v[1], v[2] - 7); }
+// barriers, no operand: memw (memory writes done before what follows,
+// e.g. GPIO writes), extw, isync (nop is further down)
+uint32_t bin_memw(uint32_t *v) { return 0x0020c0; }
+uint32_t bin_extw(uint32_t *v) { return 0x0020d0; }
+uint32_t bin_isync(uint32_t *v) { return 0x002000; }
+operandeType op_rr_imm7_22[3] = {operandeType::registers, operandeType::registers, operandeType::l7_22};
+
 uint32_t bin_mulsh(uint32_t *values)
 {
     return 0xb20000 + ((values[0] << 12) & 0xF000) + ((values[1] << 8) & 0xF00) + ((values[2] << 4) & 0xF0);

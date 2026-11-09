@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "",
+  "fqbn": "esp32:esp32:esp32:FlashMode=dio,FlashSize=4M",
+  "hardwareFolders": "/Users/yvesbazin/Library/Arduino15/packages/esp32/hardware/esp32/3.3.11,/Users/yvesbazin/Library/Arduino15/packages/esp32/hardware/esp32/3.3.11",
+  "otherLibrariesFolders": "/Users/yvesbazin/Documents/Arduino/libraries",
+  "sketchLocation": "/Users/yvesbazin/Documents/Arduino/libraries/asmparser2/examples/AssemblyGPIO"
+}

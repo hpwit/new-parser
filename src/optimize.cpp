@@ -1835,8 +1835,16 @@ static int promoteFunction(Text *text, int start, int end)
         trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
         if (!(line[0] == 'b' || strncmp(line, "j ", 2) == 0))
             continue;
+        // a label of an __ASM__ function can start with b too ("burst_loop:"),
+        // and has no target: it crashed here (strchr() gave NULL)
+        if (isLabelLine(line))
+            continue;
         const char *target = strrchr(line, ',');
-        target = target ? target + 1 : strchr(line, ' ') + 1;
+        if (target == NULL)
+            target = strchr(line, ' ');
+        if (target == NULL)
+            continue;
+        target++;
         for (int k = start; k < i; k++)
         {
             trimmedLine(*text->getChildAtPos(k), buf, sizeof(buf));

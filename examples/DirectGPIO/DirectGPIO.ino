@@ -44,9 +44,9 @@
 // ESP32, ESP-IDF may set the pull-up of RTC-capable pins such as GPIO 0
 // through the RTC IO registers instead).
 //
-// The script language spells bitwise AND `and` (`&` alone is address-of);
-// `|` is bitwise OR. Both have the precedence of `*`, so put parentheses
-// around them when they meet `+` or `-`.
+// `&` is bitwise AND (`and` too) and `|` bitwise OR. Both have the
+// precedence of `*`, so put parentheses around them when they meet `+` or
+// `-`.
 #include "script_executable.h"
 #include "binding.h"
 #include "soc/gpio_reg.h"

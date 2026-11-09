@@ -695,10 +695,45 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         return ps;
     }
 
-    if (strcmp(op, "rsr") == 0)
-        return parseOperandes(sp.operandes, 2, op_rsr, 3, bin_rsr);
-    if (strcmp(op, "wsr") == 0)
-        return parseOperandes(sp.operandes, 2, op_rsr, 3, bin_wsr);
+    if (strcmp(op, "rsr") == 0 || strcmp(op, "wsr") == 0)
+    {
+        // a special register by its name as well as its number
+        static const struct { const char *name; int number; } srNames[] = {
+            {"sar", 3}, {"ccount", 234}, {"prid", 235}, {"ccompare0", 240}, {"ccompare1", 241}, {"ccompare2", 242}};
+        char ops[64];
+        snprintf(ops, sizeof(ops), "%s", sp.operandes);
+        char *comma = strchr(ops, ',');
+        if (comma != NULL)
+        {
+            char *name = comma + 1;
+            while (*name == ' ')
+                name++;
+            for (unsigned k = 0; k < sizeof(srNames) / sizeof(srNames[0]); k++)
+                if (strcmp(name, srNames[k].name) == 0)
+                    snprintf(name, ops + sizeof(ops) - name, "%d", srNames[k].number);
+        }
+        return parseOperandes(ops, 2, op_rsr, 3, strcmp(op, "rsr") == 0 ? bin_rsr : bin_wsr);
+    }
+    if (strcmp(op, "min") == 0)
+        return parseOperandes(sp.operandes, 3, op_and, 3, bin_min);
+    if (strcmp(op, "max") == 0)
+        return parseOperandes(sp.operandes, 3, op_and, 3, bin_max);
+    if (strcmp(op, "minu") == 0)
+        return parseOperandes(sp.operandes, 3, op_and, 3, bin_minu);
+    if (strcmp(op, "maxu") == 0)
+        return parseOperandes(sp.operandes, 3, op_and, 3, bin_maxu);
+    if (strcmp(op, "mul16u") == 0)
+        return parseOperandes(sp.operandes, 3, op_and, 3, bin_mul16u);
+    if (strcmp(op, "mul16s") == 0)
+        return parseOperandes(sp.operandes, 3, op_and, 3, bin_mul16s);
+    if (strcmp(op, "nsau") == 0)
+        return parseOperandes(sp.operandes, 2, op_mov, 3, bin_nsau);
+    if (strcmp(op, "nsa") == 0)
+        return parseOperandes(sp.operandes, 2, op_mov, 3, bin_nsa);
+    if (strcmp(op, "clamps") == 0)
+        return parseOperandes(sp.operandes, 3, op_rr_imm7_22, 3, bin_clamps);
+    if (strcmp(op, "sext") == 0)
+        return parseOperandes(sp.operandes, 3, op_rr_imm7_22, 3, bin_sext);
     if (strcmp(op, "mov") == 0)
         return parseOperandes(sp.operandes, 2, op_mov, 3, bin_mov);
     if (strcmp(op, "movr") == 0)
@@ -739,6 +774,14 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         return parseOperandes(sp.operandes, 4, op_extui, 3, bin_extui);
     if (strcmp(op, "retw.n") == 0)
         return parseOperandes(sp.operandes, 0, NULL, 2, bin_retw_n);
+    if (strcmp(op, "memw") == 0)
+        return parseOperandes(sp.operandes, 0, NULL, 3, bin_memw);
+    if (strcmp(op, "extw") == 0)
+        return parseOperandes(sp.operandes, 0, NULL, 3, bin_extw);
+    if (strcmp(op, "isync") == 0)
+        return parseOperandes(sp.operandes, 0, NULL, 3, bin_isync);
+    if (strcmp(op, "nop") == 0)
+        return parseOperandes(sp.operandes, 0, NULL, 3, bin_nop);
 
     if (strcmp(op, ".bytes") == 0)
     {
@@ -991,6 +1034,9 @@ static void assembleBuffer(Text *text, int lineOffset, parsedLines *asm_parsed, 
         char *front = text->front();
         if (front != NULL && strcmp(front, " ") != 0)
         {
+            // the line as written, for an error message (an __ASM__ function's
+            // instruction is there as its author typed it)
+            char *written = strdup(front);
             asm_line res = splitOpcodeOperande(front);
             if (!res.error)
             {
@@ -1002,7 +1048,7 @@ static void assembleBuffer(Text *text, int lineOffset, parsedLines *asm_parsed, 
                 if (asm_Error.error)
                 {
                     main_error->error = 1;
-                    char *msg = string_format("line:%d %s\n", i, asm_Error.error_message ? asm_Error.error_message : "");
+                    char *msg = string_format("\"%s\": %s\n", written, asm_Error.error_message ? asm_Error.error_message : "");
                     main_error->error_message = main_error->error_message
                                                      ? str_concat("%s%s", main_error->error_message, msg)
                                                      : msg;
@@ -1016,6 +1062,7 @@ static void assembleBuffer(Text *text, int lineOffset, parsedLines *asm_parsed, 
             }
             free(res.opcde);
             free(res.operandes);
+            free(written);
         }
         text->pop_front();
     }
