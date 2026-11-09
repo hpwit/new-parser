@@ -61,6 +61,10 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 [XenoWing](examples/matouch/XenoWing), a horizontal shoot'em up with pixel art in flash: an organic manta ship over an alien world in five parallax layers (a ringed planet, far mountains, a forest of strange trees, a crystal ridge, plants in front), waves of bio creatures, a boss, power-ups and spore bombs, in about 1250 lines of script. The art comes from a Python tool in the example and reaches the script through bound pointers. Its binary is in the GameLauncher, which carries the art too. → [XenoWing: a shoot'em up with real art](README.md#xenowing-a-shootem-up-with-real-art)
 
+### 🌍 ChromaQuest
+
+[ChromaQuest](examples/matouch/ChromaQuest), three grey worlds made from public-domain NASA photographs (the Moon with the Earth rising, Mount Sharp on Mars, Saturn): a lantern drone shoots the colour thieves and catches their red, green and blue drops, and the script gives each colour back to the photograph, mixing its grey and its colour channel by channel every frame. About 1000 lines of script; in the GameLauncher too. → [ChromaQuest: colour back to three worlds](README.md#chromaquest-colour-back-to-three-worlds)
+
 ### 🛠️ Assembly functions, as in v1
 
 `__ASM__ int f(int a, int b) { "entry a1,32" "add a2,a2,a3" "retw.n" }`: a function in Xtensa assembly, called from the script like any other. It worked already; it is documented now (calling convention, variables through `l32r @_name` and bound ones through `movExt @_ext_name`, labels), with two examples, [AssemblyFunctions](examples/AssemblyFunctions) and [AssemblyGPIO](examples/AssemblyGPIO), and a fuzz regression against gcc. The assembler learned `min`, `max`, `minu`, `maxu`, `nsau`, `nsa`, `clamps`, `sext`, `mul16u`, `mul16s`, `memw`, `extw`, `isync`, `nop` and special registers by name (`rsr a2,ccount`), each checked byte for byte against GNU as. Fixed on the way: a label starting with `b` in an assembly function crashed the optimizer, and an assembler error now shows the line as written instead of its number in the generated code. → [Assembly functions](README.md#assembly-functions-__asm__)

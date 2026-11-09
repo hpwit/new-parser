@@ -4,8 +4,9 @@
 // (see CreateTetrisBinary), so it starts at once.
 //
 // The data folder next to this sketch holds the games of the matouch examples:
-// tetris.bin, mazechase.bin, neonracer.bin, prismbreak.bin and xenowing.bin
-// (XenoWing's art is in this sketch too, xenowing_assets.h). Any other .bin
+// tetris.bin, mazechase.bin, neonracer.bin, prismbreak.bin, xenowing.bin and
+// chromaquest.bin (XenoWing's and ChromaQuest's art are in this sketch too,
+// xenowing_assets.h and chroma_assets.h). Any other .bin
 // compiled with the same bindings (below) shows in the menu too.
 // To put them on the board's FFat partition, see the README's "GameLauncher:
 // games from the FFat partition".
@@ -40,10 +41,14 @@
 #include "binding.h"
 // XenoWing's art: the game reads it through six bound pointers
 #include "xenowing_assets.h"
+// ChromaQuest's worlds and sprites, read through three bound pointers
+#include "chroma_assets.h"
 
 LGFX lcd;
 static uint16_t *gfxP = (uint16_t *)gfx, *skyP = (uint16_t *)sky, *farP = (uint16_t *)farRidge;
 static uint16_t *forestP = (uint16_t *)forest, *nearP = (uint16_t *)nearRidge, *frontP = (uint16_t *)frontPlants;
+static uint16_t *chromaGfxP = (uint16_t *)chromaGfx, *worldColorP = (uint16_t *)worldColor;
+static uint8_t *worldLumP = (uint8_t *)worldLum;
 uint16_t *frame_buffer;
 static uint32_t _sizex = 800;
 static uint32_t _sizey = 480;
@@ -330,6 +335,10 @@ void setup() {
   bindVariable((char *)"uint16_t *", (char *)"forest", NULL, (void *)&forestP);
   bindVariable((char *)"uint16_t *", (char *)"nearRidge", NULL, (void *)&nearP);
   bindVariable((char *)"uint16_t *", (char *)"frontPlants", NULL, (void *)&frontP);
+  // ChromaQuest's sprites and its three worlds, in colour and in brightness
+  bindVariable((char *)"uint16_t *", (char *)"chromaGfx", NULL, (void *)&chromaGfxP);
+  bindVariable((char *)"uint16_t *", (char *)"worldColor", NULL, (void *)&worldColorP);
+  bindVariable((char *)"uint8_t *", (char *)"worldLum", NULL, (void *)&worldLumP);
 
   // false: a partition that doesn't mount is left alone, never formatted
   if (!FFat.begin(false))

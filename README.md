@@ -2087,7 +2087,8 @@ A game doesn't have to be compiled every time it starts. `parseScriptToBinary()`
 | `matouch/NeonRacer` | An anti-gravity race at 400x240 on a neon track in perspective (curves, hills, boost pads), against three rivals over 3 laps, played with a USB keyboard (Q D steer, S brakes). Runs by itself until Space is pressed. |
 | `matouch/PrismBreak` | A brick breaker at 400x240: patterned bevelled bricks (silver take two hits, gold none), a scrolling diamond background, a metal-framed field, sparks, falling capsules (wider paddle, three balls, slower ball, a life), five layouts. Q D move the paddle, S stops it, Space serves. Plays itself until Space is pressed. |
 | `matouch/XenoWing` | A horizontal shoot'em up at 400x240: an organic manta ship over an alien world in five parallax layers (a ringed planet, mountains, a forest of strange trees, crystals, plants in front), waves of bio creatures, a boss, power-ups and spore bombs. The art is pixel art in flash, bound to the script as pointers. Plays itself until Space is pressed. |
-| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer, PrismBreak and XenoWing are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
+| `matouch/ChromaQuest` | Three grey worlds made from NASA photographs (the Moon with the Earth rising, Mount Sharp on Mars, Saturn) whose red, green and blue come back as a lantern drone catches the colour drops of the thieves it shoots: the script mixes each photograph's grey and colour, channel by channel, every frame. |
+| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing and ChromaQuest are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
 
 In every game, **Escape** gives the game up (Tetris ends it, the others go back to their demo; in the GameLauncher it goes back to the menu), and the **arrow keys** work as Z Q S D.
 
@@ -2216,14 +2217,34 @@ Comparing its logic with gcc found how the language treats `/` between ints in a
 
 Writing it found a third compiler bug, fixed: `if (rand(400) == 0)`, with `rand` returning a `uint32_t`, did not assemble ("Opcode bneu not found"). Unsigned comparisons use `bltu`/`bgeu`, but `==` and `!=` compare bits, signed or not, and Xtensa has no `bequ`/`bneu`; the compiler now uses `beq`/`bne` for them. A fuzz regression (`unsigned_equality`) checks it against gcc. No script that compiled before changes.
 
+#### ChromaQuest: colour back to three worlds
+
+[matouch/ChromaQuest](examples/matouch/ChromaQuest) uses real photographs: three worlds from NASA's image library, each starting all grey. Grey colour thieves have taken its red, its green and its blue; Lumo, a lantern drone, shoots them, and each one drops the colour glowing in its heart. Every drop caught gives part of that colour back to the world, and when the three gauges are full the world is restored. About 1000 lines of script.
+
+<img src="examples/matouch/ChromaQuest/chromaquest.gif" width="400" alt="ChromaQuest: the three worlds coming back to colour">
+
+*The demo playing the three worlds, sped up: a frame every 40 (emulated ESP32-S3).*
+
+| | |
+| --- | --- |
+| <img src="examples/matouch/ChromaQuest/chromaquest_start.png" width="400" alt="The Moon, all grey"> | <img src="examples/matouch/ChromaQuest/chromaquest_moon.png" width="400" alt="The Earth turning blue"> |
+| The Moon, all grey: the Earth rising over its horizon. | Red and blue caught: the Earth is blue again. |
+| <img src="examples/matouch/ChromaQuest/chromaquest_mars.png" width="400" alt="Mars almost restored"> | <img src="examples/matouch/ChromaQuest/chromaquest_saturn.png" width="400" alt="Saturn restored"> |
+| Mount Sharp on Mars, its colours almost back. | Saturn restored. |
+
+- **The worlds** are NASA photographs, public domain: *Earthrise* (Apollo 8, AS08-14-2383), *Mount Sharp Buttes and Layers From Near Darwin* (Curiosity, PIA19083, NASA/JPL-Caltech/MSSS) and *The Greatest Saturn Portrait ...Yet* (Cassini, PIA06193, NASA/JPL/Space Science Institute), from [images.nasa.gov](https://images.nasa.gov). Each was cropped and scaled to 400x240 with macOS's `sips` (the three are in the example's `tools` folder), and the Moon and Saturn got a few faint stars in their black sky.
+- **Grey to colour, every frame**: the art keeps each world twice, its colour (RGB565, 192 KB) and its brightness (a byte a pixel, 96 KB). The script draws the world mixing the two, each channel by its own amount: `r = grey + (red - grey) * fill / 16`, and the same for green and blue. All grey is one table lookup a pixel, all colour a copy; in between, the three mixes. The amount shown eases towards the drops caught, so the colour washes in.
+- **The game**: Lumo moves while a key is held (with the key-release hook of [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script)) and fires ahead of where it last went. Dust moths flutter over the Moon, dust devils sway on Mars, ice shards bounce around Saturn; each carries a colour the world still needs and fires grey bolts at Lumo. Drops hop out and fall gently; caught, they fill a gauge. Each world needs more drops than the last, then they come round again. Score, high score, lives; a demo until Space; Escape gives a game up.
+- **The art** is made by [tools/chroma_assets.py](examples/matouch/ChromaQuest/tools/chroma_assets.py) (the photographs, Lumo, the drops, the thieves, the splashes), 885 KB in flash, read through bound pointers like XenoWing's.
+
 #### GameLauncher: games from the FFat partition
 
-[matouch/GameLauncher](examples/matouch/GameLauncher) has no game in it: it lists the `.bin` files of the FFat partition, and loads and runs the one you pick. Its `data` folder holds `tetris.bin`, `mazechase.bin`, `neonracer.bin`, `prismbreak.bin` and `xenowing.bin`, the five games above compiled with `parseScriptToBinary()` (the same bytes as [CreateTetrisBinary](#saving-and-loading-compiled-scripts-script_executableh) makes on the board).
+[matouch/GameLauncher](examples/matouch/GameLauncher) has no game in it: it lists the `.bin` files of the FFat partition, and loads and runs the one you pick. Its `data` folder holds `tetris.bin`, `mazechase.bin`, `neonracer.bin`, `prismbreak.bin`, `xenowing.bin` and `chromaquest.bin`, the six games above compiled with `parseScriptToBinary()` (the same bytes as [CreateTetrisBinary](#saving-and-loading-compiled-scripts-script_executableh) makes on the board).
 
 <img src="examples/matouch/GameLauncher/gamelauncher_menu.png" width="400" alt="The launcher's menu">
 
 - **Keys**: Z/S or the arrows to choose, Space or Enter to play, 1-9 to play a game at once; in a game, Escape comes back to the menu. The arrows arrive in the games as Z Q S D.
-- **Bindings**: the launcher binds the names the games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`, and XenoWing's art: `gfx`, `sky`, `farRidge`, `forest`, `nearRidge`, `frontPlants`, from a copy of `xenowing_assets.h` in the launcher); any other game compiled against the same names shows up in the menu too.
+- **Bindings**: the launcher binds the names the games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`, XenoWing's art: `gfx`, `sky`, `farRidge`, `forest`, `nearRidge`, `frontPlants`, from a copy of `xenowing_assets.h` in the launcher, and ChromaQuest's: `chromaGfx`, `worldColor`, `worldLum`, from `chroma_assets.h`); any other game compiled against the same names shows up in the menu too.
 - **Coming back**: each game runs on its own task (`executeAsTask()`). Every game calls `readKey()` once per frame; after Escape, `readKey()` never returns, so the game's task waits in a function of the sketch that holds nothing, and the launcher kills it and frees the game (built with placement `new`, since a `ScriptExecutable` can't be moved). Killing it anywhere else, inside `show16()` say, could leave the screen driver half way.
 
 **Putting the data folder on the partition.** The partition scheme is *16M Flash (3MB APP/9.9MB FATFS)*: the FFat partition starts at `0x610000` and is `0x9E0000` bytes. FFat keeps a wear-levelling layer around the FAT, so the image is made with ESP-IDF's `wl_fatfsgen.py`, with the core's settings (4096-byte sectors, long names), and written with esptool:
