@@ -214,11 +214,18 @@ int popup;
 int popupTimer;
 uint32_t seed;
 
-// 3x5 pixel font: 0-9, A-Z, then + and /
-int font[38] = {31599, 11415, 29671, 29647, 23497, 31183, 31215, 29330, 31727, 31695,
+// an 8x8 font, bold and rounded: 0-9, A-Z, then . : / and +; 8 rows a
+// character, the leftmost pixel in the highest bit (ChromaQuest/tools/font8.py)
+uint8_t font8[320] = {126, 199, 207, 219, 243, 227, 126, 0, 24, 56, 120, 24, 24, 24, 126, 0, 126, 195, 6, 28, 112, 192, 255, 0, 126, 195, 3, 62, 3, 195, 126, 0, 14, 30, 54, 102, 255, 6, 6, 0, 255, 192, 254, 3, 3, 195, 126, 0, 62, 96, 192, 254, 195, 195, 126, 0, 255, 195, 6, 12, 24, 24, 24, 0, 126, 195, 195, 126, 195, 195, 126, 0, 126, 195, 195, 127, 3, 6, 124, 0, 60, 102, 195, 195, 255, 195, 195, 0, 254, 195, 195, 254, 195, 195, 254, 0, 126, 195, 192, 192, 192, 195, 126, 0, 252, 198, 195, 195, 195, 198, 252, 0, 255, 192, 192, 252, 192, 192, 255, 0, 255, 192, 192, 252, 192, 192, 192, 0, 126, 195, 192, 207, 195, 195, 126, 0, 195, 195, 195, 255, 195, 195, 195, 0, 126, 24, 24, 24, 24, 24, 126, 0, 63, 6, 6, 6, 198, 198, 124, 0, 198, 204, 216, 240, 216, 204, 198, 0, 192, 192, 192, 192, 192, 192, 255, 0, 195, 231, 255, 219, 195, 195, 195, 0, 195, 227, 243, 219, 207, 199, 195, 0, 126, 195, 195, 195, 195, 195, 126, 0, 254, 195, 195, 254, 192, 192, 192, 0, 126, 195, 195, 195, 203, 198, 123, 0, 254, 195, 195, 254, 204, 198, 195, 0, 126, 195, 192, 126, 3, 195, 126, 0, 255, 24, 24, 24, 24, 24, 24, 0, 195, 195, 195, 195, 195, 195, 126, 0, 195, 195, 195, 195, 102, 60, 24, 0, 195, 195, 195, 219, 255, 231, 195, 0, 195, 102, 60, 24, 60, 102, 195, 0, 195, 195, 102, 60, 24, 24, 24, 0, 255, 6, 12, 24, 48, 96, 255, 0, 0, 0, 0, 0, 0, 192, 192, 0, 0, 192, 192, 0, 0, 192, 192, 0, 3, 6, 12, 24, 48, 96, 192, 0, 0, 24, 24, 126, 24, 24, 0, 0};
+// how each row shades the text's colour, in sixteenths: scaled by rowMul,
+// then lifted toward white by rowLift; a dark band, then a bright edge
+int rowMul[8] = {16, 16, 16, 7, 16, 15, 12, 9};
+int rowLift[8] = {10, 6, 2, 0, 5, 0, 0, 0};
+// and the small 3x5 font, 0-9, A-Z then +: 5 rows of 3 bits, the top row first
+int tiny[37] = {31599, 11415, 29671, 29647, 23497, 31183, 31215, 29330, 31727, 31695,
                 11245, 27566, 14627, 27502, 31143, 31140, 14699, 23533, 29847, 4714,
                 23861, 18727, 24557, 27501, 11114, 27556, 11123, 27565, 14478, 29842,
-                23407, 23402, 23549, 23213, 23186, 29351, 1488, 4772};
+                23407, 23402, 23549, 23213, 23186, 29351, 1488};
 
 int brickHue[8] = {0, 0, 22, 50, 96, 130, 165, 210};
 int capHue[4] = {165, 96, 40, 0};
@@ -408,9 +415,56 @@ void fillRect(int x, int y, int w, int h, uint16_t c)
    }
 }
 
+// a character at (x, y), sc pixels a dot: a dark shadow down and to the
+// right, then each row in its shade of c; a run of dots is one rectangle
 void drawGlyph(int x, int y, int g, int sc, uint16_t c)
 {
-   int bits = font[g];
+   int v = ((c & 255) << 8) | (c >> 8);
+   int cr = (v >> 11) & 31;
+   int cg = (v >> 5) & 63;
+   int cb = v & 31;
+   for (int pass = 0; pass < 2; pass++)
+   {
+      int off = sc;
+      if (pass == 1)
+         off = 0;
+      for (int r = 0; r < 8; r++)
+      {
+         int bits = font8[g * 8 + r];
+         uint16_t rc = 16904;       // the shadow: a dark blue
+         if (pass == 1)
+         {
+            int rr = (cr * rowMul[r]) >> 4;
+            int rg = (cg * rowMul[r]) >> 4;
+            int rb = (cb * rowMul[r]) >> 4;
+            rr = rr + (((31 - rr) * rowLift[r]) >> 4);
+            rg = rg + (((63 - rg) * rowLift[r]) >> 4);
+            rb = rb + (((31 - rb) * rowLift[r]) >> 4);
+            int w = (rr << 11) | (rg << 5) | rb;
+            rc = ((w & 255) << 8) | (w >> 8);
+         }
+         int b = 0;
+         while (b < 8)
+         {
+            if (((bits >> (7 - b)) & 1) == 1)
+            {
+               int e = b + 1;
+               while (e < 8 && ((bits >> (7 - e)) & 1) == 1)
+                  e++;
+               fillRect(x + b * sc + off, y + r * sc + off, (e - b) * sc, sc, rc);
+               b = e;
+            }
+            else
+               b++;
+         }
+      }
+   }
+}
+
+// a character of the small font, flat
+void drawTinyGlyph(int x, int y, int g, int sc, uint16_t c)
+{
+   int bits = tiny[g];
    for (int r = 0; r < 5; r++)
       for (int b = 0; b < 3; b++)
          if ((bits >> ((4 - r) * 3 + 2 - b)) & 1)
@@ -428,11 +482,11 @@ void drawText(int x, int y, char *s, int sc, uint16_t c)
          drawGlyph(x, y, ch - 48, sc, c);
       if (ch >= 65 && ch <= 90)
          drawGlyph(x, y, ch - 55, sc, c);
-      if (ch == 43)
-         drawGlyph(x, y, 36, sc, c);
       if (ch == 47)
-         drawGlyph(x, y, 37, sc, c);
-      x = x + 4 * sc;
+         drawGlyph(x, y, 38, sc, c);
+      if (ch == 43)
+         drawGlyph(x, y, 39, sc, c);
+      x = x + 9 * sc;
       i++;
    }
 }
@@ -450,7 +504,7 @@ void drawNumber(int x, int y, int v, int sc, uint16_t c)
    for (int k = n - 1; k >= 0; k--)
    {
       drawGlyph(x, y, digits[k], sc, c);
-      x = x + 4 * sc;
+      x = x + 9 * sc;
    }
 }
 
@@ -1007,7 +1061,7 @@ void drawCapsule(int x, int y, int t)
       g = 28;                 // S
    if (t == 3)
       g = 36;                 // +
-   drawGlyph(x - 1, y - 2, g, 1, black);
+   drawTinyGlyph(x - 1, y - 2, g, 1, black);
 }
 
 void drawCapsules()
@@ -1032,75 +1086,75 @@ void drawSparks()
 void drawPanels()
 {
    // PRISM / BREAK, a colour per letter
-   drawText(12, 8, "P", 3, title[0]);
-   drawText(24, 8, "R", 3, title[1]);
-   drawText(36, 8, "I", 3, title[2]);
-   drawText(48, 8, "S", 3, title[3]);
-   drawText(60, 8, "M", 3, title[4]);
-   drawText(12, 28, "B", 3, title[5]);
-   drawText(24, 28, "R", 3, title[6]);
-   drawText(36, 28, "E", 3, title[7]);
-   drawText(48, 28, "A", 3, title[8]);
-   drawText(60, 28, "K", 3, title[9]);
-   drawText(10, 60, "SCORE", 2, grey);
-   drawNumber(10, 74, score, 2, white);
-   drawText(10, 100, "HIGH", 2, grey);
-   drawNumber(10, 114, high, 2, white);
-   drawText(312, 10, "LIVES", 2, grey);
+   drawText(2, 6, "P", 2, title[0]);
+   drawText(19, 6, "R", 2, title[1]);
+   drawText(36, 6, "I", 2, title[2]);
+   drawText(53, 6, "S", 2, title[3]);
+   drawText(70, 6, "M", 2, title[4]);
+   drawText(2, 28, "B", 2, title[5]);
+   drawText(19, 28, "R", 2, title[6]);
+   drawText(36, 28, "E", 2, title[7]);
+   drawText(53, 28, "A", 2, title[8]);
+   drawText(70, 28, "K", 2, title[9]);
+   drawText(10, 60, "SCORE", 1, grey);
+   drawNumber(10, 72, score, 1, white);
+   drawText(10, 100, "HIGH", 1, grey);
+   drawNumber(10, 112, high, 1, white);
+   drawText(312, 10, "LIVES", 1, grey);
    for (int i = 0; i < lives - 1 && i < 5; i++)
    {
       fillRect(314 + i * 14, 28, 11, 4, padBody);
       fillRect(314 + i * 14, 28, 2, 4, padEnd);
       fillRect(323 + i * 14, 28, 2, 4, padEnd);
    }
-   drawText(312, 44, "LEVEL", 2, grey);
-   drawNumber(312, 58, level, 2, white);
+   drawText(312, 44, "LEVEL", 1, grey);
+   drawNumber(312, 56, level, 1, white);
    // what the capsules do
    drawCapsule(320, 92, 0);
-   drawText(332, 90, "WIDE", 1, capColor[0]);
+   drawText(332, 88, "WIDE", 1, capColor[0]);
    drawCapsule(320, 108, 1);
-   drawText(332, 106, "MULTI", 1, capColor[1]);
+   drawText(332, 104, "MULTI", 1, capColor[1]);
    drawCapsule(320, 124, 2);
-   drawText(332, 122, "SLOW", 1, capColor[2]);
+   drawText(332, 120, "SLOW", 1, capColor[2]);
    drawCapsule(320, 140, 3);
-   drawText(332, 138, "LIFE", 1, capColor[3]);
+   drawText(332, 136, "LIFE", 1, capColor[3]);
    if (demo)
    {
       if ((frame / 20) % 2 == 0)
       {
-         drawText(10, 190, "PRESS", 2, yellow);
-         drawText(10, 206, "SPACE", 2, yellow);
+         drawText(10, 190, "PRESS", 1, yellow);
+         drawText(10, 204, "SPACE", 1, yellow);
       }
    }
    else
    {
       drawText(10, 180, "Q D MOVE", 1, grey);
-      drawText(10, 190, "S STOP", 1, grey);
-      drawText(10, 200, "SPACE SERVE", 1, grey);
-      drawText(10, 210, "ESC QUIT", 1, grey);
+      drawText(10, 191, "S STOP", 1, grey);
+      drawText(10, 202, "SPC SERVE", 1, grey);
+      drawText(10, 213, "ESC QUIT", 1, grey);
    }
    if (popupTimer > 0)
    {
       if (popup == 0)
-         drawText(312, 170, "WIDE", 2, capColor[0]);
+         drawText(312, 170, "WIDE", 1, capColor[0]);
       if (popup == 1)
-         drawText(312, 170, "MULTI", 2, capColor[1]);
+         drawText(312, 170, "MULTI", 1, capColor[1]);
       if (popup == 2)
-         drawText(312, 170, "SLOW", 2, capColor[2]);
+         drawText(312, 170, "SLOW", 1, capColor[2]);
       if (popup == 3)
-         drawText(312, 170, "LIFE", 2, capColor[3]);
+         drawText(312, 170, "LIFE", 1, capColor[3]);
    }
    if (phase == 0)
    {
-      drawText(FX + 66, 160, "LEVEL", 2, yellow);
-      drawNumber(FX + 114, 160, level, 2, yellow);
+      drawText(FX + 73, 160, "LEVEL", 1, yellow);
+      drawNumber(FX + 127, 160, level, 1, yellow);
    }
    if (phase == 3)
-      drawText(FX + 54, 160, "CLEARED", 2, yellow);
+      drawText(FX + 73, 160, "CLEARED", 1, yellow);
    if (phase == 4)
    {
       fillRect(FX + 40, 150, FW - 80, 26, black);
-      drawText(FX + 50, 156, "GAME OVER", 2, hsv2(0, 230, 255));
+      drawText(FX + 64, 159, "GAME OVER", 1, hsv2(0, 230, 255));
    }
 }
 

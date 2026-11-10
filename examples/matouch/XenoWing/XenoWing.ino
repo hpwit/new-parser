@@ -256,11 +256,13 @@ char xenoWing[] = R"EOF(
 
 int sinT[64] = {0, 6, 12, 19, 24, 30, 36, 41, 45, 49, 53, 56, 59, 61, 63, 64, 64, 64, 63, 61, 59, 56, 53, 49, 45, 41, 36, 30, 24, 19, 12, 6, 0, -6, -12, -19, -24, -30, -36, -41, -45, -49, -53, -56, -59, -61, -63, -64, -64, -64, -63, -61, -59, -56, -53, -49, -45, -41, -36, -30, -24, -19, -12, -6};
 
-// 3x5 pixel font, 0-9 then A-Z
-int font[36] = {31599, 11415, 29671, 29647, 23497, 31183, 31215, 29330, 31727, 31695,
-                11245, 27566, 14627, 27502, 31143, 31140, 14699, 23533, 29847, 4714,
-                23861, 18727, 24557, 27501, 11114, 27556, 11123, 27565, 14478, 29842,
-                23407, 23402, 23549, 23213, 23186, 29351};
+// an 8x8 font, bold and rounded: 0-9, A-Z, then . : / and +; 8 rows a
+// character, the leftmost pixel in the highest bit (ChromaQuest/tools/font8.py)
+uint8_t font8[320] = {126, 199, 207, 219, 243, 227, 126, 0, 24, 56, 120, 24, 24, 24, 126, 0, 126, 195, 6, 28, 112, 192, 255, 0, 126, 195, 3, 62, 3, 195, 126, 0, 14, 30, 54, 102, 255, 6, 6, 0, 255, 192, 254, 3, 3, 195, 126, 0, 62, 96, 192, 254, 195, 195, 126, 0, 255, 195, 6, 12, 24, 24, 24, 0, 126, 195, 195, 126, 195, 195, 126, 0, 126, 195, 195, 127, 3, 6, 124, 0, 60, 102, 195, 195, 255, 195, 195, 0, 254, 195, 195, 254, 195, 195, 254, 0, 126, 195, 192, 192, 192, 195, 126, 0, 252, 198, 195, 195, 195, 198, 252, 0, 255, 192, 192, 252, 192, 192, 255, 0, 255, 192, 192, 252, 192, 192, 192, 0, 126, 195, 192, 207, 195, 195, 126, 0, 195, 195, 195, 255, 195, 195, 195, 0, 126, 24, 24, 24, 24, 24, 126, 0, 63, 6, 6, 6, 198, 198, 124, 0, 198, 204, 216, 240, 216, 204, 198, 0, 192, 192, 192, 192, 192, 192, 255, 0, 195, 231, 255, 219, 195, 195, 195, 0, 195, 227, 243, 219, 207, 199, 195, 0, 126, 195, 195, 195, 195, 195, 126, 0, 254, 195, 195, 254, 192, 192, 192, 0, 126, 195, 195, 195, 203, 198, 123, 0, 254, 195, 195, 254, 204, 198, 195, 0, 126, 195, 192, 126, 3, 195, 126, 0, 255, 24, 24, 24, 24, 24, 24, 0, 195, 195, 195, 195, 195, 195, 126, 0, 195, 195, 195, 195, 102, 60, 24, 0, 195, 195, 195, 219, 255, 231, 195, 0, 195, 102, 60, 24, 60, 102, 195, 0, 195, 195, 102, 60, 24, 24, 24, 0, 255, 6, 12, 24, 48, 96, 255, 0, 0, 0, 0, 0, 0, 192, 192, 0, 0, 192, 192, 0, 0, 192, 192, 0, 3, 6, 12, 24, 48, 96, 192, 0, 0, 24, 24, 126, 24, 24, 0, 0};
+// how each row shades the text's colour, in sixteenths: scaled by rowMul,
+// then lifted toward white by rowLift; a dark band, then a bright edge
+int rowMul[8] = {16, 16, 16, 7, 16, 15, 12, 9};
+int rowLift[8] = {10, 6, 2, 0, 5, 0, 0, 0};
 
 // the player
 int px;
@@ -441,13 +443,50 @@ void drawFlash(int base, int w, int h, int x, int y)
    }
 }
 
+// a character at (x, y), sc pixels a dot: a dark shadow down and to the
+// right, then each row in its shade of c; a run of dots is one rectangle
 void drawGlyph(int x, int y, int g, int sc, uint16_t c)
 {
-   int bits = font[g];
-   for (int r = 0; r < 5; r++)
-      for (int b = 0; b < 3; b++)
-         if ((bits >> ((4 - r) * 3 + 2 - b)) & 1)
-            fillRect(x + b * sc, y + r * sc, sc, sc, c);
+   int v = ((c & 255) << 8) | (c >> 8);
+   int cr = (v >> 11) & 31;
+   int cg = (v >> 5) & 63;
+   int cb = v & 31;
+   for (int pass = 0; pass < 2; pass++)
+   {
+      int off = sc;
+      if (pass == 1)
+         off = 0;
+      for (int r = 0; r < 8; r++)
+      {
+         int bits = font8[g * 8 + r];
+         uint16_t rc = 16904;       // the shadow: a dark blue
+         if (pass == 1)
+         {
+            int rr = (cr * rowMul[r]) >> 4;
+            int rg = (cg * rowMul[r]) >> 4;
+            int rb = (cb * rowMul[r]) >> 4;
+            rr = rr + (((31 - rr) * rowLift[r]) >> 4);
+            rg = rg + (((63 - rg) * rowLift[r]) >> 4);
+            rb = rb + (((31 - rb) * rowLift[r]) >> 4);
+            int w = (rr << 11) | (rg << 5) | rb;
+            rc = ((w & 255) << 8) | (w >> 8);
+         }
+         int b = 0;
+         while (b < 8)
+         {
+            if (((bits >> (7 - b)) & 1) == 1)
+            {
+               int e = b + 1;
+               while (e < 8 && ((bits >> (7 - e)) & 1) == 1)
+                  e++;
+               fillRect(x + b * sc + off, y + r * sc + off, (e - b) * sc, sc, rc);
+               b = e;
+            }
+            else
+               b++;
+         }
+      }
+   }
 }
 
 // capitals, digits and spaces
@@ -461,7 +500,7 @@ void drawText(int x, int y, char *s, int sc, uint16_t c)
          drawGlyph(x, y, ch - 48, sc, c);
       if (ch >= 65 && ch <= 90)
          drawGlyph(x, y, ch - 55, sc, c);
-      x = x + 4 * sc;
+      x = x + 9 * sc;
       i++;
    }
 }
@@ -479,7 +518,7 @@ void drawNumber(int x, int y, int v, int sc, uint16_t c)
    for (int k = n - 1; k >= 0; k--)
    {
       drawGlyph(x, y, digits[k], sc, c);
-      x = x + 4 * sc;
+      x = x + 9 * sc;
    }
 }
 
@@ -1318,9 +1357,9 @@ void drawThings()
 void drawHud()
 {
    drawFront((frontScroll / FP) % FRONT_W);
-   drawNumber(6, 4, score, 2, white);
-   drawText(150, 4, "HI", 2, grey);
-   drawNumber(170, 4, high, 2, yellow);
+   drawNumber(6, 4, score, 1, white);
+   drawText(150, 4, "HI", 1, grey);
+   drawNumber(172, 4, high, 1, yellow);
    for (int i = 0; i < lives - 1 && i < 5; i++)
       drawSprite(ICON, ICON_W, ICON_H, 300 + i * 20, 3);
    for (int i = 0; i < bombs && i < 5; i++)
@@ -1340,16 +1379,16 @@ void drawHud()
    if (phase == 0 || phase == 3)
    {
       if (phase == 3)
-         drawText(150, 90, "CLEARED", 3, cyan);
-      drawText(150, 110, "STAGE", 3, white);
-      drawNumber(214, 110, stage, 3, white);
+         drawText(138, 86, "CLEARED", 2, cyan);
+      drawText(146, 110, "STAGE", 2, white);
+      drawNumber(242, 110, stage, 2, white);
    }
    if (phase == 2 && (frame / 8) % 2 == 0)
-      drawText(140, 100, "WARNING", 4, red);
+      drawText(106, 96, "WARNING", 3, red);
    if (phase == 4)
-      drawText(130, 100, "GAME OVER", 4, red);
+      drawText(80, 96, "GAME OVER", 3, red);
    if (demo && (frame / 20) % 2 == 0)
-      drawText(158, 214, "PRESS SPACE", 2, white);
+      drawText(151, 216, "PRESS SPACE", 1, white);
 }
 
 int main()

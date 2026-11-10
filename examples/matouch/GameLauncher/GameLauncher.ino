@@ -197,11 +197,30 @@ static void listGames() {
 
 // --- the menu, drawn into the frame buffer at 400x240 ---
 
-// 3x5 pixel font, 0-9 then A-Z: 5 rows of 3 bits, the top row first
-static const uint16_t font[36] = {31599, 11415, 29671, 29647, 23497, 31183, 31215, 29330, 31727, 31695,
-                                  11245, 27566, 14627, 27502, 31143, 31140, 14699, 23533, 29847, 4714,
-                                  23861, 18727, 24557, 27501, 11114, 27556, 11123, 27565, 14478, 29842,
-                                  23407, 23402, 23549, 23213, 23186, 29351};
+// the games' 8x8 font, 0-9 then A-Z: 8 rows a character, the leftmost pixel
+// in the highest bit (ChromaQuest/tools/font8.py)
+static const uint8_t font8[288] = {126, 199, 207, 219, 243, 227, 126, 0, 24, 56, 120, 24, 24, 24, 126, 0,
+                                    126, 195, 6, 28, 112, 192, 255, 0, 126, 195, 3, 62, 3, 195, 126, 0,
+                                    14, 30, 54, 102, 255, 6, 6, 0, 255, 192, 254, 3, 3, 195, 126, 0,
+                                    62, 96, 192, 254, 195, 195, 126, 0, 255, 195, 6, 12, 24, 24, 24, 0,
+                                    126, 195, 195, 126, 195, 195, 126, 0, 126, 195, 195, 127, 3, 6, 124, 0,
+                                    60, 102, 195, 195, 255, 195, 195, 0, 254, 195, 195, 254, 195, 195, 254, 0,
+                                    126, 195, 192, 192, 192, 195, 126, 0, 252, 198, 195, 195, 195, 198, 252, 0,
+                                    255, 192, 192, 252, 192, 192, 255, 0, 255, 192, 192, 252, 192, 192, 192, 0,
+                                    126, 195, 192, 207, 195, 195, 126, 0, 195, 195, 195, 255, 195, 195, 195, 0,
+                                    126, 24, 24, 24, 24, 24, 126, 0, 63, 6, 6, 6, 198, 198, 124, 0,
+                                    198, 204, 216, 240, 216, 204, 198, 0, 192, 192, 192, 192, 192, 192, 255, 0,
+                                    195, 231, 255, 219, 195, 195, 195, 0, 195, 227, 243, 219, 207, 199, 195, 0,
+                                    126, 195, 195, 195, 195, 195, 126, 0, 254, 195, 195, 254, 192, 192, 192, 0,
+                                    126, 195, 195, 195, 203, 198, 123, 0, 254, 195, 195, 254, 204, 198, 195, 0,
+                                    126, 195, 192, 126, 3, 195, 126, 0, 255, 24, 24, 24, 24, 24, 24, 0,
+                                    195, 195, 195, 195, 195, 195, 126, 0, 195, 195, 195, 195, 102, 60, 24, 0,
+                                    195, 195, 195, 219, 255, 231, 195, 0, 195, 102, 60, 24, 60, 102, 195, 0,
+                                    195, 195, 102, 60, 24, 24, 24, 0, 255, 6, 12, 24, 48, 96, 255, 0};
+// how each row shades the text's colour, in sixteenths: scaled by rowMul,
+// then lifted toward white by rowLift; a dark band, then a bright edge
+static const uint8_t rowMul[8] = {16, 16, 16, 7, 16, 15, 12, 9};
+static const uint8_t rowLift[8] = {10, 6, 2, 0, 5, 0, 0, 0};
 
 static void fill(int x, int y, int w, int h, uint16_t c) {
   for (int j = y; j < y + h; j++)
@@ -211,8 +230,11 @@ static void fill(int x, int y, int w, int h, uint16_t c) {
           frame_buffer[j * 800 + i] = c;
 }
 
-// capitals, digits and spaces (lower case is shown as capitals)
+// capitals, digits and spaces (lower case is shown as capitals), 9 dots
+// apart: a dark shadow down and to the right, then each row in its shade of c
 static int text(int x, int y, const char *s, int sc, uint16_t c) {
+  uint16_t v = (c << 8) | (c >> 8);
+  int cr = (v >> 11) & 31, cg = (v >> 5) & 63, cb = v & 31;
   for (; *s; s++) {
     int ch = toupper(*s);
     int g = -1;
@@ -221,13 +243,30 @@ static int text(int x, int y, const char *s, int sc, uint16_t c) {
     if (ch >= 'A' && ch <= 'Z')
       g = ch - 'A' + 10;
     if (g >= 0)
-      for (int r = 0; r < 5; r++)
-        for (int b = 0; b < 3; b++)
-          if ((font[g] >> ((4 - r) * 3 + 2 - b)) & 1)
-            fill(x + b * sc, y + r * sc, sc, sc, c);
-    x += 4 * sc;
+      for (int pass = 0; pass < 2; pass++)
+        for (int r = 0; r < 8; r++) {
+          uint16_t rc = 0x4208;  // the shadow: a dark blue
+          if (pass == 1) {
+            int rr = cr * rowMul[r] >> 4, rg = cg * rowMul[r] >> 4, rb = cb * rowMul[r] >> 4;
+            rr += (31 - rr) * rowLift[r] >> 4;
+            rg += (63 - rg) * rowLift[r] >> 4;
+            rb += (31 - rb) * rowLift[r] >> 4;
+            uint16_t w = (rr << 11) | (rg << 5) | rb;
+            rc = (w << 8) | (w >> 8);
+          }
+          int off = pass == 0 ? sc : 0;
+          for (int b = 0; b < 8; b++)
+            if ((font8[g * 8 + r] >> (7 - b)) & 1)
+              fill(x + b * sc + off, y + r * sc + off, sc, sc, rc);
+        }
+    x += 9 * sc;
   }
   return x;
+}
+
+// the same, centred on the screen
+static void centred(int y, const char *s, int sc, uint16_t c) {
+  text((400 - (int)strlen(s) * 9 * sc) / 2, y, s, sc, c);
 }
 
 static void drawMenu(uint32_t t) {
@@ -236,11 +275,11 @@ static void drawMenu(uint32_t t) {
   const char *title = "GAME LAUNCHER";
   for (int i = 0; title[i]; i++) {
     char one[2] = {title[i], 0};
-    text(46 + i * 24, 14, one, 5, hsv16(i * 20 + t / 20, 220, 255));
+    text(25 + i * 27, 14, one, 3, hsv16(i * 20 + t / 20, 220, 255));
   }
   if (gameCount == 0) {
-    text(60, 100, "NO BIN FILE ON THE FFAT PARTITION", 2, hsv16(0, 200, 255));
-    text(60, 120, "SEE THE README GAMELAUNCHER", 2, hsv16(0, 0, 200));
+    centred(100, "NO BIN FILE ON THE FFAT PARTITION", 1, hsv16(0, 200, 255));
+    centred(120, "SEE THE README GAMELAUNCHER", 1, hsv16(0, 0, 200));
   }
   for (int i = 0; i < gameCount; i++) {
     int y = 60 + i * 18;
@@ -249,13 +288,13 @@ static void drawMenu(uint32_t t) {
       fill(40, y - 3, 320, 16, hsv16(200 + (t / 10) % 20, 230, 160));
     char line[40];
     snprintf(line, sizeof(line), "%d  %.*s", i + 1, (int)strlen(gameFile[i]) - 4, gameFile[i]);
-    text(52, y, line, 2, on ? hsv16(0, 0, 255) : hsv16(150, 60, 220));
+    text(52, y + 1, line, 1, on ? hsv16(0, 0, 255) : hsv16(150, 60, 220));
     snprintf(line, sizeof(line), "%u", (unsigned)gameSize[i]);
-    text(300, y, line, 2, hsv16(45, 150, 220));
+    text(300, y + 1, line, 1, hsv16(45, 150, 220));
   }
-  text(40, 212, "Z S CHOOSE   SPACE PLAY   ESC BACK", 2, hsv16(150, 40, 180));
+  centred(214, "Z S CHOOSE   SPACE PLAY   ESC BACK", 1, hsv16(150, 40, 180));
   if (message[0])
-    text(40, 196, message, 2, hsv16(0, 220, 255));
+    centred(198, message, 1, hsv16(0, 220, 255));
 }
 
 static void startGame(int i) {

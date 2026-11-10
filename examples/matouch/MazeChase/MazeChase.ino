@@ -158,8 +158,15 @@ uint8_t edges[675];        // walls: which sides face a path (1 up, 2 left, 4 do
 int dxs[4] = {0, -1, 0, 1};  // up, left, down, right
 int dys[4] = {-1, 0, 1, 0};
 
-// 3x5 pixel font, 0-9 then A-Z: 5 rows of 3 bits, the top row first
-int font[36] = {31599, 11415, 29671, 29647, 23497, 31183, 31215, 29330, 31727, 31695,
+// an 8x8 font, bold and rounded: 0-9, A-Z, then . : / and +; 8 rows a
+// character, the leftmost pixel in the highest bit (ChromaQuest/tools/font8.py)
+uint8_t font8[320] = {126, 199, 207, 219, 243, 227, 126, 0, 24, 56, 120, 24, 24, 24, 126, 0, 126, 195, 6, 28, 112, 192, 255, 0, 126, 195, 3, 62, 3, 195, 126, 0, 14, 30, 54, 102, 255, 6, 6, 0, 255, 192, 254, 3, 3, 195, 126, 0, 62, 96, 192, 254, 195, 195, 126, 0, 255, 195, 6, 12, 24, 24, 24, 0, 126, 195, 195, 126, 195, 195, 126, 0, 126, 195, 195, 127, 3, 6, 124, 0, 60, 102, 195, 195, 255, 195, 195, 0, 254, 195, 195, 254, 195, 195, 254, 0, 126, 195, 192, 192, 192, 195, 126, 0, 252, 198, 195, 195, 195, 198, 252, 0, 255, 192, 192, 252, 192, 192, 255, 0, 255, 192, 192, 252, 192, 192, 192, 0, 126, 195, 192, 207, 195, 195, 126, 0, 195, 195, 195, 255, 195, 195, 195, 0, 126, 24, 24, 24, 24, 24, 126, 0, 63, 6, 6, 6, 198, 198, 124, 0, 198, 204, 216, 240, 216, 204, 198, 0, 192, 192, 192, 192, 192, 192, 255, 0, 195, 231, 255, 219, 195, 195, 195, 0, 195, 227, 243, 219, 207, 199, 195, 0, 126, 195, 195, 195, 195, 195, 126, 0, 254, 195, 195, 254, 192, 192, 192, 0, 126, 195, 195, 195, 203, 198, 123, 0, 254, 195, 195, 254, 204, 198, 195, 0, 126, 195, 192, 126, 3, 195, 126, 0, 255, 24, 24, 24, 24, 24, 24, 0, 195, 195, 195, 195, 195, 195, 126, 0, 195, 195, 195, 195, 102, 60, 24, 0, 195, 195, 195, 219, 255, 231, 195, 0, 195, 102, 60, 24, 60, 102, 195, 0, 195, 195, 102, 60, 24, 24, 24, 0, 255, 6, 12, 24, 48, 96, 255, 0, 0, 0, 0, 0, 0, 192, 192, 0, 0, 192, 192, 0, 0, 192, 192, 0, 3, 6, 12, 24, 48, 96, 192, 0, 0, 24, 24, 126, 24, 24, 0, 0};
+// how each row shades the text's colour, in sixteenths: scaled by rowMul,
+// then lifted toward white by rowLift; a dark band, then a bright edge
+int rowMul[8] = {16, 16, 16, 7, 16, 15, 12, 9};
+int rowLift[8] = {10, 6, 2, 0, 5, 0, 0, 0};
+// and the small 3x5 font, 0-9 then A-Z: 5 rows of 3 bits, the top row first
+int tiny[36] = {31599, 11415, 29671, 29647, 23497, 31183, 31215, 29330, 31727, 31695,
                 11245, 27566, 14627, 27502, 31143, 31140, 14699, 23533, 29847, 4714,
                 23861, 18727, 24557, 27501, 11114, 27556, 11123, 27565, 14478, 29842,
                 23407, 23402, 23549, 23213, 23186, 29351};
@@ -874,9 +881,56 @@ void plot(int x, int y, uint16_t c)
       led16[y * STRIDE + x] = c;
 }
 
+// a character at (x, y), sc pixels a dot: a dark shadow down and to the
+// right, then each row in its shade of c; a run of dots is one rectangle
 void drawGlyph(int x, int y, int g, int sc, uint16_t c)
 {
-   int bits = font[g];
+   int v = ((c & 255) << 8) | (c >> 8);
+   int cr = (v >> 11) & 31;
+   int cg = (v >> 5) & 63;
+   int cb = v & 31;
+   for (int pass = 0; pass < 2; pass++)
+   {
+      int off = sc;
+      if (pass == 1)
+         off = 0;
+      for (int r = 0; r < 8; r++)
+      {
+         int bits = font8[g * 8 + r];
+         uint16_t rc = 16904;       // the shadow: a dark blue
+         if (pass == 1)
+         {
+            int rr = (cr * rowMul[r]) >> 4;
+            int rg = (cg * rowMul[r]) >> 4;
+            int rb = (cb * rowMul[r]) >> 4;
+            rr = rr + (((31 - rr) * rowLift[r]) >> 4);
+            rg = rg + (((63 - rg) * rowLift[r]) >> 4);
+            rb = rb + (((31 - rb) * rowLift[r]) >> 4);
+            int w = (rr << 11) | (rg << 5) | rb;
+            rc = ((w & 255) << 8) | (w >> 8);
+         }
+         int b = 0;
+         while (b < 8)
+         {
+            if (((bits >> (7 - b)) & 1) == 1)
+            {
+               int e = b + 1;
+               while (e < 8 && ((bits >> (7 - e)) & 1) == 1)
+                  e++;
+               fillRect(x + b * sc + off, y + r * sc + off, (e - b) * sc, sc, rc);
+               b = e;
+            }
+            else
+               b++;
+         }
+      }
+   }
+}
+
+// a character of the small font, flat
+void drawTinyGlyph(int x, int y, int g, int sc, uint16_t c)
+{
+   int bits = tiny[g];
    for (int r = 0; r < 5; r++)
       for (int b = 0; b < 3; b++)
          if ((bits >> ((4 - r) * 3 + 2 - b)) & 1)
@@ -894,7 +948,7 @@ void drawText(int x, int y, char *s, int sc, uint16_t c)
          drawGlyph(x, y, ch - 48, sc, c);
       if (ch >= 65 && ch <= 90)
          drawGlyph(x, y, ch - 55, sc, c);
-      x = x + 4 * sc;
+      x = x + 9 * sc;
       i++;
    }
 }
@@ -912,7 +966,24 @@ void drawNumber(int x, int y, int v, int sc, uint16_t c)
    for (int k = n - 1; k >= 0; k--)
    {
       drawGlyph(x, y, digits[k], sc, c);
-      x = x + 4 * sc;
+      x = x + 9 * sc;
+   }
+}
+
+// a number in the small font: the scores that pop up in the maze
+void drawTinyNumber(int x, int y, int v, uint16_t c)
+{
+   int n = 0;
+   while (v > 0 || n == 0)
+   {
+      digits[n] = v % 10;
+      v = v / 10;
+      n++;
+   }
+   for (int k = n - 1; k >= 0; k--)
+   {
+      drawTinyGlyph(x, y, digits[k], 1, c);
+      x = x + 4;
    }
 }
 
@@ -1128,7 +1199,7 @@ void drawActors()
          if (gstate[i] == 3 || gstate[i] == 4)
          {
             if (phase == 5 && popupTimer > 0 && popupX == gx[i] && popupY == gy[i])
-               drawNumber(x - 6, y - 2, popupValue, 1, cyan);
+               drawTinyNumber(x - 6, y - 2, popupValue, cyan);
             else
                drawEye(x, y, gdir[i]);
          }
@@ -1152,7 +1223,7 @@ void drawActors()
          drawOrb(MX + px, MY + py, pdir, rad);
    }
    if (popupTimer > 0 && phase != 5)
-      drawNumber(MX + popupX - 6, MY + popupY - 2, popupValue, 1, cyan);
+      drawTinyNumber(MX + popupX - 6, MY + popupY - 2, popupValue, cyan);
    clipX0 = 0;
    clipX1 = 400;
 }
@@ -1175,20 +1246,20 @@ void drawPanels()
          g = 17;
       if (i == 7)
          g = 28;
-      int x = MX + 30 + i * 16;
+      int x = MX + 23 + i * 18;
       if (i > 3)
-         x = x + 8;
-      drawGlyph(x, 2, g, 3, title[i]);
+         x = x + 10;
+      drawGlyph(x, 1, g, 2, title[i]);
    }
-   drawText(10, 28, "SCORE", 2, grey);
-   drawNumber(10, 42, score, 2, white);
-   drawText(10, 70, "HIGH", 2, grey);
-   drawNumber(10, 84, high, 2, white);
-   drawText(318, 28, "LIVES", 2, grey);
+   drawText(10, 28, "SCORE", 1, grey);
+   drawNumber(10, 40, score, 1, white);
+   drawText(10, 70, "HIGH", 1, grey);
+   drawNumber(10, 82, high, 1, white);
+   drawText(318, 28, "LIVES", 1, grey);
    for (int i = 0; i < lives - 1; i++)
       drawOrb(324 + i * 15, 48, 3, 5);
-   drawText(318, 70, "LEVEL", 2, grey);
-   drawNumber(318, 84, level, 2, white);
+   drawText(318, 70, "LEVEL", 1, grey);
+   drawNumber(318, 82, level, 1, white);
    for (int i = 0; i < level && i < 5; i++)
       drawApple(323 + i * 12, 110);
    // who chases how
@@ -1199,32 +1270,32 @@ void drawPanels()
       drawDrone(326, 142 + i * 20, i, 0);
       gdir[i] = dir;
    }
-   drawText(338, 140, "RUSH", 1, gbody[0]);
-   drawText(338, 160, "AHEAD", 1, gbody[1]);
-   drawText(338, 180, "FLANK", 1, gbody[2]);
-   drawText(338, 200, "DRIFT", 1, gbody[3]);
+   drawText(340, 138, "RUSH", 1, gbody[0]);
+   drawText(340, 158, "AHEAD", 1, gbody[1]);
+   drawText(340, 178, "FLANK", 1, gbody[2]);
+   drawText(340, 198, "DRIFT", 1, gbody[3]);
    if (demo)
    {
       if ((frame / 20) % 2 == 0)
       {
-         drawText(10, 190, "PRESS", 2, yellow);
-         drawText(10, 206, "SPACE", 2, yellow);
+         drawText(10, 190, "PRESS", 1, yellow);
+         drawText(10, 204, "SPACE", 1, yellow);
       }
    }
    else
    {
       drawText(10, 190, "Z Q S D", 1, grey);
-      drawText(10, 200, "TO MOVE", 1, grey);
+      drawText(10, 201, "TO MOVE", 1, grey);
    }
    if (phase == 0)
    {
-      fillRect(MX + 92, MY + 16 * 8, 32, 8, black);
-      drawText(MX + 94, MY + 16 * 8 + 2, "GET SET", 1, yellow);
+      fillRect(MX + 76, MY + 16 * 8 - 1, 66, 11, black);
+      drawText(MX + 78, MY + 16 * 8, "GET SET", 1, yellow);
    }
    if (phase == 4)
    {
-      fillRect(MX + 66, MY + 15 * 8 - 1, 84, 18, black);
-      drawText(MX + 72, MY + 15 * 8 + 3, "GAME OVER", 2, red);
+      fillRect(MX + 64, MY + 15 * 8 - 1, 88, 18, black);
+      drawText(MX + 68, MY + 15 * 8 + 4, "GAME OVER", 1, red);
    }
 }
 

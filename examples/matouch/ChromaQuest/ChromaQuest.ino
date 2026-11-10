@@ -236,11 +236,12 @@ char chromaQuest[] = R"EOF(
 
 int sinT[64] = {0, 6, 12, 19, 24, 30, 36, 41, 45, 49, 53, 56, 59, 61, 63, 64, 64, 64, 63, 61, 59, 56, 53, 49, 45, 41, 36, 30, 24, 19, 12, 6, 0, -6, -12, -19, -24, -30, -36, -41, -45, -49, -53, -56, -59, -61, -63, -64, -64, -64, -63, -61, -59, -56, -53, -49, -45, -41, -36, -30, -24, -19, -12, -6};
 
-// 3x5 pixel font, 0-9 then A-Z
-int font[36] = {31599, 11415, 29671, 29647, 23497, 31183, 31215, 29330, 31727, 31695,
-                11245, 27566, 14627, 27502, 31143, 31140, 14699, 23533, 29847, 4714,
-                23861, 18727, 24557, 27501, 11114, 27556, 11123, 27565, 14478, 29842,
-                23407, 23402, 23549, 23213, 23186, 29351};
+// an 8x8 font of its own, bold and rounded: 0-9 then A-Z, 8 rows a
+// character, the leftmost pixel in the highest bit
+uint8_t font8[288] = {126, 199, 207, 219, 243, 227, 126, 0, 24, 56, 120, 24, 24, 24, 126, 0, 126, 195, 6, 28, 112, 192, 255, 0, 126, 195, 3, 62, 3, 195, 126, 0, 14, 30, 54, 102, 255, 6, 6, 0, 255, 192, 254, 3, 3, 195, 126, 0, 62, 96, 192, 254, 195, 195, 126, 0, 255, 195, 6, 12, 24, 24, 24, 0, 126, 195, 195, 126, 195, 195, 126, 0, 126, 195, 195, 127, 3, 6, 124, 0, 60, 102, 195, 195, 255, 195, 195, 0, 254, 195, 195, 254, 195, 195, 254, 0, 126, 195, 192, 192, 192, 195, 126, 0, 252, 198, 195, 195, 195, 198, 252, 0, 255, 192, 192, 252, 192, 192, 255, 0, 255, 192, 192, 252, 192, 192, 192, 0, 126, 195, 192, 207, 195, 195, 126, 0, 195, 195, 195, 255, 195, 195, 195, 0, 126, 24, 24, 24, 24, 24, 126, 0, 63, 6, 6, 6, 198, 198, 124, 0, 198, 204, 216, 240, 216, 204, 198, 0, 192, 192, 192, 192, 192, 192, 255, 0, 195, 231, 255, 219, 195, 195, 195, 0, 195, 227, 243, 219, 207, 199, 195, 0, 126, 195, 195, 195, 195, 195, 126, 0, 254, 195, 195, 254, 192, 192, 192, 0, 126, 195, 195, 195, 203, 198, 123, 0, 254, 195, 195, 254, 204, 198, 195, 0, 126, 195, 192, 126, 3, 195, 126, 0, 255, 24, 24, 24, 24, 24, 24, 0, 195, 195, 195, 195, 195, 195, 126, 0, 195, 195, 195, 195, 102, 60, 24, 0, 195, 195, 195, 219, 255, 231, 195, 0, 195, 102, 60, 24, 60, 102, 195, 0, 195, 195, 102, 60, 24, 24, 24, 0, 255, 6, 12, 24, 48, 96, 255, 0};
+// its colours, a row each: chrome, gold, fire, ice
+uint16_t textGrad[32];
+uint16_t textShadow;
 
 uint16_t greyLut[256];     // brightness -> a grey, as the frame buffer wants it
 
@@ -343,6 +344,19 @@ void makeColors()
    channelDim[0] = pack(90, 30, 35);
    channelDim[1] = pack(25, 80, 35);
    channelDim[2] = pack(30, 45, 100);
+   // chrome: white, steel blue, a dark band, then bright again
+   textShadow = pack(10, 8, 20);
+   for (int r = 0; r < 8; r++)
+   {
+      textGrad[r] = pack(255 - r * 20, 255 - r * 12, 255);
+      textGrad[8 + r] = pack(255, 250 - r * 18, 120 - r * 14);
+      textGrad[16 + r] = pack(255, 60 + r * 24, 40);
+      textGrad[24 + r] = pack(150 + r * 10, 230, 255);
+   }
+   textGrad[3] = pack(90, 100, 170);
+   textGrad[4] = pack(200, 160, 255);
+   textGrad[11] = pack(150, 80, 20);
+   textGrad[12] = pack(255, 200, 80);
 }
 
 void fillRect(int x, int y, int w, int h, uint16_t c)
@@ -413,33 +427,46 @@ void drawTinted(int base, int w, int h, int x, int y, uint16_t tint)
    }
 }
 
-void drawGlyph(int x, int y, int g, int sc, uint16_t c)
+// a character of font8 at (x, y), sc pixels a dot: a dark shadow down and
+// to the right, then each row in its colour of the style's gradient
+void drawGlyph(int x, int y, int g, int sc, int style)
 {
-   int bits = font[g];
-   for (int r = 0; r < 5; r++)
-      for (int b = 0; b < 3; b++)
-         if ((bits >> ((4 - r) * 3 + 2 - b)) & 1)
-            fillRect(x + b * sc, y + r * sc, sc, sc, c);
+   for (int pass = 0; pass < 2; pass++)
+   {
+      int off = sc;
+      if (pass == 1)
+         off = 0;
+      for (int r = 0; r < 8; r++)
+      {
+         int bits = font8[g * 8 + r];
+         uint16_t c = textShadow;
+         if (pass == 1)
+            c = textGrad[style * 8 + r];
+         for (int b = 0; b < 8; b++)
+            if ((bits >> (7 - b)) & 1)
+               fillRect(x + b * sc + off, y + r * sc + off, sc, sc, c);
+      }
+   }
 }
 
-// capitals, digits and spaces
-void drawText(int x, int y, char *s, int sc, uint16_t c)
+// capitals, digits and spaces, 9 dots apart
+void drawText(int x, int y, char *s, int sc, int style)
 {
    int i = 0;
    while (s[i] != 0)
    {
       int ch = s[i];
       if (ch >= 48 && ch <= 57)
-         drawGlyph(x, y, ch - 48, sc, c);
+         drawGlyph(x, y, ch - 48, sc, style);
       if (ch >= 65 && ch <= 90)
-         drawGlyph(x, y, ch - 55, sc, c);
-      x = x + 4 * sc;
+         drawGlyph(x, y, ch - 55, sc, style);
+      x = x + 9 * sc;
       i++;
    }
 }
 
 int digits[8];
-void drawNumber(int x, int y, int v, int sc, uint16_t c)
+void drawNumber(int x, int y, int v, int sc, int style)
 {
    int n = 0;
    while (v > 0 || n == 0)
@@ -450,8 +477,8 @@ void drawNumber(int x, int y, int v, int sc, uint16_t c)
    }
    for (int k = n - 1; k >= 0; k--)
    {
-      drawGlyph(x, y, digits[k], sc, c);
-      x = x + 4 * sc;
+      drawGlyph(x, y, digits[k], sc, style);
+      x = x + 9 * sc;
    }
 }
 
@@ -1083,9 +1110,9 @@ void drawThings()
 void drawHud()
 {
    fillRect(0, 0, SW, 13, dark);
-   drawNumber(4, 3, score, 2, white);
-   drawText(84, 3, "HI", 2, grey);
-   drawNumber(104, 3, high, 2, yellow);
+   drawNumber(4, 2, score, 1, 0);
+   drawText(72, 2, "HI", 1, 1);
+   drawNumber(92, 2, high, 1, 1);
    // the three gauges: a block per drop needed
    for (int c = 0; c < 3; c++)
    {
@@ -1101,31 +1128,35 @@ void drawHud()
    }
    for (int i = 0; i < lives - 1 && i < 4; i++)
    {
-      fillRect(338 + i * 14, 3, 8, 8, yellow);
-      fillRect(339 + i * 14, 2, 6, 10, yellow);
-      fillRect(340 + i * 14, 4, 3, 3, white);
+      fillRect(334 + i * 12, 3, 8, 8, yellow);
+      fillRect(335 + i * 12, 2, 6, 10, yellow);
+      fillRect(336 + i * 12, 4, 3, 3, white);
    }
-   drawNumber(392, 3, level, 2, white);
+   drawNumber(386, 2, level, 1, 3);
    if (phase == 0)
    {
       int kind = (level - 1) % 3;
       if (kind == 0)
-         drawText(140, 80, "THE MOON", 4, white);
+         drawText(56, 70, "THE MOON", 4, 0);
       if (kind == 1)
-         drawText(168, 80, "MARS", 4, white);
+         drawText(128, 70, "MARS", 4, 2);
       if (kind == 2)
-         drawText(144, 80, "SATURN", 4, white);
-      drawText(76, 112, "BRING BACK THE COLOURS", 2, yellow);
+         drawText(92, 70, "SATURN", 4, 1);
+      drawText(101, 120, "BRING BACK THE COLOURS", 1, 3);
    }
    if (phase == 3)
    {
-      drawText(100, 96, "WORLD RESTORED", 3, white);
-      drawNumber(180, 124, 2000 * level, 2, yellow);
+      drawText(11, 86, "WORLD RESTORED", 3, 0);
+      int bonus = 2000 * level;
+      int w = 18;
+      if (bonus >= 10000)
+         w = 22;
+      drawNumber(200 - w * 2, 124, bonus, 2, 1);
    }
    if (phase == 4)
-      drawText(128, 104, "GAME OVER", 4, channel[0]);
+      drawText(78, 104, "GAME OVER", 3, 2);
    if (demo && phase != 0 && (frame / 20) % 2 == 0)
-      drawText(156, 224, "PRESS SPACE", 2, white);
+      drawText(150, 226, "PRESS SPACE", 1, 0);
 }
 
 int main()

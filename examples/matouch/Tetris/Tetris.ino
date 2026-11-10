@@ -128,11 +128,13 @@ uint8_t shapes[7, 4, 4] = {
    0, 0, 0, 0, 0, 0, 7, 0, 7, 7, 7, 0, 0, 0, 0, 0};
 // the hue of each piece (FastLED's rainbow): cyan, yellow, purple, green, red, blue, orange
 uint8_t hues[7] = {136, 64, 196, 96, 0, 160, 30};
-// 3x5 pixel font, 0-9 then A-Z: 5 rows of 3 bits, the top row first
-int font[36] = {31599, 11415, 29671, 29647, 23497, 31183, 31215, 29330, 31727, 31695,
-                11245, 27566, 14627, 27502, 31143, 31140, 14699, 23533, 29847, 4714,
-                23861, 18727, 24557, 27501, 11114, 27556, 11123, 27565, 14478, 29842,
-                23407, 23402, 23549, 23213, 23186, 29351};
+// an 8x8 font, bold and rounded: 0-9, A-Z, then . : / and +; 8 rows a
+// character, the leftmost pixel in the highest bit (ChromaQuest/tools/font8.py)
+uint8_t font8[320] = {126, 199, 207, 219, 243, 227, 126, 0, 24, 56, 120, 24, 24, 24, 126, 0, 126, 195, 6, 28, 112, 192, 255, 0, 126, 195, 3, 62, 3, 195, 126, 0, 14, 30, 54, 102, 255, 6, 6, 0, 255, 192, 254, 3, 3, 195, 126, 0, 62, 96, 192, 254, 195, 195, 126, 0, 255, 195, 6, 12, 24, 24, 24, 0, 126, 195, 195, 126, 195, 195, 126, 0, 126, 195, 195, 127, 3, 6, 124, 0, 60, 102, 195, 195, 255, 195, 195, 0, 254, 195, 195, 254, 195, 195, 254, 0, 126, 195, 192, 192, 192, 195, 126, 0, 252, 198, 195, 195, 195, 198, 252, 0, 255, 192, 192, 252, 192, 192, 255, 0, 255, 192, 192, 252, 192, 192, 192, 0, 126, 195, 192, 207, 195, 195, 126, 0, 195, 195, 195, 255, 195, 195, 195, 0, 126, 24, 24, 24, 24, 24, 126, 0, 63, 6, 6, 6, 198, 198, 124, 0, 198, 204, 216, 240, 216, 204, 198, 0, 192, 192, 192, 192, 192, 192, 255, 0, 195, 231, 255, 219, 195, 195, 195, 0, 195, 227, 243, 219, 207, 199, 195, 0, 126, 195, 195, 195, 195, 195, 126, 0, 254, 195, 195, 254, 192, 192, 192, 0, 126, 195, 195, 195, 203, 198, 123, 0, 254, 195, 195, 254, 204, 198, 195, 0, 126, 195, 192, 126, 3, 195, 126, 0, 255, 24, 24, 24, 24, 24, 24, 0, 195, 195, 195, 195, 195, 195, 126, 0, 195, 195, 195, 195, 102, 60, 24, 0, 195, 195, 195, 219, 255, 231, 195, 0, 195, 102, 60, 24, 60, 102, 195, 0, 195, 195, 102, 60, 24, 24, 24, 0, 255, 6, 12, 24, 48, 96, 255, 0, 0, 0, 0, 0, 0, 192, 192, 0, 0, 192, 192, 0, 0, 192, 192, 0, 3, 6, 12, 24, 48, 96, 192, 0, 0, 24, 24, 126, 24, 24, 0, 0};
+// how each row shades the text's colour, in sixteenths: scaled by rowMul,
+// then lifted toward white by rowLift; a dark band, then a bright edge
+int rowMul[8] = {16, 16, 16, 7, 16, 15, 12, 9};
+int rowLift[8] = {10, 6, 2, 0, 5, 0, 0, 0};
 
 uint8_t cur[16];          // the falling piece
 uint8_t saved[16];
@@ -228,13 +230,50 @@ void drawGhost(int px, int py, int p)
    }
 }
 
+// a character at (x, y), sc pixels a dot: a dark shadow down and to the
+// right, then each row in its shade of c; a run of dots is one rectangle
 void drawGlyph(int x, int y, int g, int sc, uint16_t c)
 {
-   int bits = font[g];
-   for (int r = 0; r < 5; r++)
-      for (int b = 0; b < 3; b++)
-         if ((bits >> ((4 - r) * 3 + 2 - b)) & 1)
-            fillRect(x + b * sc, y + r * sc, sc, sc, c);
+   int v = ((c & 255) << 8) | (c >> 8);
+   int cr = (v >> 11) & 31;
+   int cg = (v >> 5) & 63;
+   int cb = v & 31;
+   for (int pass = 0; pass < 2; pass++)
+   {
+      int off = sc;
+      if (pass == 1)
+         off = 0;
+      for (int r = 0; r < 8; r++)
+      {
+         int bits = font8[g * 8 + r];
+         uint16_t rc = 16904;       // the shadow: a dark blue
+         if (pass == 1)
+         {
+            int rr = (cr * rowMul[r]) >> 4;
+            int rg = (cg * rowMul[r]) >> 4;
+            int rb = (cb * rowMul[r]) >> 4;
+            rr = rr + (((31 - rr) * rowLift[r]) >> 4);
+            rg = rg + (((63 - rg) * rowLift[r]) >> 4);
+            rb = rb + (((31 - rb) * rowLift[r]) >> 4);
+            int w = (rr << 11) | (rg << 5) | rb;
+            rc = ((w & 255) << 8) | (w >> 8);
+         }
+         int b = 0;
+         while (b < 8)
+         {
+            if (((bits >> (7 - b)) & 1) == 1)
+            {
+               int e = b + 1;
+               while (e < 8 && ((bits >> (7 - e)) & 1) == 1)
+                  e++;
+               fillRect(x + b * sc + off, y + r * sc + off, (e - b) * sc, sc, rc);
+               b = e;
+            }
+            else
+               b++;
+         }
+      }
+   }
 }
 
 // capitals, digits and spaces
@@ -248,7 +287,7 @@ void drawText(int x, int y, char *s, int sc, uint16_t c)
          drawGlyph(x, y, ch - 48, sc, c);
       if (ch >= 65 && ch <= 90)
          drawGlyph(x, y, ch - 55, sc, c);
-      x = x + 4 * sc;
+      x = x + 9 * sc;
       i++;
    }
 }
@@ -267,7 +306,7 @@ void drawNumber(int x, int y, int v, int sc, uint16_t c)
    for (int k = n - 1; k >= 0; k--)
    {
       drawGlyph(x, y, digits[k], sc, c);
-      x = x + 4 * sc;
+      x = x + 9 * sc;
    }
 }
 
@@ -489,21 +528,21 @@ void drawScene()
          letter = 18;
       if (i == 5)
          letter = 28;
-      drawGlyph(20 + i * 18, 22, letter, 4, pal[(i + 1) * 8 + 1]);
+      drawGlyph(20 + i * 18, 24, letter, 2, pal[(i + 1) * 8 + 1]);
    }
-   drawText(22, 150, "Q LEFT", 2, grey);
-   drawText(22, 166, "D RIGHT", 2, grey);
-   drawText(22, 182, "Z TURN", 2, grey);
-   drawText(22, 198, "S DOWN", 2, grey);
-   drawText(22, 214, "SPACE DROP", 2, grey);
+   drawText(22, 150, "Q LEFT", 1, grey);
+   drawText(22, 166, "D RIGHT", 1, grey);
+   drawText(22, 182, "Z TURN", 1, grey);
+   drawText(22, 198, "S DOWN", 1, grey);
+   drawText(22, 214, "SPACE DROP", 1, grey);
    // the panel
-   drawText(PANEL, 14, "SCORE", 2, grey);
-   drawNumber(PANEL, 30, score, 3, white);
-   drawText(PANEL, 62, "LINES", 2, grey);
-   drawNumber(PANEL, 78, lines, 3, white);
-   drawText(PANEL, 110, "LEVEL", 2, grey);
-   drawNumber(PANEL, 126, level, 3, white);
-   drawText(PANEL, 158, "NEXT", 2, grey);
+   drawText(PANEL, 14, "SCORE", 1, grey);
+   drawNumber(PANEL, 28, score, 2, white);
+   drawText(PANEL, 62, "LINES", 1, grey);
+   drawNumber(PANEL, 76, lines, 2, white);
+   drawText(PANEL, 110, "LEVEL", 1, grey);
+   drawNumber(PANEL, 124, level, 2, white);
+   drawText(PANEL, 158, "NEXT", 1, grey);
    for (int y = 0; y < 4; y++)
       for (int x = 0; x < 4; x++)
          if (shapes[nextP * 16 + y * 4 + x] != 0)
@@ -512,9 +551,9 @@ void drawScene()
    {
       fillRect(BX + 2, BY + 74, BW * CELL - 4, 86, frameLight);
       fillRect(BX + 4, BY + 76, BW * CELL - 8, 82, frameDark);
-      drawText(BX + 25, BY + 84, "GAME", 4, white);
-      drawText(BX + 25, BY + 108, "OVER", 4, white);
-      drawText(BX + 28, BY + 138, "Z AGAIN", 2, white);
+      drawText(BX + 19, BY + 86, "GAME", 2, white);
+      drawText(BX + 19, BY + 110, "OVER", 2, white);
+      drawText(BX + 23, BY + 138, "Z AGAIN", 1, white);
    }
 }
 
