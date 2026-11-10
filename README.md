@@ -22,7 +22,7 @@ A while back I got tired of loading code onto the esp32 through an IDE every tim
 
 It worked, people used it and [StarLight](https://github.com/MoonModules/StarLight) picked it up. But I wrote v1 the way most first compilers are written: fast, by hand, no grammar, and with no real way to check that a fix hadn't broken something else. Every fix was "works on my board".
 
-**So I rewrote it.** This is v2: same idea, same language, written from scratch. This time the compiler can be checked, not just trusted:
+**So I rewrote it.** This is v2: same idea, same language, written from scratch. The first version, v1, is still there: [hpwit/asmparser](https://github.com/hpwit/asmparser). I started the rewrite by hand, without any help from AI: [this commit](https://github.com/hpwit/new-parser/tree/162cedb50e240d6bd2b18e7f1c54c5674d9dde89) (May 2025) is the last version written that way. Then I used AI to complete the work: finishing the compiler, the tests, the examples and this documentation. This time the compiler can be checked, not just trusted:
 - the whole compiler (tokenizer, parser, assembler, loader) also runs as a normal program on my laptop, no esp32 needed (`test/host/`);
 - the compiled machine code runs for real on Espressif's QEMU esp32 emulator and the results are checked (`test/qemu/`);
 - random programs are run both through the compiler and as plain C, and the results compared (`test/fuzz/`);
@@ -2060,7 +2060,7 @@ This is the part that is really new compared to v1:
 
 The examples in [examples/matouch](examples/matouch) are for the **ESP32-S3-Touch-LCD-7**, a 7-inch **800x480** RGB touch screen with an ESP32-S3 (16MB flash, 8MB PSRAM). Each script draws straight into the screen's frame buffer, bound as `led16` (a `uint16_t *`, see [Binding an array or a pointer](#binding-an-array-or-a-pointer)), and calls `show16()` for each frame.
 
-**Why these examples.** They are made to show what the compiler can do at a larger scale than an LED effect: whole programs of 400 to 1250 lines, with many functions, arrays of two and three dimensions, game state, `float` 3D projection, integer fixed point, strings, pixel art read from flash, keyboard input and timing, all compiled on the ESP32-S3 itself into native Xtensa code and run at full speed. Their game logic was checked against the same code compiled by gcc, step by step, and doing so found and fixed several compiler bugs on the way (binary `&`, negative values in initializers, `==` between unsigned values, `%` in a float expression).
+**Why these examples.** The games were written by AI, not really to be played but to show what the compiler can do at a larger scale than an LED effect: whole programs of 400 to 1250 lines, with many functions, arrays of two and three dimensions, game state, `float` 3D projection, integer fixed point, strings, pixel art read from flash, keyboard input and timing, all compiled on the ESP32-S3 itself into native Xtensa code and run at full speed. Their game logic was checked against the same code compiled by gcc, step by step, and doing so found and fixed several compiler bugs on the way (binary `&`, negative values in initializers, `==` between unsigned values, `%` in a float expression).
 
 **Compile once, replay at will.** Compiling such a script on the board takes time. Measured on the ESP32-S3 at 240 MHz:
 
