@@ -148,6 +148,8 @@ struct ExecuteAsTaskParams
 {
     ScriptExecutable *self;
     const char *name;
+    int nargs;        // parameters for `name`, 0 = none
+    int32_t args[6];  // ints, or floats as their bit pattern (a10..a15)
 };
 } // namespace
 
@@ -156,8 +158,14 @@ void ScriptExecutable::taskMain(void *param)
     ExecuteAsTaskParams *p = (ExecuteAsTaskParams *)param;
     ScriptExecutable *self = p->self;
     const char *name = p->name;
+    int32_t args[6];
+    const int nargs = p->nargs;
+    memcpy(args, p->args, sizeof(args));
     delete p;
-    self->execute(name);
+    if (nargs > 0)
+        self->execute(name, args, nargs);
+    else
+        self->execute(name);
 
     // Returned on its own. Record it, then wait to be deleted by kill(),
     // the next executeAsTask() or the destructor (see taskHandle). If
@@ -172,10 +180,41 @@ void ScriptExecutable::taskMain(void *param)
 bool ScriptExecutable::executeAsTask(const char *name, uint32_t stackSize, UBaseType_t priority, BaseType_t core,
                                      const char *taskName)
 {
+    return executeAsTask(name, (const int32_t *)NULL, 0, stackSize, priority, core, taskName);
+}
+
+bool ScriptExecutable::executeAsTask(const char *name, Arguments *args, uint32_t stackSize,
+                                     UBaseType_t priority, BaseType_t core, const char *taskName)
+{
+    // Same conversion as callFunction(): a float travels in an integer
+    // register as its raw bits.
+    int32_t raw[6];
+    int n = args != NULL ? args->size() : 0;
+    if (n > 6)
+        n = 6;
+    for (int i = 0; i < n; i++)
+    {
+        _arguments a = args->_args.get(i);
+        if (a.vartype == __float__)
+            memcpy(&raw[i], &a.floatval, sizeof(int32_t));
+        else
+            raw[i] = a.intval;
+    }
+    return executeAsTask(name, raw, n, stackSize, priority, core, taskName);
+}
+
+bool ScriptExecutable::executeAsTask(const char *name, const int32_t *args, int nargs, uint32_t stackSize,
+                                     UBaseType_t priority, BaseType_t core, const char *taskName)
+{
     kill(); // a previous task of this script, running, paused or finished
     ScriptState before = taskState;
 
-    ExecuteAsTaskParams *params = new ExecuteAsTaskParams{this, name};
+    ExecuteAsTaskParams *params = new ExecuteAsTaskParams{this, name, 0, {0}};
+    if (args != NULL && nargs > 0)
+    {
+        params->nargs = nargs > 6 ? 6 : nargs;
+        memcpy(params->args, args, sizeof(int32_t) * (size_t)params->nargs);
+    }
     // Set before the task can run: xTaskCreatePinnedToCore() stores the
     // handle before the task is made ready.
     taskState = ScriptState::running;

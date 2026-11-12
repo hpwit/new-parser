@@ -113,6 +113,7 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
   * [Assembly functions: `__ASM__`](#assembly-functions-__asm__)
 
 - [Running scripts in the background](#running-scripts-in-the-background)
+  * [Parameters for a task](#parameters-for-a-task)
   * [The script scheduler](#the-script-scheduler)
 
 - [Performance](#performance)
@@ -1768,6 +1769,70 @@ Then, on that task:
 
 A control that doesn't apply (pausing a paused script...) does nothing and returns `false`. Calling `executeAsTask()` again kills the previous task first, and `free()` or the end of the `ScriptExecutable` kills it too. See [ExecuteAsTask](examples/ExecuteAsTask).
 
+## Parameters for a task
+
+A function run as a task can take parameters, exactly like one called with `execute(name, &args)`: give `executeAsTask()` an `Arguments` list (or a raw `int32_t[]`) before the stack size.
+
+```cpp
+bool executeAsTask(const char *name, Arguments *args,
+                   uint32_t stackSize = 8192, UBaseType_t priority = 1,
+                   BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
+
+bool executeAsTask(const char *name, const int32_t *args, int nargs,
+                   uint32_t stackSize = 8192, UBaseType_t priority = 1,
+                   BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
+```
+
+```c
+// in the script
+void countTask(int times, float pause)
+{
+   int ms = pause * 1000;
+   for (int i = 1; i <= times; i++)
+   {
+      printfln("count %d / %d", i, times);
+      delay(ms);
+   }
+}
+```
+
+```cpp
+// in the sketch
+Arguments args;
+args.add(5);       // times
+args.add(0.5f);    // pause, a float
+exec.executeAsTask("countTask", &args);   // returns at once, countTask(5, 0.5) runs on its task
+```
+
+The rest of the call (`stackSize`, `priority`, `core`, `taskName`) and the controls (`pause()`, `restart()`, `kill()`, `state()`) are the same as without parameters.
+
+**What a parameter can be**
+
+|You pass|The script declares|How it travels|
+|:----|:----|:----|
+|`args.add(40)` (an `int`)|`int`, `uint32_t`, `uint16_t`, `uint8_t`, `bool`, any 32-bit-or-smaller integer type|as a 32-bit integer; a smaller type uses its low bits|
+|`args.add(1.5f)` (a `float`)|`float`|as the float's 32 bits, read back as a float|
+
+- **6 at most.** Parameters travel in the six registers `a10` to `a15` of the Xtensa calling convention; a 7th and the ones after it are dropped.
+- **No strings, structures or arrays as parameters.** Share them with `bindVariable()` / `bindStruct()` (see [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions) and [Structures](#structures)), or pass an `int` that selects which one.
+- **`ffloat`**: pass a `float` parameter and convert it in the script, or the raw fixed-point value as an `int`.
+- **More values than parameters** is harmless: the function ignores the extra ones. That is why a sketch can always pass its settings, whatever `main()` declares.
+- **Fewer values than parameters** is not checked: the missing ones hold whatever was in the register. Give every parameter a value.
+
+**Lifetime.** The values are copied before `executeAsTask()` returns, so `args` can be a local variable that is gone when the task starts. `name` and `taskName` must still stay valid while the task runs (string literals are fine).
+
+**The raw form** takes the values as `int32_t`: an `int` as it is, a `float` as its bit pattern (`memcpy()` it into an `int32_t`). It is what a program uses when it gets the values as text, a command line say, and has already worked out their types.
+
+```cpp
+int32_t raw[2];
+raw[0] = 40;
+float speed = 1.5f;
+memcpy(&raw[1], &speed, sizeof(raw[1]));
+exec.executeAsTask("main", raw, 2);       // main(int n, float speed)
+```
+
+See [TaskParameters](examples/TaskParameters) (commands typed in the Serial Monitor start `fibTask(35)` or `countTask(5, 0.5)`) and [matouch/BouncingBalls](examples/matouch/BouncingBalls) (the number of balls is `main(int n)`'s parameter; typing a number restarts the script with that many balls).
+
 > [!WARNING]
 > You can't choose where the task is stopped. It can be inside a host function the script called, holding `Serial`, a lock or a mutex of yours. If that matters, give the script a host function to call in its loop that checks a flag and returns at a point you choose.
 
@@ -2045,6 +2110,7 @@ This is the part that is really new compared to v1:
 | `MandelbrotFixedPoint` | The Mandelbrot set with integers only, fixed point done by hand. |
 | `SchedulerDemo` | Three scripts on their own tasks, managed by name with `scriptScheduler`: list with CPU %, pause, restart, kill, remove. esp32 only. |
 | `ExecuteAsTask` | `main()` on its own FreeRTOS task, with `pause()`/`restart()`/`kill()`/`state()`. esp32 only. |
+| `TaskParameters` | Script functions run as tasks with parameters (`executeAsTask(name, &args)`): `fib 35` or `count 5 0.5` typed in the Serial Monitor starts `fibTask(35)` or `countTask(5, 0.5)`, ints and floats. esp32 only. |
 | `PinInterrupt` | A GPIO interrupt calling back into the running script. esp32 only. |
 | `DirectGPIO` | Driving pins from a script through the GPIO and IO_MUX registers; esp32 and esp32-S3. |
 | `RainbowCompare` | A scrolling rainbow drawn by a script and natively, 100 frames timed, with a hash showing they are identical (see [Performance](#calling-a-host-function-per-pixel-rainbow)). |
@@ -2077,7 +2143,7 @@ A game doesn't have to be compiled every time it starts. `parseScriptToBinary()`
 | Example | What it shows |
 | --- | --- |
 | `matouch/RainbowScript` | A scrolling rainbow over the whole 800x480 screen. |
-| `matouch/BouncingBalls` | Bouncing balls, each erased and redrawn per frame, the display and the script on separate cores. |
+| `matouch/BouncingBalls` | Bouncing balls, each erased and redrawn per frame, the display and the script on separate cores. The number of balls is `main(int n)`'s parameter: type a number (1 to 100) in the Serial Monitor to restart with that many. |
 | `matouch/GameOfLife` | Conway's Game of Life on 800x480 cells, or bigger cells with `setPixelsize()`. |
 | `matouch/Mandelbrot` | A Mandelbrot zoom in `float` on the full 800x480 (`setPixelsize(1)` in the script; 2, 3 or 4 for bigger cells and faster frames), starting over after 300 frames. |
 | `matouch/Tetris` | Tetris at 400x240 (`setPixelsize(2)`) played with a USB keyboard (Q left, D right, Z rotate, S down, Space drop): a colour per tetromino drawn as bevelled blocks, a ghost of the landing place, score, lines, level and next piece in an 8x8 font with a shaded gradient and a drop shadow, drawn by the script. Needs the ESP32_USB_Host_HID library as in [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script). |
@@ -2423,6 +2489,20 @@ bool executeAsTask(const char *name, uint32_t stackSize = 8192, UBaseType_t prio
 | `core` | `0`, `1`, or `tskNO_AFFINITY` (default) to let FreeRTOS choose. |
 | `taskName` | The name FreeRTOS shows; `NULL` uses `name`. |
 | **Returns** | `true` once the task is created, `false` if FreeRTOS couldn't create it (not enough memory). A task this script already had is killed first. |
+
+With parameters for `name` (see [Parameters for a task](#parameters-for-a-task)):
+
+```cpp
+bool executeAsTask(const char *name, Arguments *args, uint32_t stackSize = 8192, UBaseType_t priority = 1,
+                   BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
+bool executeAsTask(const char *name, const int32_t *args, int nargs, uint32_t stackSize = 8192,
+                   UBaseType_t priority = 1, BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
+```
+
+| | |
+|---|---|
+| `args` | `Arguments` (ints and floats, typed by `add()`), or a raw `int32_t[]` (ints, floats as their bit pattern). Copied before the call returns. |
+| `nargs` | Raw form: how many values. 6 at most, more are dropped. |
 
 | Method | Returns | What it does |
 |---|---|---|

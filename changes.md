@@ -4,6 +4,21 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 🎛️ Parameters for a script run as a task
+
+```c
+void countTask(int times, float pause) { ... }
+```
+
+```cpp
+Arguments args;
+args.add(5);
+args.add(0.5f);
+exec.executeAsTask("countTask", &args);
+```
+
+`executeAsTask()` can now give the function its parameters, as `execute(name, &args)` does: an `Arguments` list (ints and floats keep their type) or a raw `int32_t[]`. Up to 6 values, copied before the call returns; the existing `executeAsTask(name, ...)` is unchanged. [TaskParameters](examples/TaskParameters) starts functions from commands typed in the Serial Monitor, and [matouch/BouncingBalls](examples/matouch/BouncingBalls) takes the number of balls as `main(int n)`'s parameter. → [Parameters for a task](README.md#parameters-for-a-task)
+
 ### 📄 Variables filled from JSON, as in v1
 
 ```c

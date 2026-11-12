@@ -203,6 +203,26 @@ public:
     bool executeAsTask(const char *name, uint32_t stackSize = 8192, UBaseType_t priority = 1,
                         BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
 
+    // Same, passing parameters to `name`, as execute(name, args) does:
+    //   Arguments args;
+    //   args.add(40);                       // int main(int n, float speed)
+    //   args.add(1.5f);
+    //   exec.executeAsTask("main", &args);
+    // Parameters are int (any 32-bit integer type in the script: int,
+    // uint32_t, uint8_t, bool...) or float, 6 at most (they travel in the
+    // registers a10..a15; more are dropped). They are copied before this
+    // returns, so `args` can be a local variable. A function with fewer
+    // parameters ignores the extra values; one with more sees garbage in
+    // the missing ones. See "Parameters for a task" in the README.
+    bool executeAsTask(const char *name, Arguments *args, uint32_t stackSize = 8192,
+                       UBaseType_t priority = 1, BaseType_t core = tskNO_AFFINITY,
+                       const char *taskName = NULL);
+    // The raw form, as execute(name, args, nargs): ints as they are, floats
+    // as their bit pattern (memcpy a float into an int32_t).
+    bool executeAsTask(const char *name, const int32_t *args, int nargs, uint32_t stackSize = 8192,
+                       UBaseType_t priority = 1, BaseType_t core = tskNO_AFFINITY,
+                       const char *taskName = NULL);
+
     // Control of the task executeAsTask() started -- v1's suspend(),
     // restart() and kill(). Each returns false, doing nothing, when the
     // task is not in a state it applies to.

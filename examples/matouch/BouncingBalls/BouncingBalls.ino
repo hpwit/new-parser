@@ -5,6 +5,10 @@
 // _frame_buffer, pixel_size, offset) and FastLED (CHSV). Matouch7.h is the panel
 // configuration (Waveshare ESP32-S3-Touch-LCD 800x480 pinout).
 //
+// The number of balls is a parameter of the script's main(int n), passed with
+// executeAsTask("main", &args, ...): NB_BALLS below at start, then type a
+// number (1 to 100) in the Serial Monitor to restart with that many balls.
+//
 // For the ESP32-S3-Touch-LCD-7: a 7-inch 800x480 RGB touch screen with an
 // ESP32-S3 (16MB flash, 8MB OPI PSRAM).
 // Board: ESP32S3 Dev Module, PSRAM "OPI PSRAM", Flash Size 16MB.
@@ -42,7 +46,7 @@ void show16() {
 }
 
 char script[] = R"EOF(
-#define max_nb_balls 20
+#define max_nb_balls 100
 #define rmax 30
 #define rmin 12
 #define W 800
@@ -129,9 +133,14 @@ struct ball
 
 ball Balls[max_nb_balls];
 
-void main()
+// n: the number of balls, a parameter given by the sketch (executeAsTask)
+void main(int n)
 {
-   int num = max_nb_balls;
+   int num = n;
+   if (num < 1)
+      num = 1;
+   if (num > max_nb_balls)
+      num = max_nb_balls;
    printfln("number of balls:%d", num);
    while (true)
    {
@@ -153,10 +162,20 @@ static void lcdInitTask(void *done) {
   vTaskDelete(NULL);
 }
 
-// the script runs on core 1, away from the display interrupts
-static void scriptTask(void *exec) {
-  ((ScriptExecutable *)exec)->execute("main");
-  vTaskDelete(NULL);
+#define NB_BALLS 50  // the number of balls at start (1 to 100)
+
+static ScriptExecutable *g_exec = NULL;
+
+// Runs main(balls) on its own task, on core 1, away from the display
+// interrupts. executeAsTask() kills a previous task of this script first;
+// here that task is almost always waiting in show16() for the next frame,
+// which is a safe place to delete it. The Arguments are copied before
+// executeAsTask() returns, so a local variable is fine.
+static void startBalls(int balls) {
+  Arguments args;
+  args.add(balls);  // main(int n): n = balls
+  if (!g_exec->executeAsTask("main", &args, 8192, 1, 1, "balls"))
+    printf("could not start the script task\n");
 }
 
 void setup() {
@@ -176,12 +195,24 @@ void setup() {
   static ScriptExecutable exec = parseScript(script);
   if (exec.isExeExists()) {
     printf("bouncing balls: %u bytes of code\n", (unsigned)exec.exe.binary_size);
-    xTaskCreatePinnedToCore(scriptTask, "script", 8192, &exec, 1, NULL, 1);
+    g_exec = &exec;
+    startBalls(NB_BALLS);
+    printf("type a number of balls (1 to 100) and Enter\n");
   } else {
     showCompileError();
   }
 }
 
 void loop() {
-  delay(1000);
+  // a number typed in the Serial Monitor restarts the script with that many balls
+  if (g_exec != NULL && Serial.available()) {
+    int balls = Serial.parseInt();
+    while (Serial.available())
+      Serial.read();
+    if (balls >= 1 && balls <= 100) {
+      printf("restarting with %d balls\n", balls);
+      startBalls(balls);
+    }
+  }
+  delay(50);
 }
