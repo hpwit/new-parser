@@ -336,6 +336,22 @@ const CompileError &lastCompileError();
 //      showCompileError();
 void showCompileError();
 
+// Why the last createExecutableFromBuffer() (or the load step of
+// parseScript()) failed, for a sketch that wants to show it its own way;
+// "" when it worked. The same text is printed on the console:
+//
+//   missing binding: led16, show16()
+//      the binary uses names this sketch has not bound with bindVariable()
+//      / bindFunction(), every one of them listed (functions with "()")
+//   not a valid binary: ...
+//      the buffer is not what parseScriptToBinary() made (or is cut short)
+//   could not allocate executable/data memory ...
+//
+//   ScriptExecutable exec = createExecutableFromBuffer(buf, size);
+//   if (!exec.isExeExists())
+//      printf("cannot load: %s\n", lastLoadError());
+const char *lastLoadError();
+
 // Parses, assembles, and serializes `script` in one call, without
 // loading or running it -- the one-call equivalent of upstream v1's
 // Parser::parseScriptBinary() combined with serializeBinary(), for the

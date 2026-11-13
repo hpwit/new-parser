@@ -66,9 +66,32 @@ static inline int64_t debugNowMicros()
 //   type 3 (data): copies embedded literal bytes (e.g. string constants)
 //     from the temporary post-instruction area into the real data buffer.
 //   type 4 (function_declaration): records a callable entry point.
+// Appends a missing binding's name to `list` ("a, b()"), once: a script
+// that uses a name in several places lists it once.
+static void addMissingBinding(char *list, size_t len, const char *label, size_t prefix, bool isFunction)
+{
+    const char *name = label + prefix;
+    const char *paren = strchr(name, '(');
+    size_t n = paren ? (size_t)(paren - name) : strlen(name);
+    char item[72];
+    snprintf(item, sizeof(item), "%.*s%s", (int)n, name, isFunction ? "()" : "");
+    size_t itemLen = strlen(item);
+    for (const char *p = list; (p = strstr(p, item)) != NULL; p += itemLen)
+    {
+        if ((p == list || p[-1] == ' ') && (p[itemLen] == ',' || p[itemLen] == '\0'))
+            return;
+    }
+    if (list[0] != '\0')
+        strncat(list, ", ", len - strlen(list) - 1);
+    strncat(list, item, len - strlen(list) - 1);
+}
+
 static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binary_header, uint8_t *_binary_data,
                                                      uint32_t /*exec_base*/, executable *finalexe, int offset)
 {
+    // The names the binary uses but this program has not bound (bindVariable()/
+    // bindFunction()), all of them: "missing binding: led16, show16()".
+    char missing[200] = "";
     asm_error_message_struct error;
     error.error = 0;
     error.error_message = NULL;
@@ -117,8 +140,7 @@ static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binar
             }
             else
             {
-                error.error = 1;
-                error.error_message = string_format("external variable %s not found\n", textptr);
+                addMissingBinding(missing, sizeof(missing), textptr, 6, false); // "@_ext_NAME"
             }
             break;
         }
@@ -138,8 +160,7 @@ static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binar
             }
             else
             {
-                error.error = 1;
-                error.error_message = string_format("external function %s not found\n", textptr);
+                addMissingBinding(missing, sizeof(missing), textptr, 2, true); // "@_NAME(sig)"
             }
             break;
         }
@@ -210,6 +231,11 @@ static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binar
             error.error_message = (char *)"Unknown type binary header invalid";
             return error;
         }
+    }
+    if (missing[0] != '\0')
+    {
+        error.error = 1;
+        error.error_message = string_format("missing binding: %s", missing);
     }
     return error;
 }

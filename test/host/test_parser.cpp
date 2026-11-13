@@ -3388,6 +3388,80 @@ static void runPointerDimensionsTest()
     }
 }
 
+// A saved binary loaded where some of its names are not bound: the load
+// fails, and lastLoadError() lists every missing name, each once, functions
+// with "()" ("missing binding: testMissZ, testMissY()").
+static int missFnCalls;
+static void testMissFn(int) { missFnCalls++; }
+static int testMissVar;
+static void runMissingBindingTest()
+{
+    const char *name = "loading a binary lists every missing binding in lastLoadError()";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+    bindVariable((char *)"int", (char *)"testMissA", NULL, (void *)&testMissVar);
+    bindFunction((char *)"void", (char *)"testMissB", (char *)"int", (void *)testMissFn);
+    const char *script = "external int testMissA;\nexternal void testMissB(int a);\n"
+                         "void main()\n{\n   testMissA = 3;\n   testMissB(testMissA);\n   testMissB(4);\n}\n";
+    uint32_t size = 0;
+    uint8_t *buf = parseScriptToBinary(script, &size);
+    if (buf == NULL)
+    {
+        printf("       the script did not compile\n");
+        ok = false;
+    }
+    else
+    {
+        {
+            ScriptExecutable good = createExecutableFromBuffer(buf, size);
+            if (!good.isExeExists() || lastLoadError()[0] != '\0')
+            {
+                printf("       a binary with every name bound did not load cleanly: '%s'\n", lastLoadError());
+                ok = false;
+            }
+        }
+        // the same binary, its two names renamed to names nobody bound
+        for (uint32_t i = 0; i + 9 <= size; i++)
+        {
+            if (memcmp(buf + i, "testMissA", 9) == 0)
+                buf[i + 8] = 'Z';
+            else if (memcmp(buf + i, "testMissB", 9) == 0)
+                buf[i + 8] = 'Y';
+        }
+        {
+            ScriptExecutable bad = createExecutableFromBuffer(buf, size);
+            const char *expected = "missing binding: testMissZ, testMissY()";
+            if (bad.isExeExists() || strcmp(lastLoadError(), expected) != 0)
+            {
+                printf("       got '%s', expected '%s'\n", lastLoadError(), expected);
+                ok = false;
+            }
+        }
+        // not a binary at all
+        {
+            uint8_t junk[16] = {1, 2, 3};
+            ScriptExecutable bad = createExecutableFromBuffer(junk, sizeof(junk));
+            if (bad.isExeExists() || strncmp(lastLoadError(), "not a valid binary", 18) != 0)
+            {
+                printf("       junk: got '%s'\n", lastLoadError());
+                ok = false;
+            }
+        }
+        free(buf);
+    }
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 int main()
 {
     registerBallEffectBindings();
@@ -3757,6 +3831,7 @@ int main()
     for (int i = 0; i < n; i++)
         runTest(tests[i]);
 
+    runMissingBindingTest();
     printf("\n%d passed, %d failed, %d known-crash (of %d)\n", passed, failed, knownCrashes, passed + failed + knownCrashes);
     return failed ? 1 : 0;
 }

@@ -72,8 +72,10 @@ void setup()
    free(buf);
    if (!exec.isExeExists())
    {
-      // createExecutableFromBuffer() already printed the specific
-      // deserialize/loader error.
+      // Why: "missing binding: key_char, report()" lists every name this
+      // sketch has not bound (comment out the bindVariable() above to see
+      // it), "not a valid binary: ..." a damaged file.
+      printf("cannot load /script.bin: %s\n", lastLoadError());
       return;
    }
 

@@ -1589,7 +1589,21 @@ if (exec.isExeExists())
    int32_t result = 0;
    exec.execute("someFunction", &result);
 }
+else
+{
+   printf("cannot load: %s\n", lastLoadError());
+}
 ```
+
+When the load fails, `lastLoadError()` says why (it is also printed on the console):
+
+| `lastLoadError()` | Means |
+|---|---|
+| `missing binding: led16, show16()` | the binary uses names this program has not bound: every one is listed, once, functions with `()`. Bind them (`bindVariable()` / `bindFunction()`) before loading, or recompile the script with the names this program has |
+| `not a valid binary: ...` | the buffer is not what `parseScriptToBinary()` made, or it is cut short |
+| `could not allocate executable/data memory ...` | no room for the code (`MALLOC_CAP_EXEC`) or its data |
+
+It is `""` after a load that worked.
 
 See [SaveScriptBinary](examples/SaveScriptBinary) and [LoadScriptBinary](examples/LoadScriptBinary) for the full pair.
 
@@ -2558,6 +2572,7 @@ struct CompileError
 |---|---|---|---|
 | `parseScriptToBinary(script, size)` | `const char *script`; `uint32_t *size`: receives the length in bytes | `uint8_t *`, or `NULL` on a compile error | Compiles without loading and returns the machine code and its relocations as one buffer, to write to a file. You own it: `free()` it. |
 | `createExecutableFromBuffer(buf, size)` | `const uint8_t *buf`, `uint32_t size`: a buffer from `parseScriptToBinary()` | `ScriptExecutable` | Loads a saved script. Bind every `external` name it uses first, with the same names. Check `isExeExists()`. |
+| `lastLoadError()` | | `const char *` | Why the last load failed (`"missing binding: led16, show16()"`, every missing name), `""` when it worked. See [Saving executables](#saving-executables). |
 
 See [Saving executables](#saving-executables).
 

@@ -26,6 +26,13 @@ static const char *kPrelude =
     "#define true 1\n"
     "#define false 0\n";
 
+static char g_lastLoadError[240];
+
+const char *lastLoadError()
+{
+    return g_lastLoadError;
+}
+
 ScriptExecutable::ScriptExecutable(Binary *bin) : exe(createExecutableFromBinary(bin))
 {
     // Safe to take `this` here despite the class's own copy/move-deletion
@@ -47,7 +54,13 @@ ScriptExecutable::ScriptExecutable(Binary *bin) : exe(createExecutableFromBinary
     freeBinary(bin);
     if (exe.error.error)
     {
-        printf("loader error: %s\n", exe.error.error_message ? exe.error.error_message : "?");
+        snprintf(g_lastLoadError, sizeof(g_lastLoadError), "%s",
+                 exe.error.error_message ? exe.error.error_message : "loader error");
+        printf("loader error: %s\n", g_lastLoadError);
+    }
+    else
+    {
+        g_lastLoadError[0] = '\0';
     }
 }
 
@@ -453,6 +466,8 @@ ScriptExecutable createExecutableFromBuffer(const uint8_t *buf, uint32_t size)
     Binary bin = deserializeBinary(buf, size);
     if (bin.error.error)
     {
+        snprintf(g_lastLoadError, sizeof(g_lastLoadError), "not a valid binary: %s",
+                 bin.error.error_message ? bin.error.error_message : "?");
         printf("deserializeBinary error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
         // createExecutableFromBinary() doesn't validate bin->error.error
         // itself (it unconditionally uses bin->instruction_size/

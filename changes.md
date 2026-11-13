@@ -4,6 +4,16 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 🔗 Load errors that name the missing bindings
+
+```cpp
+ScriptExecutable exec = createExecutableFromBuffer(buf, size);
+if (!exec.isExeExists())
+   printf("%s\n", lastLoadError());   // missing binding: led16, show16()
+```
+
+Loading a saved binary in a program that has not bound some of its names used to report only one of them, on the console. The loader now lists every missing binding, once each, functions with `()`, and the new `lastLoadError()` gives that text (or `not a valid binary: ...`, or the out-of-memory message) to a sketch that wants to show it itself; `""` after a load that worked. [LoadScriptBinary](examples/LoadScriptBinary) prints it. → [Saving executables](README.md#saving-executables)
+
 ### 🎛️ Parameters for a script run as a task
 
 ```c
