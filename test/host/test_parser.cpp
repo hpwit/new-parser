@@ -3388,6 +3388,57 @@ static void runPointerDimensionsTest()
     }
 }
 
+// A bound function with a parameter of a structure bound by bindStruct():
+// bindFunction("void", "setRes", "res", f) is called as setRes(M2x2) on a
+// bound structure variable, and f receives its address (a10 = &M2x2).
+SCRIPT_STRUCT(testres, { int width; int height; int divx; int divy; })
+static testres testResObj = {400, 240, 2, 2};
+static void testSetRes(testres *) {}
+static void runStructParameterBindingTest()
+{
+    const char *name = "bindFunction() parameter of a bindStruct() type: called with a bound structure, gets its address";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bindStruct(testres_definition);
+    bindVariable((char *)"testres", (char *)"testResM2", NULL, (void *)&testResObj);
+    bindFunction((char *)"void", (char *)"testSetRes", (char *)"testres", (void *)testSetRes);
+    bindFunction((char *)"void", (char *)"testSetResP", (char *)"testres *", (void *)testSetRes);
+    bool ok = compileForTest("void main()\n{\n   testSetRes(testResM2);\n   testSetResP(&testResM2);\n}\n");
+    // a10 holds &testResM2 at each call: loaded straight into a10, or into
+    // a register the optimizer then copies to a10 ("mov a10,a5")
+    int found = 0;
+    int holder = -1; // the register loaded with &testResM2
+    for (int i = 0; ok && i + 1 < content.size(); i++)
+    {
+        const char *line = content.getText(i);
+        const char *next = content.getText(i + 1);
+        int r = -1, s = -1;
+        if (sscanf(line, " movExt a%d,@_ext_testResM2", &r) == 1)
+            holder = r;
+        bool a10 = (strstr(line, "a10,@_ext_testResM2") != NULL) ||
+                   (sscanf(line, " mov a10,a%d", &s) == 1 && s == holder);
+        if (a10 && (strstr(next, "@_testSetRes(testres)") != NULL || strstr(next, "@_testSetResP(testres*)") != NULL))
+            found++;
+    }
+    if (ok && found != 2)
+    {
+        printf("       expected the address of testResM2 in a10 before both calls, found %d\n", found);
+        for (int i = 0; i < content.size(); i++)
+            printf("         %s\n", content.getText(i));
+        ok = false;
+    }
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 // A saved binary loaded where some of its names are not bound: the load
 // fails, and lastLoadError() lists every missing name, each once, functions
 // with "()" ("missing binding: testMissZ, testMissY()").
@@ -3832,6 +3883,7 @@ int main()
         runTest(tests[i]);
 
     runMissingBindingTest();
+    runStructParameterBindingTest();
     printf("\n%d passed, %d failed, %d known-crash (of %d)\n", passed, failed, knownCrashes, passed + failed + knownCrashes);
     return failed ? 1 : 0;
 }

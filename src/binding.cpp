@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include "binding.h"
 #include "string_functions.h"
 #include "vect.h"
@@ -98,6 +99,45 @@ uint32_t *createExternalLinks()
     return external_links_array;
 }
 
+// The name of the structure a bindFunction() parameter type names
+// ("ball", "ball *", "struct ball*", "const ball *"), if that structure was
+// bound with bindStruct(); NULL otherwise. Returns a static buffer.
+static const char *boundStructName(const char *type)
+{
+    static char word[48];
+    const char *p = type;
+    for (;;)
+    {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        int n = 0;
+        while ((isalnum((unsigned char)p[n]) || p[n] == '_') && n < (int)sizeof(word) - 1)
+            n++;
+        if (n == 0)
+            return NULL;
+        memcpy(word, p, n);
+        word[n] = '\0';
+        p += n;
+        if (strcmp(word, "const") != 0 && strcmp(word, "struct") != 0)
+            break;
+    }
+    const size_t len = strlen(word);
+    for (int i = 0; i < binded_structs.size(); i++)
+    {
+        const char *d = binded_structs[i];
+        while (*d == ' ' || *d == '\t' || *d == '\n')
+            d++;
+        if (strncmp(d, "struct", 6) != 0)
+            continue;
+        d += 6;
+        while (*d == ' ' || *d == '\t' || *d == '\n')
+            d++;
+        if (strncmp(d, word, len) == 0 && !(isalnum((unsigned char)d[len]) || d[len] == '_'))
+            return word;
+    }
+    return NULL;
+}
+
 void bindFunction(char * out,char * name,char *  in, void * ptr)
 {
   
@@ -145,6 +185,11 @@ void bindFunction(char * out,char * name,char *  in, void * ptr)
         signature=str_concat(_s_s_,signature,"CRGB");
        else if(strstr(j[i],"char")!=NULL)
         signature=str_concat(_s_s_,signature,"char");
+       else if(boundStructName(j[i]) != NULL)
+        // a structure bound with bindStruct(): the parser names it in
+        // signatures by its own name, by value ("ball") or pointer ("ball*").
+        // Either way the function receives the structure's address.
+        signature=str_concat(_s_s_,signature,boundStructName(j[i]));
        else
         signature=str_concat(_s_s_,signature,"num");
       }

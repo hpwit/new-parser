@@ -2597,6 +2597,27 @@ void bindFunction(char *returnType, char *name, char *parameterTypes, void *func
 bindFunction((char *)"void", (char *)"setPixel", (char *)"int,int,int", (void *)setPixel);
 ```
 
+A parameter can also be a structure bound with [`bindStruct()`](#sharing-a-structure-with-the-sketch), by value (`"mode"`) or by pointer (`"mode *"`). Either way your function receives the structure's **address**, so declare it with a pointer. Bind the structure before the function:
+
+```cpp
+SCRIPT_STRUCT(mode, { int width; int height; int divx; int divy; })
+
+mode M400x240 = {400, 240, 2, 2};
+
+void setMode(mode *m)                  // the address of the script's argument
+{
+   printf("%d x %d\n", m->width, m->height);
+}
+
+bindStruct(mode_definition);
+bindVariable((char *)"mode", (char *)"M400x240", NULL, (void *)&M400x240);
+bindFunction((char *)"void", (char *)"setMode", (char *)"mode", (void *)setMode);
+// the script: setMode(M400x240);
+```
+
+> [!NOTE]
+> The argument follows the declared type, as for a script function: `setMode(M400x240)` or `setMode(local)` for `"mode"`, `setMode(&M400x240)` or `setMode(&local)` for `"mode *"`. Your function gets the argument's address in all four cases: with `"mode"`, treat it as read-only, as C would give it a copy.
+
 ### `bindVariable()`
 
 ```cpp

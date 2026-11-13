@@ -4,6 +4,15 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 🧱 Structures as parameters of your C++ functions
+
+```cpp
+bindStruct(mode_definition);
+bindFunction((char *)"void", (char *)"setMode", (char *)"mode", (void *)setMode);   // void setMode(mode *m)
+```
+
+`bindFunction()` used to turn every parameter type it did not know into a number, so a function taking a structure could not be called (`Function not found: setMode(mode); there is setMode(number)`). A structure bound with `bindStruct()` is now recognised, by value (`"mode"`) or by pointer (`"mode *"`); the function receives its address. → [bindFunction()](README.md#bindfunction)
+
 ### 🔗 Load errors that name the missing bindings
 
 ```cpp
