@@ -210,7 +210,9 @@ public:
     //   exec.executeAsTask("main", &args);
     // Parameters are int (any 32-bit integer type in the script: int,
     // uint32_t, uint8_t, bool...) or float, 6 at most (they travel in the
-    // registers a10..a15; more are dropped). They are copied before this
+    // registers a10..a15; more are dropped). A string, structure or array
+    // goes by address: args.add((int)(uintptr_t)text) for a char *
+    // parameter; what it points to must stay valid while the task uses it. They are copied before this
     // returns, so `args` can be a local variable. A function with fewer
     // parameters ignores the extra values; one with more sees garbage in
     // the missing ones. See "Parameters for a task" in the README.

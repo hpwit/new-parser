@@ -1812,14 +1812,32 @@ The rest of the call (`stackSize`, `priority`, `core`, `taskName`) and the contr
 |:----|:----|:----|
 |`args.add(40)` (an `int`)|`int`, `uint32_t`, `uint16_t`, `uint8_t`, `bool`, any 32-bit-or-smaller integer type|as a 32-bit integer; a smaller type uses its low bits|
 |`args.add(1.5f)` (a `float`)|`float`|as the float's 32 bits, read back as a float|
+|`args.add((int)(uintptr_t)text)` (a string's address)|`char *`|the address, 32 bits on the esp32; the script reads the text where it is|
+|the address of a structure or an array, the same way|a pointer: `ball *b`, `uint16_t *buffer`...|the address|
 
 - **6 at most.** Parameters travel in the six registers `a10` to `a15` of the Xtensa calling convention; a 7th and the ones after it are dropped.
-- **No strings, structures or arrays as parameters.** Share them with `bindVariable()` / `bindStruct()` (see [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions) and [Structures](#structures)), or pass an `int` that selects which one.
+- **Strings, structures and arrays go by address**, as in C: the sketch passes a pointer (cast to `int`), the script declares a pointer parameter and reads the data where it is, nothing is copied. The data must stay valid as long as the task uses it: a string literal, a `static` or global buffer, not a local variable of the function that called `executeAsTask()`. For data both sides keep using, a bound variable is simpler (see [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions) and [Structures](#structures)).
 - **`ffloat`**: pass a `float` parameter and convert it in the script, or the raw fixed-point value as an `int`.
 - **More values than parameters** is harmless: the function ignores the extra ones. That is why a sketch can always pass its settings, whatever `main()` declares.
 - **Fewer values than parameters** is not checked: the missing ones hold whatever was in the register. Give every parameter a value.
 
-**Lifetime.** The values are copied before `executeAsTask()` returns, so `args` can be a local variable that is gone when the task starts. `name` and `taskName` must still stay valid while the task runs (string literals are fine).
+**Lifetime.** The values are copied before `executeAsTask()` returns, so `args` can be a local variable that is gone when the task starts. What a pointer value points to is not copied (see above), and `name` and `taskName` must still stay valid while the task runs (string literals are fine).
+
+```c
+// a string parameter, in the script
+void helloTask(char *name)
+{
+   printfln("hello %s", name);
+}
+```
+
+```cpp
+static char name[32];                   // static: still there while the task runs
+strlcpy(name, "Yves", sizeof(name));
+Arguments args;
+args.add((int)(uintptr_t)name);         // the address, as an int
+exec.executeAsTask("helloTask", &args);
+```
 
 **The raw form** takes the values as `int32_t`: an `int` as it is, a `float` as its bit pattern (`memcpy()` it into an `int32_t`). It is what a program uses when it gets the values as text, a command line say, and has already worked out their types.
 
@@ -1831,7 +1849,7 @@ memcpy(&raw[1], &speed, sizeof(raw[1]));
 exec.executeAsTask("main", raw, 2);       // main(int n, float speed)
 ```
 
-See [TaskParameters](examples/TaskParameters) (commands typed in the Serial Monitor start `fibTask(35)` or `countTask(5, 0.5)`) and [matouch/BouncingBalls](examples/matouch/BouncingBalls) (the number of balls is `main(int n)`'s parameter; typing a number restarts the script with that many balls).
+See [TaskPointerParameters](examples/TaskPointerParameters) (a string, an array and a structure passed by address; the script writes into the sketch's structure), [TaskParameters](examples/TaskParameters) (commands typed in the Serial Monitor start `fibTask(35)`, `countTask(5, 0.5)` or `helloTask("Yves")`) and [matouch/BouncingBalls](examples/matouch/BouncingBalls) (the number of balls is `main(int n)`'s parameter; typing a number restarts the script with that many balls).
 
 > [!WARNING]
 > You can't choose where the task is stopped. It can be inside a host function the script called, holding `Serial`, a lock or a mutex of yours. If that matters, give the script a host function to call in its loop that checks a flag and returns at a point you choose.
@@ -2110,7 +2128,8 @@ This is the part that is really new compared to v1:
 | `MandelbrotFixedPoint` | The Mandelbrot set with integers only, fixed point done by hand. |
 | `SchedulerDemo` | Three scripts on their own tasks, managed by name with `scriptScheduler`: list with CPU %, pause, restart, kill, remove. esp32 only. |
 | `ExecuteAsTask` | `main()` on its own FreeRTOS task, with `pause()`/`restart()`/`kill()`/`state()`. esp32 only. |
-| `TaskParameters` | Script functions run as tasks with parameters (`executeAsTask(name, &args)`): `fib 35` or `count 5 0.5` typed in the Serial Monitor starts `fibTask(35)` or `countTask(5, 0.5)`, ints and floats. esp32 only. |
+| `TaskPointerParameters` | A string, an array and a structure passed to script functions run as tasks, by address: `greet(char *name, int times)`, `sumValues(int *values, int count)`, `moveTarget(target *t, int dx, int dy)` writing into the sketch's own struct. esp32 only. |
+| `TaskParameters` | Script functions run as tasks with parameters (`executeAsTask(name, &args)`): `fib 35`, `count 5 0.5` or `hello Yves` typed in the Serial Monitor starts `fibTask(35)`, `countTask(5, 0.5)` or `helloTask("Yves")`: an int, an int and a float, a string by address. esp32 only. |
 | `PinInterrupt` | A GPIO interrupt calling back into the running script. esp32 only. |
 | `DirectGPIO` | Driving pins from a script through the GPIO and IO_MUX registers; esp32 and esp32-S3. |
 | `RainbowCompare` | A scrolling rainbow drawn by a script and natively, 100 frames timed, with a hash showing they are identical (see [Performance](#calling-a-host-function-per-pixel-rainbow)). |

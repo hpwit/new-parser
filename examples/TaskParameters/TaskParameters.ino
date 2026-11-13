@@ -5,8 +5,10 @@
 // Type a command in the Serial Monitor (115200 baud, "Newline" line ending):
 //   fib 35          runs fibTask(35): fib(35) and the time it took
 //   count 5 0.5     runs countTask(5, 0.5): counts to 5, one step every 0.5 s
+//   hello Yves      runs helloTask("Yves"): a string parameter (char *)
 //   stop            kills the task
-// Numbers with a '.' are passed as float, the others as int.
+// Numbers with a '.' are passed as float, the others as int; the hello
+// word is passed by address, from a static buffer.
 //
 // What a parameter can be (see "Parameters for a task" in the README):
 // - an int (in the script: int, uint32_t, uint16_t, uint8_t, bool...) or a
@@ -14,8 +16,9 @@
 // - 6 at most: they travel in the registers a10..a15, more are dropped;
 // - a function with fewer parameters ignores the extra values, one with
 //   more sees garbage in the missing ones.
-// No strings, structures or arrays as parameters: share those with
-// bindVariable() / bindStruct() instead.
+// - a string (or a structure, an array) goes by address: the sketch passes
+//   (int)(uintptr_t)pointer, the script declares char * (or a pointer); the
+//   text is not copied, so it must stay valid while the task uses it.
 //
 // ESP32 only, like executeAsTask().
 #include "script_executable.h"
@@ -63,10 +66,20 @@ void countTask(int times, float pause)
    printfln("count done");
 }
 
+// a string parameter: the sketch passes the text's address
+void helloTask(char *name)
+{
+   printfln("hello %s, from a script task", name);
+}
+
 void main()
 {
 }
 )EOF";
+
+// The text given to helloTask(): static, so it is still there while the
+// task reads it (args only copies the address).
+static char helloName[32];
 
 static ScriptExecutable *g_exec = NULL;
 
@@ -87,9 +100,20 @@ static void runCommand(char *line)
       function = "fibTask";    // a string literal: stays valid while the task runs
    else if (strcmp(word, "count") == 0)
       function = "countTask";
+   else if (strcmp(word, "hello") == 0)
+   {
+      const char *name = strtok(NULL, " \t\r\n");
+      g_exec->kill();   // the previous task may still read helloName
+      strlcpy(helloName, name != NULL ? name : "world", sizeof(helloName));
+      Arguments args;
+      args.add((int)(uintptr_t)helloName);   // char *name: the address
+      if (!g_exec->executeAsTask("helloTask", &args, 8192, 1, tskNO_AFFINITY, "helloTask"))
+         Serial.println("could not start the task");
+      return;
+   }
    else
    {
-      Serial.println("commands: fib <n>, count <times> <seconds>, stop");
+      Serial.println("commands: fib <n>, count <times> <seconds>, hello <name>, stop");
       return;
    }
 
@@ -120,7 +144,7 @@ void setup()
       return;
    }
    g_exec = &exec;
-   Serial.println("commands: fib <n>, count <times> <seconds>, stop");
+   Serial.println("commands: fib <n>, count <times> <seconds>, hello <name>, stop");
 }
 
 void loop()
