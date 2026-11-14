@@ -328,6 +328,19 @@ void showCompileError()
     }
 }
 
+// What a successful compile frees once createBinary() has used it, and a
+// failed one must free too: the parser's state (p.clean()) and the
+// generated assembly (content/header/footer, which createBinary() empties).
+// A failed compile used to keep both, so the next compile of a script with
+// the same functions failed with "label @_name(...) is already declared".
+static void resetCompilerState(Parser &p)
+{
+    p.clean();
+    content.clear();
+    header.clear();
+    footer.clear();
+}
+
 static Binary compileScriptToBinary(const char *script)
 {
     memset(&g_lastCompileError, 0, sizeof(g_lastCompileError));
@@ -363,7 +376,9 @@ static Binary compileScriptToBinary(const char *script)
     _tokenizer_start_line = 1 - preludeLines;
 
     Parser p;
-    p.clean();
+    // also whatever an earlier compile, or a caller driving Parser itself,
+    // may have left behind
+    resetCompilerState(p);
     p.parse(&s, &__allTokens);
     _tokenizer_start_line = 1;
 
@@ -400,9 +415,11 @@ static Binary compileScriptToBinary(const char *script)
             }
         }
         free(buf);
-        // The compiler's state is kept after a failed compile (unlike after a
-        // good one, see below): Error.token points into it, and callers read
-        // the error's line and position from there. The next compile frees it.
+        // Everything about the error is copied into g_lastCompileError above
+        // (lastCompileError()): the compiler's state can go now, as after a
+        // good compile. Error.token pointed into it.
+        Error.token = NULL;
+        resetCompilerState(p);
         Binary bin;
         bin.error.error = 1;
         bin.error.error_message = NULL;

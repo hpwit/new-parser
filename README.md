@@ -411,6 +411,8 @@ if (e.failed)
 |`line`, `position`|where it was noticed, both from 1 (`line` is 0 for an assembler error)|
 |`sourceLine`|that line of the script, as written|
 
+A failed compile leaves nothing behind: fix the script and compile it again (a live-coding loop, a script edited on the device) and its functions and structures are declared afresh. `lastCompileError()` keeps the error until the next compile.
+
 ## Freeing an executable
 A `ScriptExecutable` frees its memory by itself when it goes out of scope, so most of the time you have nothing to do. If you want the memory back sooner, for instance before compiling a second script, use `exec.free()`:
 
