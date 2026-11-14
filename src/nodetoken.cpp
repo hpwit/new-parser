@@ -251,11 +251,64 @@ bool nodePoolRelease()
 	return true;
 }
 
+// Parser::clean() after a failed parse: the parser's working stack
+// (nodeTokenList) holds shallow copies of nodes whose `children` array is
+// also owned by the half-built tree (push_back(back()), pop_back() into a
+// parent). A successful parse consumes those copies before the tree is
+// freed; a failed one leaves both, and freeing each would free the same
+// children twice (heap-use-after-free, then a corrupt node pool). While the
+// guard is on, clear() frees each children array once and skips the copies.
+static void **clearSeen = NULL;
+static int clearSeenCount = 0;
+static int clearSeenCap = 0;
+static bool clearGuard = false;
+
+void nodeClearGuardBegin()
+{
+	clearGuard = true;
+	clearSeenCount = 0;
+}
+
+void nodeClearGuardEnd()
+{
+	clearGuard = false;
+	free(clearSeen);
+	clearSeen = NULL;
+	clearSeenCount = 0;
+	clearSeenCap = 0;
+}
+
+// true when `p` was already freed under the guard; otherwise records it
+static bool clearAlreadySeen(void *p)
+{
+	for (int i = 0; i < clearSeenCount; i++)
+		if (clearSeen[i] == p)
+			return true;
+	if (clearSeenCount == clearSeenCap)
+	{
+		int cap = clearSeenCap == 0 ? 64 : clearSeenCap * 2;
+		void **grown = (void **)realloc(clearSeen, cap * sizeof(void *));
+		if (grown == NULL)
+			return true; // out of memory: leak rather than risk a double free
+		clearSeen = grown;
+		clearSeenCap = cap;
+	}
+	clearSeen[clearSeenCount++] = p;
+	return false;
+}
+
 void NodeToken::clear()
 {
 	// PARSER_LOG(" on efface :%s",all_text.getText(textref));
 	if (children == NULL)
 		return;
+	if (clearGuard && clearAlreadySeen(children))
+	{
+		// a copy: the node that shares this array frees it
+		children = NULL;
+		_c_size = 0;
+		return;
+	}
 
 	for (int i = 0; i < _c_size; i++)
 	{

@@ -165,6 +165,10 @@ extern Stack<int> _for_depth_reg;
 // Frees the syntax-tree node pool's memory if no node is alive any more;
 // false (nothing freed) otherwise. See nodetoken.cpp.
 bool nodePoolRelease();
+// Around Parser::clean(): NodeToken::clear() frees each children array once
+// even when shallow node copies share it (a failed parse leaves such copies).
+void nodeClearGuardBegin();
+void nodeClearGuardEnd();
 extern Stack<bool> _is_variable_as_register;
 extern NodeToken *lasttype;
 extern vect<NodeToken *> sav_token;

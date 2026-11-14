@@ -4288,6 +4288,9 @@ void Parser::parseArguments()
 
 void Parser::clean()
 {
+    // after a failed parse the working stack shares nodes with the tree:
+    // free each subtree once (see nodeClearGuardBegin())
+    nodeClearGuardBegin();
    // printf("1\n");
     //all_text.clear();
    // printf("2\n");
@@ -4315,6 +4318,7 @@ void Parser::clean()
     nodeTokenList[i].clear();
    }
     nodeTokenList.clear();
+    nodeClearGuardEnd();
     ext_function_cntx.clear();
     function_cntx.clear();
    // printf("11\n");

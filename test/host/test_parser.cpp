@@ -3393,6 +3393,55 @@ static void runPointerDimensionsTest()
 // A compile that fails must not leave anything behind: compiling the
 // corrected script afterwards used to fail with "label @_helper(num) is
 // already declared" (the failed compile's generated assembly stayed).
+// A parse error deep in nested blocks (here `hp[best]--;`, an unsupported
+// form, inside if/for inside a function) used to crash the cleanup of the
+// failed compile: the parser's working stack held shallow copies of nodes
+// whose children the half-built tree also owned, and both were freed
+// (heap-use-after-free under ASan, a corrupt node pool on the device).
+static void runNestedErrorCleanupTest()
+{
+    const char *name = "a parse error inside nested blocks is reported, not a crash, and the next compile works";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+    const char *bad =
+        "int hp[4];\nfloat d[4];\nvoid hit(int n)\n{\n   int best = -1;\n"
+        "   for (int i = 0; i < n; i++)\n   {\n      if (hp[i] > 0)\n      {\n"
+        "         if (d[i] < 3.0)\n            best = i;\n      }\n   }\n"
+        "   if (best >= 0)\n   {\n      hp[best]--;\n   }\n}\nvoid main()\n{\n   hit(4);\n}\n";
+    const char *good =
+        "int hp[4];\nvoid hit(int n)\n{\n   for (int i = 0; i < n; i++)\n   {\n"
+        "      if (hp[i] > 0)\n         hp[i] = hp[i] - 1;\n   }\n}\nvoid main()\n{\n   hit(4);\n}\n";
+    for (int round = 0; round < 2; round++)
+    {
+        uint32_t size = 0;
+        uint8_t *bin = parseScriptToBinary(bad, &size);
+        if (bin != NULL || !lastCompileError().failed || lastCompileError().line != 16)
+        {
+            printf("       round %d: expected the error on line 16, got line %d\n", round, lastCompileError().line);
+            ok = false;
+        }
+        free(bin);
+        bin = parseScriptToBinary(good, &size);
+        if (bin == NULL)
+        {
+            printf("       round %d: the good script failed: %s\n", round, lastCompileError().message);
+            ok = false;
+        }
+        free(bin);
+    }
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 static void runRecompileAfterErrorTest()
 {
     const char *name = "a failed compile leaves nothing behind: the corrected script compiles";
@@ -3935,6 +3984,7 @@ int main()
 
     runMissingBindingTest();
     runRecompileAfterErrorTest();
+    runNestedErrorCleanupTest();
     runStructParameterBindingTest();
     printf("\n%d passed, %d failed, %d known-crash (of %d)\n", passed, failed, knownCrashes, passed + failed + knownCrashes);
     return failed ? 1 : 0;
