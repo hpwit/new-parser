@@ -4,6 +4,9 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 🔁 Compiling again after an error
+
+A compile that failed kept what it had generated so far, so compiling the corrected script failed in turn, with `label @_helper(num) is already declared` for every function the broken script had defined before its error; only restarting the board helped. A failed `parseScript()` / `parseScriptToBinary()` now frees everything a good compile frees (the parser's state and the generated assembly), right after copying the error into `lastCompileError()`, which is the place to read it from. Host test `runRecompileAfterErrorTest`; the suite runs clean under AddressSanitizer. → [Showing the error your own way](README.md#showing-the-error-your-own-way)
 ### 🧱 Structures as parameters of your C++ functions
 
 ```cpp

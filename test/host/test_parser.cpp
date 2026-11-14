@@ -1432,11 +1432,13 @@ static void runBuiltinHandleTest()
             ok = false;
         }
         {
+            // parseScript() frees the compiler's state after a failed compile
+            // too: the error's line is read from lastCompileError()
             ScriptExecutable exe = parseScript(broken);
-            if (exe.isExeExists() || !Error.error || Error.token == NULL || Error.token->line != 3)
+            if (exe.isExeExists() || !lastCompileError().failed || lastCompileError().line != 3)
             {
                 printf("       parseScript(): error reported on line %d, expected 3\n",
-                       (Error.error && Error.token) ? (int)Error.token->line : -1);
+                       lastCompileError().failed ? lastCompileError().line : -1);
                 ok = false;
             }
         }
@@ -3388,6 +3390,55 @@ static void runPointerDimensionsTest()
     }
 }
 
+// A compile that fails must not leave anything behind: compiling the
+// corrected script afterwards used to fail with "label @_helper(num) is
+// already declared" (the failed compile's generated assembly stayed).
+static void runRecompileAfterErrorTest()
+{
+    const char *name = "a failed compile leaves nothing behind: the corrected script compiles";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+    const char *good = "struct pt { int x; };\nint helper(int a)\n{\n   return a + 1;\n}\nvoid main()\n{\n   pt p;\n   p.x = helper(2);\n}\n";
+    const char *bad[] = {
+        // syntax error after helper() was generated
+        "struct pt { int x; };\nint helper(int a)\n{\n   return a + 1;\n}\nvoid main()\n{\n   pt p;\n   p.x = helper(2)\n}\n",
+        // unknown function after helper() was generated
+        "struct pt { int x; };\nint helper(int a)\n{\n   return a + 1;\n}\nvoid main()\n{\n   pt p;\n   p.x = nothere(2);\n}\n",
+    };
+    for (int b = 0; b < 2; b++)
+    {
+        for (int round = 0; round < 2; round++)
+        {
+            uint32_t size = 0;
+            uint8_t *bin = parseScriptToBinary(bad[b], &size);
+            if (bin != NULL || !lastCompileError().failed)
+            {
+                printf("       bad script %d compiled\n", b);
+                ok = false;
+            }
+            free(bin);
+            bin = parseScriptToBinary(good, &size);
+            if (bin == NULL)
+            {
+                printf("       after bad script %d (round %d): %s\n", b, round, lastCompileError().message);
+                ok = false;
+            }
+            free(bin);
+        }
+    }
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 // A bound function with a parameter of a structure bound by bindStruct():
 // bindFunction("void", "setRes", "res", f) is called as setRes(M2x2) on a
 // bound structure variable, and f receives its address (a10 = &M2x2).
@@ -3883,6 +3934,7 @@ int main()
         runTest(tests[i]);
 
     runMissingBindingTest();
+    runRecompileAfterErrorTest();
     runStructParameterBindingTest();
     printf("\n%d passed, %d failed, %d known-crash (of %d)\n", passed, failed, knownCrashes, passed + failed + knownCrashes);
     return failed ? 1 : 0;
