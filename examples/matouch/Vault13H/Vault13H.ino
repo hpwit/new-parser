@@ -10,7 +10,9 @@
 // shading uses the palette itself, which holds each hue bright, medium and
 // dark, as VGA games did. Drones guard the vault (two hits each); gold is
 // score, red-cross kits are health, green boxes are ammo; the green EXIT
-// panel ends the level. Three looks, one per level: the keep, the crypt,
+// panel ends the level. A face in the status bar shows how the raider is
+// doing: bruised, cut, then bloody as health drops. Three looks, one per
+// level: the keep, the crypt,
 // the base. Everything (palette, textures, sprites, font) is made by the
 // script at start: no art files.
 //
@@ -284,8 +286,8 @@ int floorIdx;
 int theme;
 
 int word[4] = {14, 33, 18, 29};
-int bx[4] = {4, 70, 172, 256};
-int bw[4] = {62, 98, 80, 60};
+int bx[4] = {4, 56, 182, 256};      // the status bar boxes; the face is
+int bw[4] = {48, 88, 70, 60};       // between SCORE and HEALTH
 
 int rnd(int n)
 {
@@ -989,6 +991,8 @@ float flash;
 float hurt;
 float glow;
 float walk;
+int faceLook;              // where the face looks: -1 left, 0 ahead, 1 right
+float faceT;
 int kUp;
 int kDown;
 int kLeft;
@@ -1439,6 +1443,175 @@ void drawNumber(int v, int digits, int x, int y, int sc, int c)
    }
 }
 
+// ---- the face in the status bar: a vault raider in a steel helmet, 24 x 30,
+// worse as health drops: 0 fine (over 80), 1 tired, 2 bruised, 3 cut and
+// grimacing, 4 bloody (20 or less), 5 dead. It glances left and right, and
+// winces (eyes shut, mouth open) for a moment when hit.
+
+int faceLevel()
+{
+   if (state == 3 || health <= 0)
+      return 5;
+   if (health > 80)
+      return 0;
+   if (health > 60)
+      return 1;
+   if (health > 40)
+      return 2;
+   if (health > 20)
+      return 3;
+   return 4;
+}
+
+// the colour of face pixel (x, y), 0 outside the head
+int facePixel(int x, int y, int lv, int look, int ouch)
+{
+   int dx = x - 12;
+   int dy = y - 16;
+   int e = dx * dx * 144 + dy * dy * 81;     // the head: an ellipse 9 x 12
+   if (e > 11664)
+      return 0;
+   int c = 66;                               // skin, lit from the left
+   if (x < 9 && y > 9 && y < 21 && e < 6000)
+      c = 90;
+   if (dx > 5 || e > 9500)
+      c = 138;
+   if (lv == 5)
+   {
+      c = 25;                                // dead: grey
+      if (dx > 5 || e > 9500)
+         c = 22;
+   }
+   // the helmet and its rim
+   if (y <= 9)
+   {
+      c = 24;
+      if (x < 10 && y > 2 && y < 7)
+         c = 27;
+      if (dx > 5)
+         c = 21;
+      if (y == 9)
+         c = 19;
+      return c;
+   }
+   // bruise on the cheek, cut and blood on the forehead, blood from the nose
+   if (lv >= 2 && lv != 5 && x >= 16 && x <= 17 && y >= 18 && y <= 19)
+      c = 113;
+   if (lv >= 3 && x == 6 && y >= 10 && y <= 13)
+      c = 40;
+   if (lv >= 4 && x == 12 && y >= 20 && y <= 21)
+      c = 40;
+   if (lv == 5 && (x == 15 || x == 16) && y == 10)
+      c = 40;
+   // eyebrows: straight when fine, drawn up in the middle when it hurts
+   int lb = 0;
+   if (y == 12 && ((x >= 6 && x <= 9) || (x >= 14 && x <= 17)))
+      lb = 1;
+   if (lv >= 2 && y == 12 && (x == 8 || x == 9 || x == 14 || x == 15))
+      lb = 0;
+   if (lv >= 2 && y == 11 && (x == 8 || x == 9 || x == 14 || x == 15))
+      lb = 1;
+   if (lb)
+      c = 186;
+   // the eyes
+   int ex = -1;
+   if (x >= 7 && x <= 9)
+      ex = x - 7;
+   if (x >= 14 && x <= 16)
+      ex = x - 14;
+   if (ex >= 0 && y >= 13 && y <= 15)
+   {
+      if (lv == 5)
+      {
+         // X X
+         int xd = ex - (y - 13);
+         if (xd == 0 || ex + (y - 13) == 2)
+            return 16;
+         return c;
+      }
+      if (y == 13)
+         return c;
+      if (ouch)
+      {
+         if (y == 15)
+            return 186;                      // shut tight
+         return c;
+      }
+      if (lv >= 4 && x <= 9 && y == 14)
+         return 113;                         // the left eye swollen
+      if (ex == 1 + look)
+         return 16;                          // the pupil
+      return 31;
+   }
+   // the nose
+   if (x == 13 && y >= 17 && y <= 19 && c != 40)
+      c = 138;
+   // the mouth
+   if (ouch && lv != 5 && x >= 11 && x <= 13 && y >= 22 && y <= 24)
+   {
+      if (x == 12 && y == 23)
+         return 40;
+      return 16;
+   }
+   if (lv == 0)
+   {
+      if ((y == 22 && (x == 9 || x == 15)) || (y == 23 && x >= 10 && x <= 14))
+         c = 186;
+   }
+   else if (lv == 1 || lv == 5)
+   {
+      if (y == 23 && x >= 10 && x <= 14)
+         c = 186;
+   }
+   else if (lv == 2)
+   {
+      if ((y == 23 && x >= 10 && x <= 14) || (y == 24 && (x == 9 || x == 15)))
+         c = 186;
+   }
+   else if (lv == 3)
+   {
+      if ((y == 22 || y == 24) && x >= 10 && x <= 14)
+         c = 186;
+      if (y == 23 && x >= 10 && x <= 14)
+         c = 31;                             // clenched teeth
+   }
+   else
+   {
+      if (y == 22 && x >= 11 && x <= 13)
+         c = 186;
+      if (y == 23 && x >= 10 && x <= 14)
+         c = 16;
+      if (y == 24 && (x == 9 || x == 15))
+         c = 186;
+   }
+   return c;
+}
+
+void drawFace()
+{
+   fillRect(148, 203, 30, 34, 16);
+   fillRect(148, 203, 30, 1, 8);
+   fillRect(148, 236, 30, 1, 9);
+   int st = 800;
+   int lv = faceLevel();
+   int ouch = 0;
+   if (hurt > 0)
+      ouch = 1;
+   int look = faceLook;
+   if (state != 1)
+      look = 0;
+   for (int y = 0; y < 30; y++)
+   {
+      int off = (205 + y) * st + VX + 151;
+      for (int x = 0; x < 24; x++)
+      {
+         int c = facePixel(x, y, lv, look, ouch);
+         if (c != 0)
+            led16[off + x] = pal[c];
+      }
+   }
+}
+
 void drawHud()
 {
    fillRect(0, 200, VW, 40, 1);
@@ -1452,16 +1625,17 @@ void drawHud()
       fillRect(bx[i], 236, bw[i], 1, 9);
       drawMsg(2 + i, bx[i] + (bw[i] - txtLen[2 + i] * 8) / 2, 206, 1, 11, -1);
    }
-   drawNumber(level, 2, 4 + 23, 218, 1, 14);
-   drawNumber(score, 6, 70 + 25, 218, 1, 14);
+   drawNumber(level, 2, 20, 218, 1, 14);
+   drawNumber(score, 6, 76, 218, 1, 14);
    int hc = 14;
    if (health < 25)
       hc = 12;
-   drawNumber(health, 3, 172 + 28, 218, 1, hc);
+   drawNumber(health, 3, 205, 218, 1, hc);
    int ac = 14;
    if (ammo == 0)
       ac = 12;
-   drawNumber(ammo, 2, 256 + 22, 218, 1, ac);
+   drawNumber(ammo, 2, 278, 218, 1, ac);
+   drawFace();
 }
 
 void drawBorder(int c, int w)
@@ -1726,6 +1900,12 @@ void step(float dt)
    flash = flash - dt;
    hurt = hurt - dt;
    glow = glow - dt;
+   faceT = faceT - dt;
+   if (faceT <= 0)
+   {
+      faceT = 0.8 + rnd(150) / 100.0;
+      faceLook = rnd(3) - 1;
+   }
    if (state == 0)
    {
       turn(dt * 0.25);
