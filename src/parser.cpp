@@ -856,7 +856,7 @@ void Parser::parseProgram()
                     current_node = current_node->addChild(NodeToken(assignementNode));
                     current_node->addChild(nd);
 
-                    parseExpr();
+                    parseExprAndOr(); // a full expression: comparisons, && ||, ?:
                     if (Error.error)
                     {
                         return;
@@ -1378,7 +1378,7 @@ void Parser::parseFactor()
             for (int i = 0; i < sav_t.back().getVarTypeObj()->size; i++)
             {
                 next();
-                parseExpr();
+                parseExprAndOr(); // a full expression: comparisons, && ||, ?:
                 if (Error.error)
                 {
                     next();
@@ -1895,7 +1895,7 @@ void Parser::parseStatement()
 
             current_node = current_node->addChild(nd);
             change_type.push_back(current_node);
-            parseExpr();
+            parseExprAndOr(); // a full expression: comparisons, && ||, ?:
             if (Error.error)
             {
                 return;
@@ -2021,7 +2021,7 @@ void Parser::parseStatement()
             current_node = current_node->addChild(nd);
             change_type.push_back(current_node);
             next();
-            parseExpr();
+            parseExprAndOr(); // a full expression: comparisons, && ||, ?:
             if (Error.error)
             {
                 return;
@@ -2089,7 +2089,7 @@ void Parser::parseStatement()
             current_node->type = __t.type;
             sav_t.pop_back();
 
-            parseExpr();
+            parseExprAndOr(); // a full expression: comparisons, && ||, ?:
             if (Error.error)
             {
                 return;
@@ -2175,7 +2175,7 @@ void Parser::parseStatement()
         nd._vartype = __int__;
         current_node = current_node->addChild(nd);
         change_type.push_back(current_node);
-        parseExpr();
+        parseExprAndOr(); // a full expression: comparisons, && ||, ?:
         RETURN_IF_ERROR
         change_type.pop_back();
         if (current_node->_vartype == __float__)
@@ -2637,7 +2637,7 @@ void Parser::parseStatement()
 
             current_node = current_node->addChild(nd);
             change_type.push_back(current_node);
-            parseExpr();
+            parseExprAndOr(); // a full expression: comparisons, && ||, ?:
 
             if (Error.error)
             {
@@ -3545,7 +3545,7 @@ void Parser::getVariable(bool isStore)
         nd._vartype = __none__;
         current_node = current_node->addChild(nd);
         change_type.push_back(current_node);
-        parseExpr();
+        parseExprAndOr(); // a full expression: comparisons, && ||, ?:
         if (Error.error)
         {
             next();
@@ -3578,7 +3578,7 @@ void Parser::getVariable(bool isStore)
                 nd._vartype = __none__;
                 current_node = current_node->addChild(nd);
                 change_type.push_back(current_node);
-                parseExpr();
+                parseExprAndOr(); // a full expression: comparisons, && ||, ?:
                 if (Error.error)
                 {
                     return;
@@ -4224,7 +4224,7 @@ void Parser::parseArguments()
     current_node = current_node->addChild(nd);
     change_type.push_back(current_node);
     // printf("lkklqdqsdksm excut dkqsd\r\n");
-    parseExpr();
+    parseExprAndOr(); // a full expression: comparisons, && ||, ?:
     // printf("lkklqdqsdksm excut dkqsd\r\n");
     if (Error.error)
     {
@@ -4255,7 +4255,7 @@ void Parser::parseArguments()
         nd._vartype = __none__;
         current_node = current_node->addChild(nd);
         change_type.push_back(current_node);
-        parseExpr();
+        parseExprAndOr(); // a full expression: comparisons, && ||, ?:
         if (Error.error)
         {
             return;

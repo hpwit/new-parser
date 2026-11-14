@@ -3,7 +3,8 @@
 // compiler emits for straight-line arithmetic + if/while/for control flow
 // in a single, non-recursive, call-free function: movi/mov/movr, add/sub/
 // mull/quou/quos/remu/and/or/neg/abs, addi, l32i/s32i/l16ui/l16si/s16i/
-// l8ui/s8i, ssl/sll/srl, extui, blt/bge/beq/bne, j, retw.n, entry (a no-op
+// l8ui/s8i, ssl/sll/srl, extui, blt/bge/beq/bne, beqz/bnez/bltz/bgez, j,
+// retw.n, entry (a no-op
 // here), and bare "label:" markers.
 //
 // It deliberately does NOT support call8/callExt (real Xtensa register
@@ -301,6 +302,26 @@ struct MiniXtensa
             if (taken)
             {
                 int target = findLabel(labelNames, labelPos, args.get(2));
+                if (target < 0)
+                {
+                    *error = "unresolved branch target";
+                    return false;
+                }
+                *pcInOut = target;
+                return true;
+            }
+        }
+        else if (strcmp(op, "beqz") == 0 || strcmp(op, "bnez") == 0 || strcmp(op, "bltz") == 0 || strcmp(op, "bgez") == 0)
+        {
+            // compare with zero: `?:` branches on its condition's value
+            int32_t a = readReg(args.get(0));
+            bool taken = (strcmp(op, "beqz") == 0 && a == 0) ||
+                         (strcmp(op, "bnez") == 0 && a != 0) ||
+                         (strcmp(op, "bltz") == 0 && a < 0) ||
+                         (strcmp(op, "bgez") == 0 && a >= 0);
+            if (taken)
+            {
+                int target = findLabel(labelNames, labelPos, args.get(1));
                 if (target < 0)
                 {
                     *error = "unresolved branch target";

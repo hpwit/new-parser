@@ -3804,6 +3804,26 @@ int main()
         "for (i=0;i<n;i++) { int t; t=a+b; a=b; b=t; } int fib; fib=a;}";
     runCorrectnessTest("fibonacci: fib(10) == 55", fibonacciScript, 60, 55);
 
+    // `?:` and bare comparisons as values, as in v1: in an assignment, an
+    // initializer, a return value or a call argument, the right-hand side
+    // is a full expression (comparisons, && ||, ?:), not only arithmetic --
+    // `t = x > 2 ? 1 : 2;` used to fail with "Expecting ;" (only the
+    // parenthesized form `(x > 2) ? 1 : 2` compiled). Each line appends one
+    // digit to r (second local: stack offset 60): 1 2 3 1 6 9.
+    static const char *ternaryValueScript =
+        "void main(){int x; int r; int t; x=3; r=0; "
+        "t = x > 2 ? 1 : 2; r = r*10 + t; "
+        "t = x < 2 ? 1 : 2; r = r*10 + t; "
+        "t = x == 3 && r > 0 ? 3 : 4; r = r*10 + t; "
+        "t = x > 2; r = r*10 + t; "
+        "t = x < 1 ? 5 : x < 5 ? 6 : 7; r = r*10 + t; "
+        "t = x != 3 || r < 0 ? 8 : 9; r = r*10 + t; }";
+    runCorrectnessTest("?: and comparisons as values: r == 123169", ternaryValueScript, 60, 123169);
+    runEquivalenceTest("optimized/unoptimized equivalence: ?: and comparisons as values", ternaryValueScript);
+    static const char *ternaryInitScript =
+        "void main(){int x; int r; x=7; int a = x > 5 ? 40 : 50; int b = x >= 8 ? 1 : 2; r = a + b; }";
+    runCorrectnessTest("?: in an initializer: r == 42", ternaryInitScript, 60, 42);
+
 
     // `else if` chain, with and without braces, ending in a plain else:
     // i=0 adds 1, i=1,2 add 10 each, i=3,4 add 100 each, i=5 adds 1000.

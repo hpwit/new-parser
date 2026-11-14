@@ -4,6 +4,22 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### ❓ `?:` and comparisons as values, as in v1
+
+```c
+int speed = boost > 0 ? 6 : 3;
+color = hp < 25 && blink ? RED : WHITE;
+ok = x > 2;                 // 1 or 0
+return a < b ? a : b;
+setLevel(n > 9 ? 9 : n);
+```
+
+The right side of an assignment, an initializer, a `return` value and a call argument only took arithmetic: a comparison, `&&` / `||`, or a `?:` whose condition is one, failed with `Expecting ;` (or `Expecting )`) unless put in parentheses (`(x > 2) ? 1 : 0`). They are now full expressions, as in v1 and C; `?:` keeps the lowest precedence and groups to the right. Host tests run the generated code (`r == 123169`, `r == 42`).
+
+### 🧹 No crash after a parse error in nested blocks
+
+A parse error deep inside `if` / `for` blocks freed part of the parse tree twice while cleaning up the failed compile (a use-after-free, then a corrupt node pool on the board). Each subtree is now freed once. Host test `runNestedErrorCleanupTest`.
+
 ### 🔁 Compiling again after an error
 
 A compile that failed kept what it had generated so far, so compiling the corrected script failed in turn, with `label @_helper(num) is already declared` for every function the broken script had defined before its error; only restarting the board helped. A failed `parseScript()` / `parseScriptToBinary()` now frees everything a good compile frees (the parser's state and the generated assembly), right after copying the error into `lastCompileError()`, which is the place to read it from. Host test `runRecompileAfterErrorTest`; the suite runs clean under AddressSanitizer. → [Showing the error your own way](README.md#showing-the-error-your-own-way)
