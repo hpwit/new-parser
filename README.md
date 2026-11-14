@@ -2189,6 +2189,7 @@ A game doesn't have to be compiled every time it starts. `parseScriptToBinary()`
 | `matouch/PrismBreak` | A brick breaker at 400x240: patterned bevelled bricks (silver take two hits, gold none), a scrolling diamond background, a metal-framed field, sparks, falling capsules (wider paddle, three balls, slower ball, a life), five layouts. Q D move the paddle, S stops it, Space serves. Plays itself until Space is pressed. |
 | `matouch/XenoWing` | A horizontal shoot'em up at 400x240: an organic manta ship over an alien world in five parallax layers (a ringed planet, mountains, a forest of strange trees, crystals, plants in front), waves of bio creatures, a boss, power-ups and spore bombs. The art is pixel art in flash, bound to the script as pointers. Plays itself until Space is pressed. |
 | `matouch/ChromaQuest` | Three grey worlds made from NASA photographs (the Moon with the Earth rising, Mount Sharp on Mars, Saturn) whose red, green and blue come back as a lantern drone catches the colour drops of the thieves it shoots: the script mixes each photograph's grey and colour, channel by channel, every frame. |
+| `matouch/Vault13H` | A first-person maze shooter in the VGA style: 320x240 in the 256 colours of the VGA default palette, each pixel 2x2, so 640x480 in the middle of the panel. Ray-cast textured walls, drones to shoot, gold, health and ammo, three looks (a keep, a crypt, a base). Everything is drawn by the script, no art files. |
 | `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing and ChromaQuest are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
 
 In every game, **Escape** gives the game up (Tetris ends it, the others go back to their demo; in the GameLauncher it goes back to the menu), and the **arrow keys** work as Z Q S D.
@@ -2338,6 +2339,28 @@ Writing it found a third compiler bug, fixed: `if (rand(400) == 0)`, with `rand`
 - **The game**: Lumo moves while a key is held (with the key-release hook of [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script)) and fires ahead of where it last went. Dust moths flutter over the Moon, dust devils sway on Mars, ice shards bounce around Saturn; each carries a colour the world still needs and fires grey bolts at Lumo. Drops hop out and fall gently; caught, they fill a gauge. Each world needs more drops than the last, then they come round again. Score, high score, lives; a demo until Space; Escape gives a game up.
 - **The art** is made by [tools/chroma_assets.py](examples/matouch/ChromaQuest/tools/chroma_assets.py) (the photographs, Lumo, the drops, the thieves, the splashes), 885 KB in flash, read through bound pointers like XenoWing's.
 - **The text** is an 8x8 font of its own, bold and rounded, drawn by [tools/font8.py](examples/matouch/ChromaQuest/tools/font8.py): each row of a character has its colour from a gradient (chrome, gold, fire, ice), over a dark shadow, in the style of the Amiga demos. The other games and the launcher's menu use the same font, each row a shade of the text's colour.
+
+#### Vault13H: a VGA maze shooter
+
+[matouch/Vault13H](examples/matouch/Vault13H) is a first-person shooter in the style of the early-90s VGA games: a 320x240 picture in the 256 colours of the VGA default palette (mode 13h), each pixel 2x2 on the panel, so the game fills 640x480 in the middle of the 800x480 screen with black bars on the sides. Drones guard a vault; reach the green EXIT panel. About 1600 lines of script, 24 KB of machine code, and no art at all: the palette, the textures, the sprites and the font are made by the script when it starts.
+
+<img src="examples/matouch/Vault13H/vault13h.gif" width="400" alt="Vault13H: the keep, the crypt and the base">
+
+*A drone shot down in the keep, the crypt's torches, the base up to the exit (rendered with a Python copy of the script's drawing code).*
+
+| | |
+| --- | --- |
+| <img src="examples/matouch/Vault13H/vault13h_start.png" width="400" alt="The title screen"> | <img src="examples/matouch/Vault13H/vault13h_keep.png" width="400" alt="Firing at a drone in the keep"> |
+| The title screen over the keep; 1 2 3 pick the look. | The keep: uneven grey stone, oak panels, a drone. |
+| <img src="examples/matouch/Vault13H/vault13h_crypt.png" width="400" alt="Under fire in the crypt"> | <img src="examples/matouch/Vault13H/vault13h_base.png" width="400" alt="The exit in the base"> |
+| The crypt: a drone firing, the red hurt border, health in red. | The base: brushed teal plates, a vent, the EXIT panel. |
+
+- **The palette** is the real VGA default one, rebuilt by the script: the 16 EGA colours, 16 greys, then 24 hues around the wheel in three intensities (bright, medium, dark) and three saturations. Its layout does the distance shading, as the games of the time did: the darker copy of a colour is 72 entries further, so `shadeTab[]` maps each colour to its copies at three distances, and the ceiling and floor bands are dithered where they meet.
+- **The walls** are ray-cast, one column of the view at a time through a 24x24 map: each column's 64 texels are shaded once, then stretched down the column, so every pixel of the view is written once a frame and nothing is cleared. The textures are generated: stones of uneven sizes and bricks, each with a bevel, grain and chips; wood with wavy grain, knots and nails; brushed metal with rivets and grime; cracks, soot and moss on worn variants of the main wall, which some map cells use.
+- **The sprites** (drones, wrecks, gold, health kits, ammo) are sorted far to near and clipped against the walls' depth per column. The drones see the player through the map, follow and fire; two hits bring one down.
+- **The keys**: Z forward, S back, Q and D turn (or the arrows), while held (with the key-release hook of [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script)); Space starts and fires; Escape quits.
+
+Writing it found and fixed two compiler issues: a parse error inside nested blocks (`hp[best]--;`, a form the language does not take) crashed the cleanup of the failed compile (part of the parse tree was freed twice), and `?:` or a comparison worked as a value only in parentheses (`(x > 2) ? 1 : 0`): `x > 2 ? 1 : 0`, `a && b ? x : y` and `y = x > 2;` now compile, as in v1.
 
 #### GameLauncher: games from the FFat partition
 
