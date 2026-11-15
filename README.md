@@ -2385,6 +2385,78 @@ esptool.py --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ff
 
 The launcher was run on the emulated ESP32-S3 with this image (a copy with no screen and the games built for a 400-pixel-wide frame buffer): the partition mounts, the four games are listed and read back byte for byte, Tetris, MazeChase and PrismBreak load in a few milliseconds, play, and Escape brings the menu back. NeonRacer does not fit there: the emulator has no PSRAM, so its 192 KB frame buffer leaves about 96 KB of internal RAM, short of what the racer's code and globals need beside the file; on the board the frame buffers are in PSRAM. The racer itself was run from the same binary on the emulator.
 
+### On the Guition ESP32-4848S040: the games on a touch screen
+
+The examples in [examples/guiton](examples/guiton) are the games above on the **Guition ESP32-4848S040**, a 4-inch **480x480** RGB touch screen (ST7701S panel, GT911 touch controller) with an ESP32-S3 (16MB flash, 8MB PSRAM). There is no keyboard: the controls are on the screen. The scripts are the matouch ones; only the frame buffer's width changes (480 instead of 800).
+
+| | |
+| --- | --- |
+| <img src="examples/guiton/Tetris/guiton_tetris.png" width="320" alt="Tetris on the 480x480 screen"> | <img src="examples/guiton/XenoWing/guiton_xenowing.png" width="320" alt="XenoWing and its touch pad"> |
+| Tetris, laid out again for a square screen; LEFT held. | XenoWing over its touch pad. |
+| <img src="examples/guiton/NeonRacer/guiton_neonracer.png" width="320" alt="NeonRacer and its touch pad"> | <img src="examples/guiton/Vault13H/guiton_vault13h.png" width="320" alt="Vault13H and its touch pad"> |
+| NeonRacer: steering left, held. | Vault13H, its view 1.5 times larger. |
+
+*The games' frames from the emulated ESP32-S3 (the demos playing; Vault13H's from its matouch run), scaled as the sketches scale them, over the pads drawn by the sketches' own code.*
+
+- **The board**: each sketch has `Guition4848S040.h`, its LovyanGFX configuration: LovyanGFX's own `Panel_ST7701_guition_esp32_4848S040` (the ST7701S is set up over a 3-wire SPI on pins 39, 48, 47), the 16 colour lines, the sync timings, a 12 MHz pixel clock, the backlight on GPIO 38 and the GT911 on I2C (SDA 19, SCL 45). It uses the same modified `Bus_RGB` driver as the matouch boards; the driver now takes the screen's height from the panel instead of 480.
+- **The layout**: the games were written for 400x240 (an 800x480 panel at pixel size 2). Pixel size 2 gives only 240x240 here, too narrow for them, and the panel's driver only scales by whole numbers. So each script draws its 400x240 picture into a buffer of its own (`led16` is bound to it, in PSRAM), and the sketch's `show16()` copies it **1.2 times larger** across the screen's width, 480x288: each five pixels become six, each five rows six. The 192 rows under the game are a touch pad: the controls never cover the game, no button has to be transparent. Vault13H's 3D view is 320x240, so it is scaled **1.5 times**, to 480x360, with a pad of 120 rows and smaller buttons. Tetris is the exception: its 240x240 version fits pixel size 2, so it is laid out again (the well left, the score and five buttons right) and its script draws the buttons itself.
+- **The same code**: only the frame buffer's width changes in the scripts (480 instead of 800). `setPixelsize(2)`, which every game calls, keeps the size at 1; the scaling costs the sketch about a frame buffer's copy per frame.
+
+**How the touches become keys.** The scripts already read a keyboard through `readKey()`: a queue the USB keyboard fills, read once per frame by the script. The touch pad fills the same queue with the same keys, so no script had to change. In each sketch, `TouchPad.h` does it:
+
+1. **Reading**: a FreeRTOS task on core 0 asks the GT911 for up to three touch points (`lcd.getTouchRaw(points, 3)`) every 16 ms. The script runs on core 1 and never waits for the touch controller.
+2. **Which button**: each point is tested against the sketch's buttons, rectangles in the pad (480x240) with a key and a mode:
+
+   ```cpp
+   const PadButton padButtons[] = {
+     {4, 64, 140, 172, 'q', PAD_HOLD_STOP, "<"},
+     {150, 64, 140, 172, 'd', PAD_HOLD_STOP, ">"},
+     {300, 64, 176, 172, ' ', PAD_TAP, "SERVE"},
+     {376, 4, 100, 52, 27, PAD_TAP, "QUIT"},
+   };
+   ```
+3. **Keys, from what changed since the last read**: a button just touched sends its key; then, by its mode,
+
+   | Mode | While held | When let go | Used by |
+   | --- | --- | --- | --- |
+   | `PAD_TAP` | nothing | nothing | START, SERVE, BOMB, FIRE, QUIT, MazeChase's arrows |
+   | `PAD_REPEAT` | the key again after 150 ms, then every 40 ms, as a keyboard repeats | nothing | NeonRacer's steering and brake |
+   | `PAD_HOLD` | nothing | the key + 128, the release the games know from the keyboard's key-release hook | XenoWing, ChromaQuest, Vault13H: moving while held |
+   | `PAD_HOLD_STOP` | nothing | `s` when no other such button is held | PrismBreak: the paddle stops when the finger lifts |
+
+   Two fingers work: XenoWing's ship can move and drop a bomb at once.
+4. **Showing it**: the buttons held are a bit mask, `padHeld`. The sketch's `show16()` calls `padShow()` before each frame is shown: it redraws the pad (a dark background, the buttons, bright while held, their arrows and words in the games' 8x8 font) only when what is held changed since that frame buffer last showed it (there are two buffers), so a frame costs nothing when the fingers don't move. Where the pad starts is `PAD_Y`, set by the sketch before it includes `TouchPad.h` (288, or 360 for Vault13H). Tetris does the same with its own buttons: the sketch tests the touches, and the script, which draws the buttons, reads the held mask through a bound variable, `touchHeld`.
+
+| Example | Controls |
+| --- | --- |
+| [guiton/Tetris](examples/guiton/Tetris) | TURN, DROP; LEFT, DOWN, RIGHT repeat while held. TURN starts a new game after a game over. |
+| [guiton/MazeChase](examples/guiton/MazeChase) | The arrows turn the orb; START; QUIT. |
+| [guiton/NeonRacer](examples/guiton/NeonRacer) | Left and right steer, repeated while held; BRAKE; START; QUIT. |
+| [guiton/PrismBreak](examples/guiton/PrismBreak) | Left and right move the paddle while held; SERVE; QUIT. |
+| [guiton/XenoWing](examples/guiton/XenoWing) | The arrows move the ship while held; BOMB; QUIT. |
+| [guiton/ChromaQuest](examples/guiton/ChromaQuest) | The arrows move Lumo while held; START; QUIT. |
+| [guiton/Vault13H](examples/guiton/Vault13H) | The arrows walk and turn while held; FIRE; 1 2 3 pick the look on the title screen; QUIT. |
+| [guiton/GameLauncher](examples/guiton/GameLauncher) | All seven, from binaries on the FFat partition: touch a game to play it, QUIT comes back to the menu (in Tetris, touch the TETRIS title). |
+
+On the board, compiling takes 13.5 s for Tetris, 36.4 s for PrismBreak and 86.3 s for Vault13H; from the launcher, a game loads in 2 to 4 ms.
+
+**The light.** The backlight is on GPIO 38, driven by PWM (`Light_PWM` in `Guition4848S040.h`, at 1 kHz: the board's backlight driver doesn't follow LovyanGFX's usual 44.1 kHz, and any level under 255 left the screen black), so `lcd.setBrightness(level)` sets it, from 0 (off) to 255. Every guiton sketch binds it for its script:
+
+```c
+setBrightness(64);     // a quarter: a dark scene, a pause screen
+setBrightness(255);    // full again
+```
+
+(`void setBrightness(int level)`, the level kept between 0 and 255.) In the launcher's menu, - and + under the games step the light through 16 levels, each about 10% under the one before (as the eye sees light), from 255 down to 48 (at 31 the backlight driver already turns the screen black); the launcher starts at full light every time, and puts the menu's level back when a game that changed it ends.
+
+**The launcher.** [guiton/GameLauncher](examples/guiton/GameLauncher) works as the matouch one (QUIT sends Escape, the game's task stops in `readKey()` and is freed), with a menu to touch, a row per game. Each game is shown as in its own sketch: the launcher knows them by their file's name, and switches the scaling, the pad's height and the buttons when one starts (`LauncherPad.h` is `TouchPad.h` with these set at run time). Its `data` folder holds the seven games compiled against the launcher's names; they go on the partition as for the matouch launcher:
+
+```sh
+python $IDF_PATH/components/fatfs/wl_fatfsgen.py --output_file ffat.img \
+    --partition_size 0x9E0000 --sector_size 4096 --long_name_support examples/guiton/GameLauncher/data
+esptool --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ffat.img
+``` Board: *ESP32S3 Dev Module*, PSRAM *OPI PSRAM*, Flash Size *16MB*, Partition Scheme *16M Flash (3MB APP/9.9MB FATFS)* (XenoWing and ChromaQuest carry their art in flash).
+
 ---
 
 # Known limitations

@@ -1,0 +1,1387 @@
+// MazeChase on the Guition ESP32-4848S040, a 4-inch 480x480 touch screen: the
+// script of examples/matouch/MazeChase, unchanged but for the frame buffer's
+// width, shown 1.2 times larger across the screen's width (480x288), with a
+// touch pad under it (TouchPad.h):
+//   the arrows turn the orb (as Z Q S D), START plays (Space), QUIT gives the
+//   game up (Escape).
+//
+// Needs the modified LovyanGFX Bus_RGB driver (double frame buffer with
+// show(), _frame_buffer, pixel_size, offset) and FastLED (CHSV).
+// Guition4848S040.h is the panel configuration.
+//
+// Board: ESP32S3 Dev Module, PSRAM "OPI PSRAM", Flash Size 16MB,
+// Partition Scheme "16M Flash (3MB APP/9.9MB FATFS)".
+#include "Guition4848S040.h"
+#include "FastLED.h"
+#include "script_executable.h"
+#include "binding.h"
+
+LGFX lcd;
+uint16_t *frame_buffer;
+// where the script draws: its own 400x240 picture (480 wide), in PSRAM;
+// show16() scales it into the frame buffer
+uint16_t *gameBuffer;
+static uint32_t _sizex = 400;
+static uint32_t _sizey = 240;
+
+// the game 1.2 times larger: 480x288 on the screen, the pad under it
+#define PAD_Y 288
+#define PAD_SIDES 0
+#include "TouchPad.h"
+
+// the buttons, under the game (480x192, see TouchPad.h)
+const PadButton padButtons[] = {
+  {85, 4, 80, 58, 'z', PAD_TAP, "^"},
+  {4, 64, 80, 64, 'q', PAD_TAP, "<"},
+  {166, 64, 80, 64, 'd', PAD_TAP, ">"},
+  {85, 130, 80, 58, 's', PAD_TAP, "v"},
+  {290, 64, 186, 124, ' ', PAD_TAP, "START"},
+  {376, 4, 100, 52, 27, PAD_TAP, "QUIT"},
+};
+const int padButtonCount = sizeof(padButtons) / sizeof(padButtons[0]);
+
+// HSV -> RGB565, byte swapped like LovyanGFX's frame buffer
+static uint16_t hsv16(uint8_t h, uint8_t s, uint8_t v) {
+  CRGB d = CHSV(h, s, v);
+  uint16_t j = lcd.color565(d.red, d.green, d.blue);
+  return ((j & 0xff) << 8) | ((j & 0xFF00) >> 8);
+}
+
+// the script's 400x240 picture, 1.2 times larger, into the frame buffer's top
+// 480x288: each five pixels become six (the first twice), each five rows six
+static void scaleGame(uint16_t *fb) {
+  for (int dy = 0; dy < PAD_Y; dy++) {
+    uint16_t *dst = fb + dy * 480;
+    if (dy % 6 == 1) {
+      memcpy(dst, dst - 480, 480 * 2);
+      continue;
+    }
+    const uint16_t *src = gameBuffer + (dy * 5 / 6) * 480;
+    for (int sx = 0; sx < 400; sx += 5) {
+      dst[0] = src[sx];
+      dst[1] = src[sx];
+      dst[2] = src[sx + 1];
+      dst[3] = src[sx + 2];
+      dst[4] = src[sx + 3];
+      dst[5] = src[sx + 4];
+      dst += 6;
+    }
+  }
+}
+
+void show16() {
+  scaleGame(frame_buffer);
+  padShow(frame_buffer);
+  lcd._bus_instance.show();
+  frame_buffer = (uint16_t *)lcd._bus_instance._frame_buffer;
+  lcd._panel_instance.resetWriteBuffer();
+}
+
+void clearscreen() {
+  memset(frame_buffer, 0, 480 * 480 * 2);
+  memset(gameBuffer, 0, 480 * 240 * 2);
+  padDrawn[0] = padDrawn[1] = 0xFFFFFFFF;
+}
+
+// the games ask for pixel size 2 (400x240 on 800x480); here the screen is
+// 480x480 and show16() scales the game, so the size stays 1
+void setPixelsize(int h) {
+  clearscreen();
+  show16();
+  clearscreen();
+  lcd._bus_instance.offset = 0;
+  lcd._bus_instance.pixel_size = 1;
+}
+
+uint32_t scriptMillis() {
+  return millis();
+}
+
+uint32_t scriptRand(uint32_t n) {
+  return esp_random() % n;
+}
+
+// the backlight, 0 (off) to 255: a script can dim the screen
+void scriptSetBrightness(int level) {
+  lcd.setBrightness(level < 0 ? 0 : level > 255 ? 255 : level);
+}
+
+char mazeChase[] = R"EOF(
+// the frame buffer's width, whatever the pixel size
+#define STRIDE 480
+// the maze: 27 x 25 tiles of 8 pixels, its top-left corner on the screen
+#define W 27
+#define H 25
+#define MW 216
+#define MX 92
+#define MY 20
+// a step is 1/60 s
+#define STEP_MS 16
+
+// tiles: 0 path, 1 wall, 2 dot, 3 power cell, 4 base door, 5 inside the
+// base, 6 tunnel, 7 wall outside the maze
+uint8_t mazeStart[675] = {
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+   1, 3, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 3, 1,
+   1, 2, 1, 1, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 1, 2, 1,
+   1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+   1, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1,
+   1, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 1,
+   1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 2, 1, 2, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1,
+   7, 7, 7, 7, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 7, 7, 7, 7,
+   7, 7, 7, 7, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 2, 1, 7, 7, 7, 7,
+   1, 1, 1, 1, 1, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 1, 1, 1, 1, 1,
+   1, 1, 1, 1, 1, 2, 1, 1, 1, 0, 1, 1, 1, 4, 1, 1, 1, 0, 1, 1, 1, 2, 1, 1, 1, 1, 1,
+   6, 6, 6, 6, 6, 2, 0, 0, 0, 0, 1, 5, 5, 5, 5, 5, 1, 0, 0, 0, 0, 2, 6, 6, 6, 6, 6,
+   1, 1, 1, 1, 1, 2, 1, 1, 1, 0, 1, 5, 5, 5, 5, 5, 1, 0, 1, 1, 1, 2, 1, 1, 1, 1, 1,
+   1, 1, 1, 1, 1, 2, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 2, 1, 1, 1, 1, 1,
+   7, 7, 7, 7, 1, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 1, 7, 7, 7, 7,
+   7, 7, 7, 7, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 2, 1, 7, 7, 7, 7,
+   7, 7, 7, 7, 1, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 1, 7, 7, 7, 7,
+   1, 2, 2, 2, 2, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 2, 2, 2, 2, 2, 1,
+   1, 2, 1, 1, 1, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1, 1, 1, 2, 1,
+   1, 3, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 3, 1,
+   1, 1, 1, 2, 1, 2, 1, 2, 1, 1, 1, 1, 2, 1, 2, 1, 1, 1, 1, 2, 1, 2, 1, 2, 1, 1, 1,
+   1, 2, 2, 2, 2, 2, 1, 2, 2, 2, 1, 1, 2, 1, 2, 1, 1, 2, 2, 2, 1, 2, 2, 2, 2, 2, 1,
+   1, 2, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 2, 1,
+   1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+};
+uint8_t maze[675];
+uint8_t edges[675];        // walls: which sides face a path (1 up, 2 left, 4 down, 8 right)
+
+int dxs[4] = {0, -1, 0, 1};  // up, left, down, right
+int dys[4] = {-1, 0, 1, 0};
+
+// an 8x8 font, bold and rounded: 0-9, A-Z, then . : / and +; 8 rows a
+// character, the leftmost pixel in the highest bit (ChromaQuest/tools/font8.py)
+uint8_t font8[320] = {126, 199, 207, 219, 243, 227, 126, 0, 24, 56, 120, 24, 24, 24, 126, 0, 126, 195, 6, 28, 112, 192, 255, 0, 126, 195, 3, 62, 3, 195, 126, 0, 14, 30, 54, 102, 255, 6, 6, 0, 255, 192, 254, 3, 3, 195, 126, 0, 62, 96, 192, 254, 195, 195, 126, 0, 255, 195, 6, 12, 24, 24, 24, 0, 126, 195, 195, 126, 195, 195, 126, 0, 126, 195, 195, 127, 3, 6, 124, 0, 60, 102, 195, 195, 255, 195, 195, 0, 254, 195, 195, 254, 195, 195, 254, 0, 126, 195, 192, 192, 192, 195, 126, 0, 252, 198, 195, 195, 195, 198, 252, 0, 255, 192, 192, 252, 192, 192, 255, 0, 255, 192, 192, 252, 192, 192, 192, 0, 126, 195, 192, 207, 195, 195, 126, 0, 195, 195, 195, 255, 195, 195, 195, 0, 126, 24, 24, 24, 24, 24, 126, 0, 63, 6, 6, 6, 198, 198, 124, 0, 198, 204, 216, 240, 216, 204, 198, 0, 192, 192, 192, 192, 192, 192, 255, 0, 195, 231, 255, 219, 195, 195, 195, 0, 195, 227, 243, 219, 207, 199, 195, 0, 126, 195, 195, 195, 195, 195, 126, 0, 254, 195, 195, 254, 192, 192, 192, 0, 126, 195, 195, 195, 203, 198, 123, 0, 254, 195, 195, 254, 204, 198, 195, 0, 126, 195, 192, 126, 3, 195, 126, 0, 255, 24, 24, 24, 24, 24, 24, 0, 195, 195, 195, 195, 195, 195, 126, 0, 195, 195, 195, 195, 102, 60, 24, 0, 195, 195, 195, 219, 255, 231, 195, 0, 195, 102, 60, 24, 60, 102, 195, 0, 195, 195, 102, 60, 24, 24, 24, 0, 255, 6, 12, 24, 48, 96, 255, 0, 0, 0, 0, 0, 0, 192, 192, 0, 0, 192, 192, 0, 0, 192, 192, 0, 3, 6, 12, 24, 48, 96, 192, 0, 0, 24, 24, 126, 24, 24, 0, 0};
+// how each row shades the text's colour, in sixteenths: scaled by rowMul,
+// then lifted toward white by rowLift; a dark band, then a bright edge
+int rowMul[8] = {16, 16, 16, 7, 16, 15, 12, 9};
+int rowLift[8] = {10, 6, 2, 0, 5, 0, 0, 0};
+// and the small 3x5 font, 0-9 then A-Z: 5 rows of 3 bits, the top row first
+int tiny[36] = {31599, 11415, 29671, 29647, 23497, 31183, 31215, 29330, 31727, 31695,
+                11245, 27566, 14627, 27502, 31143, 31140, 14699, 23533, 29847, 4714,
+                23861, 18727, 24557, 27501, 11114, 27556, 11123, 27565, 14478, 29842,
+                23407, 23402, 23549, 23213, 23186, 29351};
+
+// the player: pixel position in the maze (the centre of a tile is at 4, 4)
+int px;
+int py;
+int pdir;
+int wantDir;
+int pmoving;
+int pacc;
+int ppulse;
+
+// the four chasers: crimson rushes at the player, violet aims ahead of it,
+// teal flanks it (the side away from crimson), gold chases from afar and
+// drifts at random when close
+int gx[4];
+int gy[4];
+int gdir[4];
+int gstate[4];             // 0 waiting in the base, 1 leaving it, 2 out, 3 eyes going home, 4 entering
+int gacc[4];
+int gfright[4];
+int greverse[4];
+int gbob[4];
+int ghue[4] = {0, 200, 128, 40};
+int gcornerX[4] = {25, 1, 26, 0};
+int gcornerY[4] = {-3, -3, 27, 27};
+int greleaseAt[4] = {0, 60, 240, 420};
+
+// game state
+int score;
+int high;
+int lives;
+int level;
+int dotsLeft;
+int dotsEaten;
+int phase;                 // 0 get set, 1 playing, 2 caught, 3 maze cleared, 4 game over, 5 short pause
+int phaseTimer;
+int playTime;
+int modeIndex;
+int modeTimer;
+int scatter;
+int frightTimer;
+int eatChain;
+int bonusTimer;
+int popupTimer;
+int popupX;
+int popupY;
+int popupValue;
+int demo;
+int frame;
+// waves of corner and chase, in steps; the last one never ends
+int modeLength[5] = {300, 1500, 300, 1500, 0};
+
+// colours
+uint16_t black;
+uint16_t white;
+uint16_t grey;
+uint16_t wallFill;
+uint16_t wallEdge;
+uint16_t wallGlow;
+uint16_t dotColor;
+uint16_t doorColor;
+uint16_t orbColor;
+uint16_t orbDark;
+uint16_t orbLight;
+uint16_t frightBody;
+uint16_t frightDark;
+uint16_t red;
+uint16_t green;
+uint16_t brown;
+uint16_t yellow;
+uint16_t cyan;
+uint16_t gbody[4];
+uint16_t glight[4];
+uint16_t gdark[4];
+uint16_t title[9];
+int clipX0;
+int clipX1;
+
+// the search the demo player uses
+int bfsQueue[675];
+int bfsFirst[675];
+int bfsMark[675];
+int bfsStamp;
+
+int tileAt(int c, int r)
+{
+   if (r < 0 || r >= H)
+      return 1;
+   c = (c + W) % W;
+   return maze[r * W + c];
+}
+
+// a tile the player and the chasers out of the base can walk on
+bool walkable(int t)
+{
+   if (t == 0 || t == 2 || t == 3 || t == 6)
+      return true;
+   return false;
+}
+
+bool centred(int x, int y)
+{
+   if (x % 8 == 4 && y % 8 == 4)
+      return true;
+   return false;
+}
+
+int speedOf(int base)
+{
+   int s = base + (level - 1) * 4;
+   if (s > base + 16)
+      s = base + 16;
+   return s;
+}
+
+void resetActors()
+{
+   px = 13 * 8 + 4;
+   py = 19 * 8 + 4;
+   pdir = 1;
+   wantDir = 1;
+   pmoving = 0;
+   pacc = 0;
+   gx[0] = 13 * 8 + 4;
+   gy[0] = 9 * 8 + 4;
+   gx[1] = 13 * 8 + 4;
+   gx[2] = 11 * 8 + 4;
+   gx[3] = 15 * 8 + 4;
+   for (int i = 0; i < 4; i++)
+   {
+      if (i > 0)
+         gy[i] = 96;
+      gstate[i] = 0;
+      gdir[i] = 1;
+      gacc[i] = 0;
+      gfright[i] = 0;
+      greverse[i] = 0;
+      gbob[i] = 1;
+      if (i == 1)
+         gbob[i] = -1;
+   }
+   gstate[0] = 2;
+   frightTimer = 0;
+   playTime = 0;
+   modeIndex = 0;
+   modeTimer = 0;
+   scatter = 1;
+   bonusTimer = 0;
+   popupTimer = 0;
+   phase = 0;
+   phaseTimer = 120;
+}
+
+void resetMaze()
+{
+   dotsLeft = 0;
+   for (int i = 0; i < W * H; i++)
+   {
+      maze[i] = mazeStart[i];
+      if (maze[i] == 2 || maze[i] == 3)
+         dotsLeft++;
+   }
+   dotsEaten = 0;
+}
+
+void newGame(int asDemo)
+{
+   demo = asDemo;
+   score = 0;
+   lives = 3;
+   level = 1;
+   resetMaze();
+   resetActors();
+}
+
+void frighten()
+{
+   int t = 360 - (level - 1) * 60;
+   if (t < 120)
+      t = 120;
+   frightTimer = t;
+   eatChain = 0;
+   for (int i = 0; i < 4; i++)
+      if (gstate[i] == 1 || gstate[i] == 2)
+      {
+         gfright[i] = 1;
+         if (gstate[i] == 2)
+            greverse[i] = 1;
+      }
+}
+
+void addScore(int n)
+{
+   score = score + n;
+   if (score > high)
+      high = score;
+}
+
+void eat(int c, int r)
+{
+   int i = r * W + c;
+   int t = maze[i];
+   if (t == 2 || t == 3)
+   {
+      maze[i] = 0;
+      dotsLeft--;
+      dotsEaten++;
+      if (t == 2)
+         addScore(10);
+      else
+      {
+         addScore(50);
+         frighten();
+      }
+      if (dotsEaten == 70 || dotsEaten == 170)
+         bonusTimer = 570;
+      if (dotsLeft == 0)
+      {
+         phase = 3;
+         phaseTimer = 150;
+      }
+   }
+   if (bonusTimer > 0 && c == 13 && r == 16)
+   {
+      bonusTimer = 0;
+      addScore(100 * level);
+      popupTimer = 90;
+      popupX = px;
+      popupY = py;
+      popupValue = 100 * level;
+   }
+}
+
+void playerStep()
+{
+   int c = px / 8;
+   int r = py / 8;
+   if (centred(px, py))
+   {
+      if (walkable(tileAt(c + dxs[wantDir], r + dys[wantDir])))
+         pdir = wantDir;
+      if (!walkable(tileAt(c + dxs[pdir], r + dys[pdir])))
+      {
+         pmoving = 0;
+         return;
+      }
+      pmoving = 1;
+   }
+   else if (wantDir == (pdir + 2) % 4)
+      pdir = wantDir;
+   px = (px + dxs[pdir] + MW) % MW;
+   py = py + dys[pdir];
+   ppulse++;
+   if (centred(px, py))
+      eat(px / 8, py / 8);
+}
+
+int chooseDir(int i, int c, int r)
+{
+   int tx = gcornerX[i];
+   int ty = gcornerY[i];
+   int pc = px / 8;
+   int pr = py / 8;
+   bool wander = false;
+   if (gfright[i])
+      wander = true;
+   if (gstate[i] == 3)
+   {
+      tx = 13;
+      ty = 9;
+      wander = false;
+   }
+   else if (!wander && !scatter)
+   {
+      tx = pc;
+      ty = pr;
+      if (i == 1)
+      {
+         tx = pc + dxs[pdir] * 3;
+         ty = pr + dys[pdir] * 3;
+      }
+      if (i == 2)
+      {
+         tx = pc * 2 - gx[0] / 8;
+         ty = pr * 2 - gy[0] / 8;
+      }
+      if (i == 3 && (c - pc) * (c - pc) + (r - pr) * (r - pr) <= 36)
+         wander = true;
+   }
+   int back = (gdir[i] + 2) % 4;
+   int best = -1;
+   int bestD = 1000000;
+   int first = 0;
+   if (wander)
+      first = rand(4);
+   for (int k = 0; k < 4; k++)
+   {
+      int d = (first + k) % 4;
+      if (d != back && walkable(tileAt(c + dxs[d], r + dys[d])))
+      {
+         int ex = c + dxs[d] - tx;
+         int ey = r + dys[d] - ty;
+         int dd = ex * ex + ey * ey;
+         if (wander)
+            dd = k;
+         if (dd < bestD)
+         {
+            bestD = dd;
+            best = d;
+         }
+      }
+   }
+   if (best < 0)
+      best = back;
+   return best;
+}
+
+void chaserStep(int i)
+{
+   int s = gstate[i];
+   if (s == 0)
+   {
+      gy[i] = gy[i] + gbob[i];
+      if (gy[i] <= 93 || gy[i] >= 99)
+         gbob[i] = -gbob[i];
+      return;
+   }
+   if (s == 1)
+   {
+      if (gx[i] < 108)
+         gx[i] = gx[i] + 1;
+      else if (gx[i] > 108)
+         gx[i] = gx[i] - 1;
+      else if (gy[i] > 76)
+         gy[i] = gy[i] - 1;
+      else
+      {
+         gstate[i] = 2;
+         gdir[i] = 1;
+      }
+      return;
+   }
+   if (s == 4)
+   {
+      if (gy[i] < 96)
+         gy[i] = gy[i] + 1;
+      else
+      {
+         gstate[i] = 1;
+         gfright[i] = 0;
+      }
+      return;
+   }
+   if (centred(gx[i], gy[i]))
+   {
+      int c = gx[i] / 8;
+      int r = gy[i] / 8;
+      if (s == 3 && c == 13 && r == 9)
+      {
+         gstate[i] = 4;
+         return;
+      }
+      if (greverse[i])
+      {
+         gdir[i] = (gdir[i] + 2) % 4;
+         greverse[i] = 0;
+      }
+      else
+         gdir[i] = chooseDir(i, c, r);
+   }
+   gx[i] = (gx[i] + dxs[gdir[i]] + MW) % MW;
+   gy[i] = gy[i] + dys[gdir[i]];
+}
+
+int chaserSpeed(int i)
+{
+   int s = gstate[i];
+   if (s == 3 || s == 4)
+      return 200;
+   if (s == 0 || s == 1)
+      return 50;
+   if (tileAt(gx[i] / 8, gy[i] / 8) == 6)
+      return 40;
+   if (gfright[i])
+      return 50;
+   return speedOf(75);
+}
+
+// a tile next to a chaser that can catch the player
+bool nearDanger(int c, int r)
+{
+   for (int i = 0; i < 4; i++)
+      if ((gstate[i] == 1 || gstate[i] == 2) && !gfright[i])
+      {
+         int dc = c - gx[i] / 8;
+         if (dc < 0)
+            dc = -dc;
+         if (dc > W / 2)
+            dc = W - dc;
+         int dr = r - gy[i] / 8;
+         if (dr < 0)
+            dr = -dr;
+         if (dc + dr <= 3)
+            return true;
+      }
+   return false;
+}
+
+bool worthGoing(int c, int r)
+{
+   int t = maze[r * W + c];
+   if (t == 2 || t == 3)
+      return true;
+   if (bonusTimer > 60 && c == 13 && r == 16)
+      return true;
+   for (int i = 0; i < 4; i++)
+      if (gfright[i] && gstate[i] == 2 && gx[i] / 8 == c && gy[i] / 8 == r && frightTimer > 60)
+         return true;
+   return false;
+}
+
+// the demo player: the first step of the shortest way to something to eat
+// that keeps away from the chasers
+void autopilot()
+{
+   int pc = px / 8;
+   int pr = py / 8;
+   bfsStamp++;
+   int head = 0;
+   int tail = 0;
+   bfsMark[pr * W + pc] = bfsStamp;
+   for (int d = 0; d < 4; d++)
+   {
+      int nc = (pc + dxs[d] + W) % W;
+      int nr = pr + dys[d];
+      if (walkable(tileAt(nc, nr)) && !nearDanger(nc, nr))
+      {
+         int n = nr * W + nc;
+         bfsMark[n] = bfsStamp;
+         bfsFirst[n] = d;
+         bfsQueue[tail] = n;
+         tail++;
+      }
+   }
+   while (head < tail)
+   {
+      int n = bfsQueue[head];
+      head++;
+      int c = n % W;
+      int r = n / W;
+      if (worthGoing(c, r))
+      {
+         wantDir = bfsFirst[n];
+         return;
+      }
+      for (int d = 0; d < 4; d++)
+      {
+         int nc = (c + dxs[d] + W) % W;
+         int nr = r + dys[d];
+         if (walkable(tileAt(nc, nr)))
+         {
+            int m = nr * W + nc;
+            if (bfsMark[m] != bfsStamp && !nearDanger(nc, nr))
+            {
+               bfsMark[m] = bfsStamp;
+               bfsFirst[m] = bfsFirst[n];
+               bfsQueue[tail] = m;
+               tail++;
+            }
+         }
+      }
+   }
+   // cornered: the way that leads farthest from the nearest chaser
+   int best = pdir;
+   int bestD = -1;
+   for (int d = 0; d < 4; d++)
+   {
+      int nc = (pc + dxs[d] + W) % W;
+      int nr = pr + dys[d];
+      if (walkable(tileAt(nc, nr)))
+      {
+         int nearest = 10000;
+         for (int i = 0; i < 4; i++)
+            if (gstate[i] == 2 && !gfright[i])
+            {
+               int ex = nc - gx[i] / 8;
+               int ey = nr - gy[i] / 8;
+               if (ex * ex + ey * ey < nearest)
+                  nearest = ex * ex + ey * ey;
+            }
+         if (nearest > bestD)
+         {
+            bestD = nearest;
+            best = d;
+         }
+      }
+   }
+   wantDir = best;
+}
+
+void checkCatch()
+{
+   for (int i = 0; i < 4; i++)
+   {
+      int dx = gx[i] - px;
+      if (dx < 0)
+         dx = -dx;
+      if (dx > MW / 2)
+         dx = MW - dx;
+      int dy = gy[i] - py;
+      if (dy < 0)
+         dy = -dy;
+      if (dx < 5 && dy < 5 && gstate[i] == 2)
+      {
+         if (gfright[i])
+         {
+            gfright[i] = 0;
+            gstate[i] = 3;
+            int v = 200;
+            for (int k = 0; k < eatChain; k++)
+               v = v * 2;
+            eatChain++;
+            addScore(v);
+            popupTimer = 60;
+            popupX = gx[i];
+            popupY = gy[i];
+            popupValue = v;
+            phase = 5;
+            phaseTimer = 30;
+            return;
+         }
+         phase = 2;
+         phaseTimer = 100;
+         return;
+      }
+   }
+}
+
+// one step of 1/60 s
+void step()
+{
+   if (popupTimer > 0)
+      popupTimer--;
+   if (phase != 1)
+   {
+      phaseTimer--;
+      if (phaseTimer > 0)
+         return;
+      if (phase == 0 || phase == 5)
+         phase = 1;
+      else if (phase == 2)
+      {
+         lives--;
+         if (lives == 0)
+         {
+            phase = 4;
+            phaseTimer = 300;
+            return;
+         }
+         resetActors();
+      }
+      else if (phase == 3)
+      {
+         level++;
+         resetMaze();
+         resetActors();
+      }
+      else if (phase == 4)
+         newGame(1);
+      return;
+   }
+   playTime++;
+   for (int i = 1; i < 4; i++)
+      if (gstate[i] == 0 && playTime >= greleaseAt[i])
+         gstate[i] = 1;
+   if (frightTimer > 0)
+   {
+      frightTimer--;
+      if (frightTimer == 0)
+         for (int i = 0; i < 4; i++)
+            gfright[i] = 0;
+   }
+   else if (modeLength[modeIndex] > 0)
+   {
+      modeTimer++;
+      if (modeTimer >= modeLength[modeIndex])
+      {
+         modeTimer = 0;
+         modeIndex++;
+         scatter = 1 - scatter;
+         for (int i = 0; i < 4; i++)
+            if (gstate[i] == 2)
+               greverse[i] = 1;
+      }
+   }
+   if (bonusTimer > 0)
+      bonusTimer--;
+   if (demo && centred(px, py))
+      autopilot();
+   int sp = speedOf(80);
+   if (frightTimer > 0)
+      sp = speedOf(90);
+   pacc = pacc + sp;
+   while (pacc >= 100 && phase == 1)
+   {
+      pacc = pacc - 100;
+      playerStep();
+   }
+   for (int i = 0; i < 4; i++)
+   {
+      gacc[i] = gacc[i] + chaserSpeed(i);
+      while (gacc[i] >= 100)
+      {
+         gacc[i] = gacc[i] - 100;
+         chaserStep(i);
+      }
+   }
+   if (phase == 1)
+      checkCatch();
+}
+
+void handleKey(int k)
+{
+   if (k == 27)
+   {
+      // Escape: the game is given up, back to the demo
+      if (!demo)
+         newGame(1);
+      return;
+   }
+   if (k == 32 && (demo || phase == 4))
+   {
+      newGame(0);
+      return;
+   }
+   if (demo)
+      return;
+   if (k == 122 || k == 90)
+      wantDir = 0;
+   if (k == 113 || k == 81)
+      wantDir = 1;
+   if (k == 115 || k == 83)
+      wantDir = 2;
+   if (k == 100 || k == 68)
+      wantDir = 3;
+}
+
+void computeEdges()
+{
+   for (int r = 0; r < H; r++)
+      for (int c = 0; c < W; c++)
+      {
+         int e = 0;
+         int t = mazeStart[r * W + c];
+         if (t == 1 || t == 7)
+            for (int d = 0; d < 4; d++)
+            {
+               int n = tileAt(c + dxs[d], r + dys[d]);
+               if (r + dys[d] >= 0 && r + dys[d] < H && (walkable(n) || n == 5))
+                  e = e | (1 << d);
+            }
+         edges[r * W + c] = e;
+      }
+}
+
+void makeColors()
+{
+   black = hsv2(0, 0, 0);
+   white = hsv2(0, 0, 255);
+   grey = hsv2(160, 40, 150);
+   wallFill = hsv2(195, 230, 170);
+   wallEdge = hsv2(220, 110, 255);
+   wallGlow = hsv2(210, 220, 190);
+   dotColor = hsv2(30, 90, 255);
+   doorColor = hsv2(224, 160, 255);
+   orbColor = hsv2(80, 230, 255);
+   orbDark = hsv2(90, 255, 130);
+   orbLight = hsv2(70, 80, 255);
+   frightBody = hsv2(165, 255, 200);
+   frightDark = hsv2(165, 255, 90);
+   red = hsv2(0, 255, 230);
+   green = hsv2(96, 255, 200);
+   brown = hsv2(20, 200, 110);
+   yellow = hsv2(50, 200, 255);
+   cyan = hsv2(128, 200, 255);
+   for (int i = 0; i < 4; i++)
+   {
+      gbody[i] = hsv2(ghue[i], 230, 240);
+      glight[i] = hsv2(ghue[i], 110, 255);
+      gdark[i] = hsv2(ghue[i], 255, 120);
+   }
+   for (int i = 0; i < 9; i++)
+      title[i] = hsv2(i * 28, 200, 255);
+}
+
+void fillRect(int x, int y, int w, int h, uint16_t c)
+{
+   for (int j = 0; j < h; j++)
+   {
+      int row = (y + j) * STRIDE + x;
+      for (int i = 0; i < w; i++)
+         led16[row + i] = c;
+   }
+}
+
+// a pixel of a sprite: only inside the clip columns
+void plot(int x, int y, uint16_t c)
+{
+   if (x >= clipX0 && x < clipX1 && y >= 0 && y < 240)
+      led16[y * STRIDE + x] = c;
+}
+
+// a character at (x, y), sc pixels a dot: a dark shadow down and to the
+// right, then each row in its shade of c; a run of dots is one rectangle
+void drawGlyph(int x, int y, int g, int sc, uint16_t c)
+{
+   int v = ((c & 255) << 8) | (c >> 8);
+   int cr = (v >> 11) & 31;
+   int cg = (v >> 5) & 63;
+   int cb = v & 31;
+   for (int pass = 0; pass < 2; pass++)
+   {
+      int off = sc;
+      if (pass == 1)
+         off = 0;
+      for (int r = 0; r < 8; r++)
+      {
+         int bits = font8[g * 8 + r];
+         uint16_t rc = 16904;       // the shadow: a dark blue
+         if (pass == 1)
+         {
+            int rr = (cr * rowMul[r]) >> 4;
+            int rg = (cg * rowMul[r]) >> 4;
+            int rb = (cb * rowMul[r]) >> 4;
+            rr = rr + (((31 - rr) * rowLift[r]) >> 4);
+            rg = rg + (((63 - rg) * rowLift[r]) >> 4);
+            rb = rb + (((31 - rb) * rowLift[r]) >> 4);
+            int w = (rr << 11) | (rg << 5) | rb;
+            rc = ((w & 255) << 8) | (w >> 8);
+         }
+         int b = 0;
+         while (b < 8)
+         {
+            if (((bits >> (7 - b)) & 1) == 1)
+            {
+               int e = b + 1;
+               while (e < 8 && ((bits >> (7 - e)) & 1) == 1)
+                  e++;
+               fillRect(x + b * sc + off, y + r * sc + off, (e - b) * sc, sc, rc);
+               b = e;
+            }
+            else
+               b++;
+         }
+      }
+   }
+}
+
+// a character of the small font, flat
+void drawTinyGlyph(int x, int y, int g, int sc, uint16_t c)
+{
+   int bits = tiny[g];
+   for (int r = 0; r < 5; r++)
+      for (int b = 0; b < 3; b++)
+         if ((bits >> ((4 - r) * 3 + 2 - b)) & 1)
+            fillRect(x + b * sc, y + r * sc, sc, sc, c);
+}
+
+// capitals, digits and spaces
+void drawText(int x, int y, char *s, int sc, uint16_t c)
+{
+   int i = 0;
+   while (s[i] != 0)
+   {
+      int ch = s[i];
+      if (ch >= 48 && ch <= 57)
+         drawGlyph(x, y, ch - 48, sc, c);
+      if (ch >= 65 && ch <= 90)
+         drawGlyph(x, y, ch - 55, sc, c);
+      x = x + 9 * sc;
+      i++;
+   }
+}
+
+int digits[8];
+void drawNumber(int x, int y, int v, int sc, uint16_t c)
+{
+   int n = 0;
+   while (v > 0 || n == 0)
+   {
+      digits[n] = v % 10;
+      v = v / 10;
+      n++;
+   }
+   for (int k = n - 1; k >= 0; k--)
+   {
+      drawGlyph(x, y, digits[k], sc, c);
+      x = x + 9 * sc;
+   }
+}
+
+// a number in the small font: the scores that pop up in the maze
+void drawTinyNumber(int x, int y, int v, uint16_t c)
+{
+   int n = 0;
+   while (v > 0 || n == 0)
+   {
+      digits[n] = v % 10;
+      v = v / 10;
+      n++;
+   }
+   for (int k = n - 1; k >= 0; k--)
+   {
+      drawTinyGlyph(x, y, digits[k], 1, c);
+      x = x + 4;
+   }
+}
+
+// a wall tile: filled (inside the maze), a neon line on each side facing a path
+void drawWall(int x, int y, int e, int t, uint16_t edge)
+{
+   if (t == 1)
+      fillRect(x, y, 8, 8, wallFill);
+   if (e & 1)
+   {
+      fillRect(x + 1, y, 6, 1, edge);
+      fillRect(x + 1, y + 1, 6, 1, wallGlow);
+   }
+   if (e & 4)
+   {
+      fillRect(x + 1, y + 7, 6, 1, edge);
+      fillRect(x + 1, y + 6, 6, 1, wallGlow);
+   }
+   if (e & 2)
+   {
+      fillRect(x, y + 1, 1, 6, edge);
+      fillRect(x + 1, y + 1, 1, 6, wallGlow);
+   }
+   if (e & 8)
+   {
+      fillRect(x + 7, y + 1, 1, 6, edge);
+      fillRect(x + 6, y + 1, 1, 6, wallGlow);
+   }
+   // the corners: rounded where two sides meet, joined where a side goes on
+   if ((e & 3) == 3)
+      led16[(y + 1) * STRIDE + x + 1] = edge;
+   if ((e & 9) == 9)
+      led16[(y + 1) * STRIDE + x + 6] = edge;
+   if ((e & 6) == 6)
+      led16[(y + 6) * STRIDE + x + 1] = edge;
+   if ((e & 12) == 12)
+      led16[(y + 6) * STRIDE + x + 6] = edge;
+   if ((e & 3) == 1 || (e & 3) == 2)
+      led16[y * STRIDE + x] = edge;
+   if ((e & 9) == 1 || (e & 9) == 8)
+      led16[y * STRIDE + x + 7] = edge;
+   if ((e & 6) == 4 || (e & 6) == 2)
+      led16[(y + 7) * STRIDE + x] = edge;
+   if ((e & 12) == 4 || (e & 12) == 8)
+      led16[(y + 7) * STRIDE + x + 7] = edge;
+}
+
+void drawMaze()
+{
+   uint16_t edge = wallEdge;
+   if (phase == 3 && (phaseTimer / 15) % 2 == 0)
+      edge = white;
+   bool cellOn = false;
+   if ((frame / 8) % 2 == 0)
+      cellOn = true;
+   for (int r = 0; r < H; r++)
+      for (int c = 0; c < W; c++)
+      {
+         int i = r * W + c;
+         int t = maze[i];
+         int x = MX + c * 8;
+         int y = MY + r * 8;
+         if (t == 1 || t == 7)
+            drawWall(x, y, edges[i], t, edge);
+         else if (t == 2)
+            fillRect(x + 3, y + 3, 2, 2, dotColor);
+         else if (t == 3)
+         {
+            if (cellOn || phase != 1)
+            {
+               fillRect(x + 2, y + 1, 4, 6, dotColor);
+               fillRect(x + 1, y + 2, 6, 4, dotColor);
+               fillRect(x + 3, y + 2, 2, 2, white);
+            }
+         }
+         else if (t == 4)
+            fillRect(x, y + 3, 8, 2, doorColor);
+      }
+}
+
+// the player: a round orb with an eye looking where it goes
+void drawOrb(int x, int y, int dir, int rad)
+{
+   int r2 = rad * rad + rad;
+   int in2 = (rad - 1) * (rad - 1);
+   for (int j = -rad; j <= rad; j++)
+      for (int i = -rad; i <= rad; i++)
+      {
+         int d = i * i + j * j;
+         if (d <= r2)
+         {
+            uint16_t c = orbColor;
+            if (d > in2 && i + j > 0)
+               c = orbDark;
+            if (d > in2 && i + j < -1)
+               c = orbLight;
+            plot(x + i, y + j, c);
+         }
+      }
+   if (rad < 3)
+      return;
+   int ex = x + dxs[dir] * 2;
+   int ey = y + dys[dir] * 2 - 1;
+   plot(ex, ey, white);
+   plot(ex - 1, ey, white);
+   plot(ex, ey + 1, white);
+   plot(ex - 1, ey + 1, white);
+   int qx = ex;
+   if (dxs[dir] < 0)
+      qx = ex - 1;
+   int qy = ey;
+   if (dys[dir] > 0)
+      qy = ey + 1;
+   plot(qx, qy, black);
+}
+
+// an eye: white, the pupil on the side it looks
+void drawEye(int x, int y, int dir)
+{
+   for (int j = -2; j <= 2; j++)
+      for (int i = -2; i <= 2; i++)
+         if (i * i + j * j <= 5)
+            plot(x + i, y + j, white);
+   int ex = x + dxs[dir];
+   int ey = y + dys[dir];
+   plot(ex, ey, black);
+   plot(ex - 1, ey, black);
+   plot(ex, ey - 1, black);
+   plot(ex - 1, ey - 1, black);
+}
+
+// a chaser: a drone, a diamond with two antennas and one eye
+void drawDrone(int x, int y, int i, int scared)
+{
+   uint16_t body = gbody[i];
+   uint16_t light = glight[i];
+   uint16_t dark = gdark[i];
+   if (scared)
+   {
+      body = frightBody;
+      light = frightBody;
+      dark = frightDark;
+      if (frightTimer < 120 && (frightTimer / 10) % 2 == 0)
+      {
+         body = white;
+         light = white;
+         dark = grey;
+      }
+   }
+   for (int j = -6; j <= 6; j++)
+      for (int k = -6; k <= 6; k++)
+      {
+         int a = k;
+         if (a < 0)
+            a = -a;
+         int b = j;
+         if (b < 0)
+            b = -b;
+         if (a + b <= 6)
+         {
+            uint16_t c = body;
+            if (a + b >= 5 && k + j < 0)
+               c = light;
+            if (a + b >= 5 && k + j >= 0)
+               c = dark;
+            plot(x + k, y + j, c);
+         }
+      }
+   int wave = (frame / 6 + i) % 2;
+   plot(x - 3, y - 5 - wave, light);
+   plot(x - 4, y - 6 - wave, light);
+   plot(x + 3, y - 6 + wave, light);
+   plot(x + 4, y - 7 + wave, light);
+   if (scared)
+   {
+      plot(x - 2, y - 1, white);
+      plot(x + 2, y - 1, white);
+      for (int k = -3; k <= 3; k++)
+         plot(x + k, y + 2 + (k + 3) % 2, white);
+   }
+   else
+      drawEye(x, y, gdir[i]);
+}
+
+void drawApple(int x, int y)
+{
+   for (int j = -3; j <= 3; j++)
+      for (int i = -3; i <= 3; i++)
+         if (i * i + j * j <= 10)
+            plot(x + i, y + j + 1, red);
+   plot(x - 1, y - 1, white);
+   plot(x, y - 3, brown);
+   plot(x, y - 4, brown);
+   plot(x + 1, y - 4, green);
+   plot(x + 2, y - 5, green);
+   plot(x + 2, y - 4, green);
+}
+
+void drawActors()
+{
+   clipX0 = MX;
+   clipX1 = MX + MW;
+   if (bonusTimer > 0)
+      drawApple(MX + 13 * 8 + 4, MY + 16 * 8 + 4);
+   if (phase != 4)
+   {
+      for (int i = 0; i < 4; i++)
+      {
+         if (phase == 2 && phaseTimer < 70)
+            continue;
+         int x = MX + gx[i];
+         int y = MY + gy[i];
+         if (gstate[i] == 3 || gstate[i] == 4)
+         {
+            if (phase == 5 && popupTimer > 0 && popupX == gx[i] && popupY == gy[i])
+               drawTinyNumber(x - 6, y - 2, popupValue, cyan);
+            else
+               drawEye(x, y, gdir[i]);
+         }
+         else
+            drawDrone(x, y, i, gfright[i]);
+      }
+      int rad = 6 - (ppulse / 4) % 2;
+      if (phase == 2 && phaseTimer < 70)
+      {
+         // caught: the orb shrinks and throws sparks
+         rad = phaseTimer / 10;
+         int s = 70 - phaseTimer;
+         for (int k = 0; k < 8; k++)
+         {
+            int ax = dxs[k % 4] + dxs[(k + 1) % 4] * (k / 4);
+            int ay = dys[k % 4] + dys[(k + 1) % 4] * (k / 4);
+            plot(MX + px + ax * s / 4, MY + py + ay * s / 4, orbLight);
+         }
+      }
+      if (rad > 0)
+         drawOrb(MX + px, MY + py, pdir, rad);
+   }
+   if (popupTimer > 0 && phase != 5)
+      drawTinyNumber(MX + popupX - 6, MY + popupY - 2, popupValue, cyan);
+   clipX0 = 0;
+   clipX1 = 400;
+}
+
+void drawPanels()
+{
+   // the title, a colour per letter: M A Z E  C H A S E
+   for (int i = 0; i < 9; i++)
+   {
+      int g = 22;
+      if (i == 1 || i == 6)
+         g = 10;
+      if (i == 2)
+         g = 35;
+      if (i == 3 || i == 8)
+         g = 14;
+      if (i == 4)
+         g = 12;
+      if (i == 5)
+         g = 17;
+      if (i == 7)
+         g = 28;
+      int x = MX + 23 + i * 18;
+      if (i > 3)
+         x = x + 10;
+      drawGlyph(x, 1, g, 2, title[i]);
+   }
+   drawText(10, 28, "SCORE", 1, grey);
+   drawNumber(10, 40, score, 1, white);
+   drawText(10, 70, "HIGH", 1, grey);
+   drawNumber(10, 82, high, 1, white);
+   drawText(318, 28, "LIVES", 1, grey);
+   for (int i = 0; i < lives - 1; i++)
+      drawOrb(324 + i * 15, 48, 3, 5);
+   drawText(318, 70, "LEVEL", 1, grey);
+   drawNumber(318, 82, level, 1, white);
+   for (int i = 0; i < level && i < 5; i++)
+      drawApple(323 + i * 12, 110);
+   // who chases how
+   for (int i = 0; i < 4; i++)
+   {
+      int dir = gdir[i];
+      gdir[i] = 3;
+      drawDrone(326, 142 + i * 20, i, 0);
+      gdir[i] = dir;
+   }
+   drawText(340, 138, "RUSH", 1, gbody[0]);
+   drawText(340, 158, "AHEAD", 1, gbody[1]);
+   drawText(340, 178, "FLANK", 1, gbody[2]);
+   drawText(340, 198, "DRIFT", 1, gbody[3]);
+   if (demo)
+   {
+      if ((frame / 20) % 2 == 0)
+      {
+         drawText(10, 190, "PRESS", 1, yellow);
+         drawText(10, 204, "SPACE", 1, yellow);
+      }
+   }
+   else
+   {
+      drawText(10, 190, "Z Q S D", 1, grey);
+      drawText(10, 201, "TO MOVE", 1, grey);
+   }
+   if (phase == 0)
+   {
+      fillRect(MX + 76, MY + 16 * 8 - 1, 66, 11, black);
+      drawText(MX + 78, MY + 16 * 8, "GET SET", 1, yellow);
+   }
+   if (phase == 4)
+   {
+      fillRect(MX + 64, MY + 15 * 8 - 1, 88, 18, black);
+      drawText(MX + 68, MY + 15 * 8 + 4, "GAME OVER", 1, red);
+   }
+}
+
+void drawScene()
+{
+   for (int y = 0; y < 240; y++)
+   {
+      int row = y * STRIDE;
+      for (int x = 0; x < 400; x++)
+         led16[row + x] = black;
+   }
+   drawMaze();
+   drawActors();
+   drawPanels();
+}
+
+int main()
+{
+   setPixelsize(2);           // 400x240, each 2x2 pixels
+   makeColors();
+   high = 0;
+   clipX0 = 0;
+   clipX1 = 400;
+   newGame(1);
+   computeEdges();
+   uint32_t last = millis();
+   while (true)
+   {
+      int k = readKey();
+      while (k != 0)
+      {
+         handleKey(k);
+         k = readKey();
+      }
+      uint32_t now = millis();
+      int n = 0;
+      while (now - last >= STEP_MS && n < 4)
+      {
+         step();
+         last = last + STEP_MS;
+         n++;
+      }
+      if (now - last > 100)
+         last = now;
+      drawScene();
+      show16();
+      frame++;
+   }
+}
+)EOF";
+// lcd.init() on core 0 so Bus_RGB's interrupts stay off core 1, where the script draws
+static void lcdInitTask(void *done) {
+  lcd.init();
+  lcd.setBrightness(255);
+  xTaskNotifyGive((TaskHandle_t)done);
+  vTaskDelete(NULL);
+}
+
+void setup() {
+  Serial.begin(115200);
+  xTaskCreatePinnedToCore(lcdInitTask, "lcdInit", 4096, xTaskGetCurrentTaskHandle(), 5, NULL, 0);
+  ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+  frame_buffer = (uint16_t *)lcd._bus_instance._frame_buffer;
+  gameBuffer = (uint16_t *)heap_caps_calloc(480 * 240, 2, MALLOC_CAP_SPIRAM);
+
+  bindVariable((char *)"uint32_t", (char *)"width", NULL, (void *)&_sizex);
+  bindVariable((char *)"uint32_t", (char *)"height", NULL, (void *)&_sizey);
+  // the script's own picture; show16() scales it into the frame buffer
+  bindVariable((char *)"uint16_t *", (char *)"led16", NULL, (void *)&gameBuffer);
+  bindFunction((char *)"uint16_t", (char *)"hsv2", (char *)"int,int,int", (void *)hsv16);
+  bindFunction((char *)"void", (char *)"show16", NULL, (void *)show16);
+  bindFunction((char *)"void", (char *)"setPixelsize", (char *)"int", (void *)setPixelsize);
+  bindFunction((char *)"uint32_t", (char *)"millis", NULL, (void *)scriptMillis);
+  bindFunction((char *)"uint32_t", (char *)"rand", (char *)"uint32_t", (void *)scriptRand);
+  bindFunction((char *)"int", (char *)"readKey", NULL, (void *)readKey);
+  bindFunction((char *)"void", (char *)"setBrightness", (char *)"int", (void *)scriptSetBrightness);
+
+  uint32_t t0 = millis();
+  static ScriptExecutable exec = parseScript(mazeChase);
+  if (!exec.isExeExists()) {
+    showCompileError();
+    return;
+  }
+  printf("maze chase: %u bytes of code, compiled in %u ms\n", (unsigned)exec.exe.binary_size, (unsigned)(millis() - t0));
+
+  // the touch screen, read on core 0
+  xTaskCreatePinnedToCore(padTouchTask, "touch", 4096, NULL, 3, NULL, 0);
+
+  exec.execute("main");
+}
+
+void loop() {
+  delay(1000);
+}
