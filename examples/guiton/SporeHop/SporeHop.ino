@@ -36,10 +36,32 @@ uint16_t *frame_buffer;
 static uint32_t _sizex = 480;
 static uint32_t _sizey = 480;
 
+// once a second: the frames shown, and the time the script takes for one
+// (its steps and its drawing, between two show16()), so the frame rate it
+// would reach without waiting for the panel
+static uint32_t fpsFrames = 0;
+static int64_t fpsStart = 0;
+static int64_t scriptTime = 0;   // microseconds spent in the script this second
+static int64_t leftShow = 0;     // when the last show16() returned
+
 void show16() {
+  int64_t in = esp_timer_get_time();
+  if (leftShow != 0)
+    scriptTime += in - leftShow;
   lcd._bus_instance.show();
   frame_buffer = (uint16_t *)lcd._bus_instance._frame_buffer;
   lcd._panel_instance.resetWriteBuffer();
+  fpsFrames++;
+  int64_t now = esp_timer_get_time();
+  if (now - fpsStart >= 1000000) {
+    float perFrame = (float)scriptTime / fpsFrames;
+    printf("shown %.1f fps, script %.2f ms a frame (%.0f fps without waiting for the panel)\n",
+           fpsFrames * 1000000.0f / (now - fpsStart), perFrame / 1000.0f, 1000000.0f / perFrame);
+    fpsFrames = 0;
+    scriptTime = 0;
+    fpsStart = now;
+  }
+  leftShow = esp_timer_get_time();
 }
 
 void clearscreen() {

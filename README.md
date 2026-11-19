@@ -2436,6 +2436,7 @@ The examples in [examples/guiton](examples/guiton) are the games above on the **
 | [guiton/XenoWing](examples/guiton/XenoWing) | The arrows move the ship while held; BOMB; QUIT. |
 | [guiton/ChromaQuest](examples/guiton/ChromaQuest) | The arrows move Lumo while held; START; QUIT. |
 | [guiton/Vault13H](examples/guiton/Vault13H) | The arrows walk and turn while held; FIRE; 1 2 3 pick the look on the title screen; QUIT. |
+| [guiton/Ironforge](examples/guiton/Ironforge) | A first-person shooter (below): the cross walks and turns, FIRE, USE. |
 | [guiton/GameLauncher](examples/guiton/GameLauncher) | All seven, from binaries on the FFat partition: touch a game to play it, QUIT comes back to the menu (in Tetris, touch the TETRIS title). |
 
 On the board, compiling takes 13.5 s for Tetris, 36.4 s for PrismBreak and 86.3 s for Vault13H; from the launcher, a game loads in 2 to 4 ms.
@@ -2457,10 +2458,73 @@ python $IDF_PATH/components/fatfs/wl_fatfsgen.py --output_file ffat.img \
 esptool --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ffat.img
 ``` Board: *ESP32S3 Dev Module*, PSRAM *OPI PSRAM*, Flash Size *16MB*, Partition Scheme *16M Flash (3MB APP/9.9MB FATFS)* (XenoWing and ChromaQuest carry their art in flash).
 
+#### Ironforge: a shooter with mid-90s technology
+
+[guiton/Ironforge](examples/guiton/Ironforge) is a first-person shooter whose engine goes a step beyond Vault13H's flat maze: every cell of the map has its own floor height, ceiling height (or the open sky), floor and ceiling textures and light level. That gives stairs, ledges, a balcony, sunken toxic pools and lava, low dark corridors, tall halls, a yard under a red ash sky, and doors that rise into the ceiling. Three levels: the Foundry, the Furnace (a hall crossed by lava on a narrow bridge, the key on a raised platform), the Smelter Yard. The engine, the levels and the textures are its own (the palette and the wall textures' makers come from Vault13H); the monsters, the face in the status bar, the guns and the pickups are [Freedoom](https://freedoom.github.io)'s, the free game data set, under its BSD licence, read from a WAD file on the FFat partition with a title picture of Ironforge's own (below).
+
+<img src="examples/guiton/Ironforge/ironforge.gif" width="480" alt="Ironforge: firing at a creature in the hall">
+
+*Captured from the board: into the hall, firing the pistol at a creature by the blue door, the face hurt at 70 (the screen as it is, 480x480, the touch pad under the view).*
+
+| | |
+| --- | --- |
+| <img src="examples/guiton/Ironforge/ironforge_title.png" width="400" alt="The title picture, from the WAD"> | <img src="examples/guiton/Ironforge/ironforge_foundry.png" width="400" alt="The start of the Foundry"> |
+| The title picture, TITLEPIC in the WAD. | The Foundry: the level's name, the pistol, the face. |
+| <img src="examples/guiton/Ironforge/ironforge_shotgun.png" width="400" alt="The shotgun firing"> | <img src="examples/guiton/Ironforge/ironforge_chaingun.png" width="400" alt="The chaingun firing"> |
+| The Furnace: the shotgun firing, SHELLS in the status bar. | The Smelter Yard: the chaingun firing. |
+
+*All captured from the board itself: a test copy of the sketch plays a scripted route and sends chosen frames over USB.*
+
+- **The renderer**: one ray per view column through the grid, from the eye outwards. In each cell it crosses, it draws that cell's floor and ceiling between where it entered and where it leaves (textured per pixel, from a per-row distance table), then at the next cell the step up to a higher floor and the step down of a lower ceiling, or the wall of a solid cell. What is drawn closes the column from the bottom and from the top; the rows still open are kept at each cell boundary, and the sprites further on show only through them, so a monster behind a ledge is hidden by it. Under the sky, walls are 2.5 cells high, with the sky and its mountains above them. Far floors are sampled in blocks of texels, a cheap mipmap.
+- **Light**: 16 levels per colour in a table made at start, each cell's own level dimmed with distance.
+- **The rules**: walking with steps up to a quarter of a cell, falling down ledges, doors that open with USE and close behind, a blue key for each level's blue door, the exit switch to the next level; monsters wake on sight and come (one strikes and throws fire, one floats and shoots, a flame flies at you); toxic pools and lava hurt. Three guns: the pistol, the shotgun (a spread, harder up close; shells) and the chaingun (fast; bullets), found in the levels, GUN to change.
+- **The status bar**: health, Freedoom's face (five states of health, looking about, wincing when hurt), the ammo of the gun in hand, the blue key.
+- **The controls**, on the touch pad: the cross walks and turns (a finger between two arms does both), FIRE (held for more), USE, GUN.
+- **The levels** are drawn as text in [tools/data.py](examples/guiton/Ironforge/tools/data.py), which checks each one can be finished: the key reached from the start without the blue door, the exit with it (steps up of a quarter of a cell at most).
+
+**The WAD.** A WAD has the classic layout: a header (`PWAD`, the number of entries, where the directory is), the entries, then the directory (offset, size, an 8-character name each). Pictures are in the classic column format (width, height, the offsets of their anchor, then each column as runs of pixels, so clear pixels cost nothing) and named after the old convention: `HUSKA1` is a monster walking (frame A) seen from the front (angle 1), `HUSKA5` from behind, `HUSKG0` falling, the same from every side.
+
+[tools/freedoom.py](examples/guiton/Ironforge/tools/freedoom.py) makes `data/ironforge.wad` from the release of Freedoom (0.13.0, `freedoom2.wad`): four of its monsters, written under the names the script asks for (each angle its own picture: Freedoom keeps some angles once for two sides, flipped), its status-bar face (`STFST00`-`STFST42`, `STFOUCH0`-`4`, `STFDEAD0`), its guns as they are held with their flashes (`PISG`, `SHTG`, `CHGG`), its pickups, all turned into the game's 256 colours, and `TITLEPIC`, the 240x144 title picture drawn by [tools/title.py](examples/guiton/Ironforge/tools/title.py). 122 pictures. Freedoom's art is © the Freedoom project's contributors, under the BSD licence in [data/freedoom-COPYING.txt](examples/guiton/Ironforge/data/freedoom-COPYING.txt), which goes with the WAD. ([tools/wad.py](examples/guiton/Ironforge/tools/wad.py) writes monsters of the game's own, rendered from simple 3D shapes from 8 angles, under the same names.)
+
+<img src="examples/guiton/Ironforge/ironforge_monsters.png" width="640" alt="The WAD's monsters: walking and striking from 8 angles, floating, falling, the flame, the fireball">
+
+The sketch mounts the FFat partition, reads `/ironforge.wad` into PSRAM, and binds it for the script, so any script can use a WAD the same way:
+
+```cpp
+bindVariable("uint8_t *", "wad", NULL, &wadData);         // its bytes
+bindVariable("int", "wadLoaded", NULL, &wadLoaded);       // 1 when it was read
+bindFunction("int", "wadSprite", "char*,int,int", wadSprite);  // "HUSK", frame, angle -> where it starts
+bindFunction("int", "wadFind", "char*", wadFind);              // "TITLEPIC" -> where it starts
+```
+
+The script finds its pictures once (`huskWalk[f * 8 + a] = wadSprite("HUSK", f, a + 1);`, `pistol[0] = wadFind("PISGA0");`), and draws them from `wad[]`: the title and the face as they are, the guns as the old games held them (scaled to the 240x144 view), the monsters and the pickups scaled to their distance and clipped like the other sprites. Each monster looks the way it moves; `atan2()` of where it looks, less where the player stands, picks which of the 8 views to show, numbered as the old sprites are. Without the file, the game runs with drawings of its own.
+
+The partition holds the GameLauncher's games and the WAD together:
+
+```sh
+mkdir ffat && cp examples/guiton/GameLauncher/data/*.bin examples/guiton/Ironforge/data/ironforge.wad ffat/
+python $IDF_PATH/components/fatfs/wl_fatfsgen.py --output_file ffat.img \
+    --partition_size 0x9E0000 --sector_size 4096 --long_name_support ffat
+esptool --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ffat.img
+```
+
+| | |
+| --- | --- |
+| Script | 3217 lines, 90 KB of text |
+| Machine code | 40,504 bytes (59,404 bytes as a saved binary) |
+| Compiling on the board | 324 s |
+| Its arrays | about 125 KB: 14 textures (56 KB), the light table (8 KB), the per-column records (34 KB), the three levels |
+| The WAD | 122 pictures, 317 KB, read from the FFat partition into PSRAM at start |
+| View | 240x144, shown 480x288 (pixel size 2) |
+| Frame rate | 21 to 42 frames shown a second (the panel's 42.3 is the most); the script takes 20 to 40 ms a frame in play |
+
+Writing it found a compiler bug: a cast used as the left operand of an operator, as in `((int)(x * 64.0)) & 63`, lost the operator (the floors were noise until the cast was put in a variable first). The script works around it; the compiler is not fixed yet.
+
 ---
 
 # Known limitations
 
+- **To be fixed in the compiler: a cast as the left operand of an operator loses the operator.** `((int)(x * 64.0)) & 63` gives `(int)(x * 64.0)`, and so do `+ | << >> %` after such a cast. Until it is fixed, put the cast in a variable first: `int i = (int)(x * 64.0); i = i & 63;` (see Ironforge).
 - **No `sync()` and no pre/post kill** from v1's `scriptRuntime`. Running, listing, pausing, restarting and killing scripts by name is there: see [The script scheduler](#the-script-scheduler).
 - **`import`** (v1's `import rand`...) **doesn't work yet.** Declare the function `external` and bind a host function instead.
 - **No built-in `hsv()` or led support**: bind them yourself (see [CRGB and the hue function](#crgb-and-the-hue-function)).
