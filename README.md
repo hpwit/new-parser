@@ -2190,6 +2190,7 @@ A game doesn't have to be compiled every time it starts. `parseScriptToBinary()`
 | `matouch/XenoWing` | A horizontal shoot'em up at 400x240: an organic manta ship over an alien world in five parallax layers (a ringed planet, mountains, a forest of strange trees, crystals, plants in front), waves of bio creatures, a boss, power-ups and spore bombs. The art is pixel art in flash, bound to the script as pointers. Plays itself until Space is pressed. |
 | `matouch/ChromaQuest` | Three grey worlds made from NASA photographs (the Moon with the Earth rising, Mount Sharp on Mars, Saturn) whose red, green and blue come back as a lantern drone catches the colour drops of the thieves it shoots: the script mixes each photograph's grey and colour, channel by channel, every frame. |
 | `matouch/Vault13H` | A first-person maze shooter in the VGA style: 320x240 in the 256 colours of the VGA default palette, each pixel 2x2, so 640x480 in the middle of the panel. Ray-cast textured walls, drones to shoot, gold, health and ammo, three looks (a keep, a crypt, a base). Everything is drawn by the script, no art files. |
+| `matouch/Ironforge` | The first-person shooter of the Guition chapter ([Ironforge](#ironforge-a-shooter-with-mid-90s-technology)), played with the USB keyboard: its 240x128 view and the status bar at pixel size 3, 720x480 in the middle of the panel; the monsters, the face and the guns from a WAD on the FFat partition. |
 | `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing and ChromaQuest are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
 
 In every game, **Escape** gives the game up (Tetris ends it, the others go back to their demo; in the GameLauncher it goes back to the menu), and the **arrow keys** work as Z Q S D.
@@ -2507,6 +2508,14 @@ python $IDF_PATH/components/fatfs/wl_fatfsgen.py --output_file ffat.img \
     --partition_size 0x9E0000 --sector_size 4096 --long_name_support ffat
 esptool --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ffat.img
 ```
+
+**On the ESP32-S3-Touch-LCD-7.** [matouch/Ironforge](examples/matouch/Ironforge) is the same script with four `#define`s changed at its top (the view 240x128 instead of 240x144, its horizon, the frame buffer's width, no touch pad): at pixel size 3 the 800x480 panel is 266x160 big pixels, and the game's 240x160 (the view and the status bar) sits in the middle of it, 720x480 on the panel. The USB keyboard plays it: the arrows or Z Q S D walk and turn while held, Space fires, E or Enter uses, G or Tab changes the gun; the sketch keeps a bit per key down, from the keyboard's presses and releases, in the same `touchHeld` the touch pad fills on the Guition. Its FFat partition holds the matouch GameLauncher's games and the WAD:
+
+```sh
+mkdir ffat && cp examples/matouch/GameLauncher/data/*.bin examples/matouch/Ironforge/data/ironforge.wad ffat/
+```
+
+then `wl_fatfsgen.py` and `esptool` as above.
 
 | | |
 | --- | --- |

@@ -909,10 +909,15 @@ void makeSprites()
 // kept at each cell boundary, so that the sprites further on show only
 // through what is still open there.
 
+// the view, its horizon, the frame buffer's width, and whether the touch
+// pad is drawn under the status bar: 144 / 72 / 480 / 1 on the Guition
+// (pixel size 2), 128 / 64 / 800 / 0 on the matouch board (pixel size 3,
+// a USB keyboard)
 #define VW 240
 #define VH 144
 #define HZ 72
 #define STRIDE 480
+#define PAD 1
 #define K 181.8
 #define MAPW 24
 #define MAPH 20
@@ -2248,8 +2253,8 @@ void drawTitlePic()
 
 // a gun as the old games held it: on a 320x200 screen with a 168-row view
 // centred on row 84, its picture's left at 1 - its left offset, its top at
-// 32 - 16 - its top offset (plus the bob); here that view is 240x144, 0.8
-// the size
+// 32 - 16 - its top offset (plus the bob); here that view is 240 wide, 0.8
+// the size, its bottom on the view's
 void drawGunPic(int o, int bx, int by)
 {
    if (o < 0)
@@ -2258,7 +2263,7 @@ void drawGunPic(int o, int bx, int by)
    int lo = rd16(o + 4);
    int to = rd16(o + 6);
    float left = (1 - lo + bx - 160) * 0.8 + 120.0;
-   float top = (16 - to + by) * 0.8 + 9.6;
+   float top = (16 - to + by) * 0.8 + (VH - 134.4);
    int x0 = (int)(left);
    int x1 = (int)(left + pw * 0.8);
    if (x0 < 0)
@@ -2648,6 +2653,15 @@ void number(int v, int digits, int x, int y, int sc, int c)
    }
 }
 
+// how to start: FIRE on the touch pad, Space on a keyboard
+void pressFire(int y, int sc, int c)
+{
+   if (PAD == 1)
+      centred("PRESS FIRE", y, sc, c);
+   else
+      centred("PRESS SPACE", y, sc, c);
+}
+
 void drawGun()
 {
    int b = (int)(absf(sin(bob)) * 4.0);
@@ -2856,9 +2870,10 @@ void drawFrame()
       // the title screen from the WAD
       drawTitlePic();
       if ((frame / 15) % 2 == 0)
-         centred("PRESS FIRE", 120, 2, 44);
+         pressFire(VH - 24, 2, 44);
       drawHud();
-      drawPad();
+      if (PAD == 1)
+         drawPad();
       return;
    }
    castView();
@@ -2882,7 +2897,7 @@ void drawFrame()
       centred("FIND THE BLUE KEY", 76, 1, 31);
       centred("REACH THE EXIT", 88, 1, 31);
       if ((frame / 15) % 2 == 0)
-         centred("PRESS FIRE", 112, 2, 44);
+         pressFire(VH - 32, 2, 44);
    }
    if (state == 2)
    {
@@ -2901,16 +2916,17 @@ void drawFrame()
       text(":", 136, 84, 1, 31, 16);
       number(secs % 60, 2, 144, 84, 1, 44);
       if (stateT > 2.0 && (frame / 15) % 2 == 0)
-         centred("PRESS FIRE", 112, 1, 44);
+         pressFire(112, 1, 44);
    }
    if (state == 3)
    {
       centred("YOU DIED", 50, 3, 40);
       if (stateT > 2.0 && (frame / 15) % 2 == 0)
-         centred("PRESS FIRE", 100, 1, 31);
+         pressFire(100, 1, 31);
    }
    drawHud();
-   drawPad();
+   if (PAD == 1)
+      drawPad();
 }
 
 // ---- the rules
