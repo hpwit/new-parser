@@ -2191,7 +2191,7 @@ A game doesn't have to be compiled every time it starts. `parseScriptToBinary()`
 | `matouch/ChromaQuest` | Three grey worlds made from NASA photographs (the Moon with the Earth rising, Mount Sharp on Mars, Saturn) whose red, green and blue come back as a lantern drone catches the colour drops of the thieves it shoots: the script mixes each photograph's grey and colour, channel by channel, every frame. |
 | `matouch/Vault13H` | A first-person maze shooter in the VGA style: 320x240 in the 256 colours of the VGA default palette, each pixel 2x2, so 640x480 in the middle of the panel. Ray-cast textured walls, drones to shoot, gold, health and ammo, three looks (a keep, a crypt, a base). Everything is drawn by the script, no art files. |
 | `matouch/Ironforge` | The first-person shooter of the Guition chapter ([Ironforge](#ironforge-a-shooter-with-mid-90s-technology)), played with the USB keyboard: its 240x128 view and the status bar at pixel size 3, 720x480 in the middle of the panel; the monsters, the face and the guns from a WAD on the FFat partition. |
-| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing and ChromaQuest are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
+| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing, ChromaQuest and Ironforge are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
 
 In every game, **Escape** gives the game up (Tetris ends it, the others go back to their demo; in the GameLauncher it goes back to the menu), and the **arrow keys** work as Z Q S D.
 
@@ -2366,13 +2366,13 @@ Writing it found and fixed two compiler issues: a parse error inside nested bloc
 
 #### GameLauncher: games from the FFat partition
 
-[matouch/GameLauncher](examples/matouch/GameLauncher) has no game in it: it lists the `.bin` files of the FFat partition, and loads and runs the one you pick. Its `data` folder holds `tetris.bin`, `mazechase.bin`, `neonracer.bin`, `prismbreak.bin`, `xenowing.bin` and `chromaquest.bin`, the six games above compiled with `parseScriptToBinary()` (the same bytes as [CreateTetrisBinary](#saving-and-loading-compiled-scripts-script_executableh) makes on the board).
+[matouch/GameLauncher](examples/matouch/GameLauncher) has no game in it: it lists the `.bin` files of the FFat partition, and loads and runs the one you pick. Its `data` folder holds `tetris.bin`, `mazechase.bin`, `neonracer.bin`, `prismbreak.bin`, `xenowing.bin` and `chromaquest.bin`, the six games above compiled with `parseScriptToBinary()` (the same bytes as [CreateTetrisBinary](#saving-and-loading-compiled-scripts-script_executableh) makes on the board), and `ironforge.bin`, the [shooter](#ironforge-a-shooter-with-mid-90s-technology) (59,456 bytes, loaded in 17 ms instead of 345 s of compiling), whose monsters are in `ironforge.wad` on the same partition.
 
 <img src="examples/matouch/GameLauncher/gamelauncher_menu.png" width="400" alt="The launcher's menu">
 
 - **Keys**: Z/S or the arrows to choose, Space or Enter to play, 1-9 to play a game at once; in a game, Escape comes back to the menu. The arrows arrive in the games as Z Q S D.
-- **Bindings**: the launcher binds the names the games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`, XenoWing's art: `gfx`, `sky`, `farRidge`, `forest`, `nearRidge`, `frontPlants`, from a copy of `xenowing_assets.h` in the launcher, and ChromaQuest's: `chromaGfx`, `worldColor`, `worldLum`, from `chroma_assets.h`); any other game compiled against the same names shows up in the menu too.
-- **Coming back**: each game runs on its own task (`executeAsTask()`). Every game calls `readKey()` once per frame; after Escape, `readKey()` never returns, so the game's task waits in a function of the sketch that holds nothing, and the launcher kills it and frees the game (built with placement `new`, since a `ScriptExecutable` can't be moved). Killing it anywhere else, inside `show16()` say, could leave the screen driver half way.
+- **Bindings**: the launcher binds the names the games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`, XenoWing's art: `gfx`, `sky`, `farRidge`, `forest`, `nearRidge`, `frontPlants`, from a copy of `xenowing_assets.h` in the launcher, and ChromaQuest's: `chromaGfx`, `worldColor`, `worldLum`, from `chroma_assets.h`); Ironforge's: `touchHeld`, `sin`, `hypot`, `atan2`, `wad`, `wadLoaded`, `wadSprite`, `wadFind`; any other game compiled against the same names shows up in the menu too.
+- **Coming back**: each game runs on its own task (`executeAsTask()`). Every game calls `readKey()` once per frame; after Escape, `readKey()` never returns, so the game's task waits in a function of the sketch that holds nothing, and the launcher kills it and frees the game (built with placement `new`, since a `ScriptExecutable` can't be moved). Killing it anywhere else, inside the panel driver say, could leave the screen half way. Ironforge never calls `readKey()`: it reads the keys held in `touchHeld` (a bit per key, as in its own sketch), so after Escape its task waits at the start of `show16()` instead, before the panel is touched. The launcher reads `ironforge.wad` into PSRAM when Ironforge first starts, and draws it 13 pixels in, as its sketch does.
 
 **Putting the data folder on the partition.** The partition scheme is *16M Flash (3MB APP/9.9MB FATFS)*: the FFat partition starts at `0x610000` and is `0x9E0000` bytes. FFat keeps a wear-levelling layer around the FAT, so the image is made with ESP-IDF's `wl_fatfsgen.py`, with the core's settings (4096-byte sectors, long names), and written with esptool:
 
@@ -2381,6 +2381,8 @@ python $IDF_PATH/components/fatfs/wl_fatfsgen.py --output_file ffat.img \
     --partition_size 0x9E0000 --sector_size 4096 --long_name_support examples/matouch/GameLauncher/data
 esptool.py --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ffat.img
 ```
+
+For Ironforge's monsters, make the image from a folder holding the `.bin` files and `examples/matouch/Ironforge/data/ironforge.wad` (see [Ironforge](#ironforge-a-shooter-with-mid-90s-technology)); without the WAD it plays with drawings of its own.
 
 (esptool comes with the core: `~/Library/Arduino15/packages/esp32/tools/esptool_py/<version>/esptool` on a Mac.) The launcher mounts the partition with `FFat.begin(false)`: a partition that doesn't mount is never formatted; the menu then says there is no game.
 
@@ -2438,7 +2440,7 @@ The examples in [examples/guiton](examples/guiton) are the games above on the **
 | [guiton/ChromaQuest](examples/guiton/ChromaQuest) | The arrows move Lumo while held; START; QUIT. |
 | [guiton/Vault13H](examples/guiton/Vault13H) | The arrows walk and turn while held; FIRE; 1 2 3 pick the look on the title screen; QUIT. |
 | [guiton/Ironforge](examples/guiton/Ironforge) | A first-person shooter (below): the cross walks and turns, FIRE, USE. |
-| [guiton/GameLauncher](examples/guiton/GameLauncher) | All seven, from binaries on the FFat partition: touch a game to play it, QUIT comes back to the menu (in Tetris, touch the TETRIS title). |
+| [guiton/GameLauncher](examples/guiton/GameLauncher) | All seven and Ironforge, from binaries on the FFat partition: touch a game to play it, QUIT comes back to the menu (in Tetris, touch the TETRIS title; in Ironforge, hold the status bar a second). |
 
 On the board, compiling takes 13.5 s for Tetris, 36.4 s for PrismBreak and 86.3 s for Vault13H; from the launcher, a game loads in 2 to 4 ms.
 
@@ -2451,7 +2453,7 @@ setBrightness(255);    // full again
 
 (`void setBrightness(int level)`, the level kept between 0 and 255.) In the launcher's menu, - and + under the games step the light through 16 levels, each about 10% under the one before (as the eye sees light), from 255 down to 48 (at 31 the backlight driver already turns the screen black); the launcher starts at full light every time, and puts the menu's level back when a game that changed it ends.
 
-**The launcher.** [guiton/GameLauncher](examples/guiton/GameLauncher) works as the matouch one (QUIT sends Escape, the game's task stops in `readKey()` and is freed), with a menu to touch, a row per game. Each game is shown as in its own sketch: the launcher knows them by their file's name, and switches the scaling, the pad's height and the buttons when one starts (`LauncherPad.h` is `TouchPad.h` with these set at run time). Its `data` folder holds the seven games compiled against the launcher's names; they go on the partition as for the matouch launcher:
+**The launcher.** [guiton/GameLauncher](examples/guiton/GameLauncher) works as the matouch one (QUIT sends Escape, the game's task stops in `readKey()` and is freed), with a menu to touch, a row per game. Each game is shown as in its own sketch: the launcher knows them by their file's name, and switches the scaling, the pad's height and the buttons when one starts (`LauncherPad.h` is `TouchPad.h` with these set at run time). Ironforge draws its own pad and reads only `touchHeld`, so for it the launcher turns each finger into the same bits as its sketch (`padBitsAt` in `LauncherPad.h`, several fingers at once), plus one of its own, the status bar: held a second, it is QUIT, and the game's task stops at the start of `show16()`. Its `data` folder holds the seven games and `ironforge.bin` compiled against the launcher's names; they go on the partition as for the matouch launcher, with `ironforge.wad` beside them (the command under [Ironforge](#ironforge-a-shooter-with-mid-90s-technology)):
 
 ```sh
 python $IDF_PATH/components/fatfs/wl_fatfsgen.py --output_file ffat.img \

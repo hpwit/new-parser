@@ -52,6 +52,11 @@ static int popKey() {
 // the buttons held, a bit each
 static volatile uint32_t padHeld = 0;
 
+// a game that draws its own buttons and reads only touchHeld (Ironforge)
+// can give the bits of a touch itself, from its screen coordinates: then
+// every finger adds its bits, and no key is sent
+static uint32_t (*padBitsAt)(int x, int y) = NULL;
+
 static int padButtonAt(int x, int y) {
   for (int i = 0; i < padButtonCount; i++) {
     const PadButton &b = padButtons[i];
@@ -65,6 +70,17 @@ static void padTouchTask(void *) {
   uint32_t held = 0;
   uint32_t nextRepeat[PAD_MAX_BUTTONS] = {0};
   while (true) {
+    if (padBitsAt != NULL) {
+      lgfx::touch_point_t tp[3];
+      int n = lcd.getTouchRaw(tp, 3);
+      uint32_t now = 0;
+      for (int k = 0; k < n; k++)
+        now |= padBitsAt(tp[k].x, tp[k].y);
+      held = 0;
+      padHeld = now;
+      vTaskDelay(pdMS_TO_TICKS(16));
+      continue;
+    }
     if (padButtons == NULL) {
       held = 0;
       padHeld = 0;
@@ -243,6 +259,7 @@ static void usePad(const PadButton *buttons, int count, int y, bool draw, int re
 }
 
 static void noPad() {
+  padBitsAt = NULL;
   padButtons = NULL;
   padDraw = false;
   padButtonCount = 0;

@@ -7,15 +7,18 @@
 //
 // The data folder next to this sketch holds the guiton games: tetris.bin,
 // mazechase.bin, neonracer.bin, prismbreak.bin, xenowing.bin,
-// chromaquest.bin and vault13h.bin, compiled from the scripts of the
-// examples next to this one (XenoWing's and ChromaQuest's art are in this
-// sketch too). To put them on the board's FFat partition, see the README's
-// "On the Guition ESP32-4848S040".
+// chromaquest.bin, vault13h.bin and ironforge.bin, compiled from the scripts
+// of the examples next to this one (XenoWing's and ChromaQuest's art are in
+// this sketch too; Ironforge's monsters are in ironforge.wad, on the
+// partition next to the games). To put them on the board's FFat partition,
+// see the README's "On the Guition ESP32-4848S040".
 //
 // Each game is shown as in its own sketch, with the same touch pad:
 //   tetris      240x240 at pixel size 2, its own buttons drawn by the
 //               script; touch the TETRIS title to come back
 //   vault13h    its 320x240 view 1.5 times larger (480x360), a pad of 120 rows
+//   ironforge   240x240 at pixel size 2, its own pad drawn by the script;
+//               hold the status bar a second to come back
 //   the others  400x240, 1.2 times larger (480x288), a pad of 192 rows
 // (LauncherPad.h is the guiton games' TouchPad.h, switched per game.) A .bin
 // the launcher doesn't know gets the arrows, START and QUIT.
@@ -23,8 +26,9 @@
 // How a game stops: every game calls readKey() once per frame. When QUIT was
 // touched, readKey() never returns: the game's task waits there, in a
 // function of this sketch that holds nothing, and loop() kills the task and
-// frees the game. (Killing it anywhere else, inside show16() say, could leave
-// the screen driver half way.)
+// frees the game. (Killing it anywhere else, inside the panel driver say,
+// could leave the screen half way.) Ironforge reads no key: it waits at the
+// start of show16(), before the panel is touched.
 //
 // Needs the modified LovyanGFX Bus_RGB driver (double frame buffer with
 // show(), _frame_buffer, pixel_size, offset) and FastLED (CHSV).
@@ -59,8 +63,9 @@ static uint32_t _sizey = 480;
 
 #include "LauncherPad.h"
 
-// how the game being played is shown
-enum { SHOW_MENU, SHOW_TETRIS, SHOW_SCALED, SHOW_VIEW };
+// how the game being played is shown: SHOW_PIXELS, it draws into the frame
+// buffer at its own pixel size (Tetris, Ironforge)
+enum { SHOW_MENU, SHOW_PIXELS, SHOW_SCALED, SHOW_VIEW };
 static int showMode = SHOW_MENU;
 
 // --- each game's buttons (coordinates in its pad, 480 wide) ---
@@ -127,6 +132,34 @@ static const PadButton tetrisPad[] = {
 };
 #define COUNT(a) (int)(sizeof(a) / sizeof(a[0]))
 
+// Ironforge draws its pad (examples/guiton/Ironforge, at 240x240) and reads
+// touchHeld: bits 0 turn left, 1 turn right, 2 forward, 3 back, 4 FIRE,
+// 5 USE, 6 GUN. Bit 7 is the launcher's: the status bar, held a second, QUIT.
+#define IRONFORGE_QUIT (1u << 7)
+static uint32_t ironforgeBits(int x, int y) {
+  x /= 2;
+  y /= 2;
+  if (y >= 144 && y < 176)
+    return IRONFORGE_QUIT;
+  if (y < 176)
+    return 0;
+  if (x >= 164)
+    return 1u << 4;
+  if (x >= 104)
+    return y < 207 ? 1u << 5 : 1u << 6;
+  // the cross: the side of its middle the finger is on; between two arms,
+  // both (forward and turning)
+  int dx = x - 52, dy = y - 208;
+  if (abs(dx) < 5 && abs(dy) < 5)
+    return 0;
+  uint32_t b = 0;
+  if (abs(dx) * 5 > abs(dy) * 2)
+    b |= dx < 0 ? 1u << 0 : 1u << 1;
+  if (abs(dy) * 5 > abs(dx) * 2)
+    b |= dy < 0 ? 1u << 2 : 1u << 3;
+  return b;
+}
+
 // HSV -> RGB565, byte swapped like LovyanGFX's frame buffer
 static uint16_t hsv16(uint8_t h, uint8_t s, uint8_t v) {
   CRGB d = CHSV(h, s, v);
@@ -176,7 +209,22 @@ static void scaleView(uint16_t *fb) {
   }
 }
 
+static volatile bool gameParked = false;
+static bool holdToQuit = false;   // Ironforge: QUIT is the status bar, held
+static uint32_t quitSince = 0;
+
 void show16() {
+  if (holdToQuit) {
+    if (!(padHeld & IRONFORGE_QUIT))
+      quitSince = 0;
+    else if (quitSince == 0)
+      quitSince = millis() | 1;
+    else if (millis() - quitSince >= 1000) {
+      gameParked = true;
+      while (true)
+        vTaskDelay(1000);
+    }
+  }
   if (showMode == SHOW_SCALED)
     scaleGame(frame_buffer);
   if (showMode == SHOW_VIEW)
@@ -184,7 +232,7 @@ void show16() {
   padShow(frame_buffer);
   lcd._bus_instance.show();
   frame_buffer = (uint16_t *)lcd._bus_instance._frame_buffer;
-  if (showMode == SHOW_TETRIS || showMode == SHOW_MENU)
+  if (showMode == SHOW_PIXELS || showMode == SHOW_MENU)
     gameBuffer = frame_buffer;
   lcd._panel_instance.resetWriteBuffer();
 }
@@ -195,10 +243,10 @@ void clearscreen() {
   padDrawn[0] = padDrawn[1] = 0xFFFFFFFF;
 }
 
-// Tetris asks for pixel size 2 and gets it; the others ask for 2 (400x240 on
+// Tetris and Ironforge ask for pixel size 2 and get it; the others ask for 2 (400x240 on
 // the 800x480 panel they were written for) and are scaled by show16() instead
 void setPixelsize(int h) {
-  if (showMode != SHOW_TETRIS)
+  if (showMode != SHOW_PIXELS)
     h = 1;
   clearscreen();
   show16();
@@ -230,13 +278,67 @@ float scriptHypot(float x, float y) {
   return hypotf(x, y);
 }
 
+float scriptAtan2(float y, float x) {
+  return atan2f(y, x);
+}
+
+// --- Ironforge's WAD, /ironforge.wad: read into PSRAM when the game first
+// starts, and kept (as in examples/guiton/Ironforge) ---
+static uint8_t *wadData = NULL;
+static int wadLoaded = 0;
+
+static void loadWad(const char *path) {
+  if (wadData)
+    return;
+  File f = FFat.open(path, FILE_READ);
+  if (!f) {
+    printf("no %s on the FFat partition: Ironforge uses its own monsters\n", path);
+    return;
+  }
+  size_t size = f.size();
+  wadData = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+  if (wadData && f.read(wadData, size) == size && memcmp(wadData + 1, "WAD", 3) == 0) {
+    wadLoaded = 1;
+    printf("%s: %u bytes\n", path, (unsigned)size);
+  } else {
+    printf("%s does not read\n", path);
+    free(wadData);
+    wadData = NULL;
+  }
+  f.close();
+}
+
+// where the entry of that name starts in the WAD, -1 when it is not there
+static int wadFind(char *name) {
+  if (!wadData)
+    return -1;
+  int32_t n, dir;
+  memcpy(&n, wadData + 4, 4);
+  memcpy(&dir, wadData + 8, 4);
+  for (int i = 0; i < n; i++) {
+    const uint8_t *e = wadData + dir + 16 * i;
+    if (strncmp((const char *)e + 8, name, 8) == 0) {
+      int32_t pos;
+      memcpy(&pos, e, 4);
+      return pos;
+    }
+  }
+  return -1;
+}
+
+// the picture named prefix + frame letter + angle digit (HUSKA1)
+static int wadSprite(char *prefix, int frame, int angle) {
+  char name[9];
+  snprintf(name, sizeof(name), "%s%c%d", prefix, 'A' + frame, angle);
+  return wadFind(name);
+}
+
 #define KEY_ESCAPE 27
 
 // the game that runs, built in place: a ScriptExecutable can't be copied or
 // moved, and it has to be freed when the game stops
 alignas(ScriptExecutable) static uint8_t gameSlot[sizeof(ScriptExecutable)];
 static ScriptExecutable *game = NULL;
-static volatile bool gameParked = false;
 
 // the games' readKey(): on QUIT (Escape), the game's task stops here for good
 int readKey() {
@@ -250,7 +352,7 @@ int readKey() {
 }
 
 // the games on the partition
-#define MAX_GAMES 7
+#define MAX_GAMES 8
 static char gameFile[MAX_GAMES][32];
 static uint32_t gameSize[MAX_GAMES];
 static int gameCount = 0;
@@ -287,8 +389,8 @@ static void listGames() {
 // --- the menu, 480x480, a row per game to touch ---
 
 #define ROW_Y 76
-#define ROW_H 44
-#define ROW_STEP 50
+#define ROW_H 40
+#define ROW_STEP 44
 // the light: - and + either side of a bar, under the games
 #define LIGHT_Y 430
 #define LIGHT_H 44
@@ -343,9 +445,9 @@ static void drawMenu(uint32_t t, int pressed) {
     menuFill(23, y + 3, 434, ROW_H - 6, face);
     char line[40];
     snprintf(line, sizeof(line), "%.*s", (int)strlen(gameFile[i]) - 4, gameFile[i]);
-    menuText(40, y + 14, line, 2, 255, 255, 255);
+    menuText(40, y + 12, line, 2, 255, 255, 255);
     snprintf(line, sizeof(line), "%u", (unsigned)gameSize[i]);
-    menuText(372, y + 18, line, 1, 255, 210, 120);
+    menuText(372, y + 16, line, 1, 255, 210, 120);
   }
   // the light: - [bar] +
   for (int k = 0; k < 2; k++) {
@@ -384,9 +486,18 @@ static int rowAt(int x, int y) {
 // how a game is shown and played, from its file's name
 static void setUpFor(const char *file) {
   if (strncasecmp(file, "tetris", 6) == 0) {
-    showMode = SHOW_TETRIS;
+    showMode = SHOW_PIXELS;
     gameBuffer = frame_buffer;
     usePad(tetrisPad, COUNT(tetrisPad), 0, false, 220, 70);
+    return;
+  }
+  if (strncasecmp(file, "ironforge", 9) == 0) {
+    showMode = SHOW_PIXELS;
+    gameBuffer = frame_buffer;
+    loadWad("/ironforge.wad");
+    usePad(NULL, 0, 0, false, 150, 40);
+    padBitsAt = ironforgeBits;
+    holdToQuit = true;
     return;
   }
   gameBuffer = ownBuffer;
@@ -446,6 +557,8 @@ static void startGame(int i) {
 
 static void stopGame() {
   noPad();
+  holdToQuit = false;
+  quitSince = 0;
   game->kill();
   game->~ScriptExecutable();
   game = NULL;
@@ -495,6 +608,12 @@ void setup() {
   // Vault13H
   bindFunction((char *)"float", (char *)"sin", (char *)"float", (void *)scriptSin);
   bindFunction((char *)"float", (char *)"hypot", (char *)"float,float", (void *)scriptHypot);
+  // Ironforge: atan2, and its monsters' WAD
+  bindFunction((char *)"float", (char *)"atan2", (char *)"float,float", (void *)scriptAtan2);
+  bindVariable((char *)"uint8_t *", (char *)"wad", NULL, (void *)&wadData);
+  bindVariable((char *)"int", (char *)"wadLoaded", NULL, (void *)&wadLoaded);
+  bindFunction((char *)"int", (char *)"wadSprite", (char *)"char*,int,int", (void *)wadSprite);
+  bindFunction((char *)"int", (char *)"wadFind", (char *)"char*", (void *)wadFind);
   // XenoWing's sprites and the five layers of its alien world (in flash)
   bindVariable((char *)"uint16_t *", (char *)"gfx", NULL, (void *)&gfxP);
   bindVariable((char *)"uint16_t *", (char *)"sky", NULL, (void *)&skyP);

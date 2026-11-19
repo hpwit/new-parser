@@ -4,9 +4,12 @@
 // (see CreateTetrisBinary), so it starts at once.
 //
 // The data folder next to this sketch holds the games of the matouch examples:
-// tetris.bin, mazechase.bin, neonracer.bin, prismbreak.bin, xenowing.bin and
-// chromaquest.bin (XenoWing's and ChromaQuest's art are in this sketch too,
-// xenowing_assets.h and chroma_assets.h). Any other .bin
+// tetris.bin, mazechase.bin, neonracer.bin, prismbreak.bin, xenowing.bin,
+// chromaquest.bin and ironforge.bin (XenoWing's and ChromaQuest's art are in
+// this sketch too, xenowing_assets.h and chroma_assets.h; Ironforge's
+// monsters are in ironforge.wad, on the partition next to the games; its
+// keys are held, a bit each in touchHeld, as in examples/matouch/Ironforge).
+// Any other .bin
 // compiled with the same bindings (below) shows in the menu too.
 // To put them on the board's FFat partition, see the README's "GameLauncher:
 // games from the FFat partition".
@@ -18,8 +21,9 @@
 // How a game stops: every game calls readKey() once per frame. When Escape
 // was pressed, readKey() never returns: the game's task waits there, in a
 // function of this sketch that holds nothing, and loop() kills the task and
-// frees the game. (Killing it anywhere else, inside show16() say, could leave
-// the screen driver half way.)
+// frees the game. (Killing it anywhere else, inside the panel driver say,
+// could leave the screen half way.) Ironforge reads no key: on Escape, it
+// waits at the start of show16(), before the panel is touched.
 //
 // Needs the modified LovyanGFX Bus_RGB driver (double frame buffer with show(),
 // _frame_buffer, pixel_size, offset), FastLED (CHSV) and the ESP32_USB_Host_HID
@@ -50,6 +54,10 @@ static uint16_t *forestP = (uint16_t *)forest, *nearP = (uint16_t *)nearRidge, *
 static uint16_t *chromaGfxP = (uint16_t *)chromaGfx, *worldColorP = (uint16_t *)worldColor;
 static uint8_t *worldLumP = (uint8_t *)worldLum;
 uint16_t *frame_buffer;
+// where the game draws (led16): the frame buffer, GAME_X pixels in (13 for
+// Ironforge, its 240 columns in the middle of 266)
+uint16_t *gameBuffer;
+static int gameX = 0;
 static uint32_t _sizex = 800;
 static uint32_t _sizey = 480;
 
@@ -60,9 +68,22 @@ static uint16_t hsv16(uint8_t h, uint8_t s, uint8_t v) {
   return ((j & 0xff) << 8) | ((j & 0xFF00) >> 8);
 }
 
+// the keys held, a bit each (Ironforge): 0 left, 1 right, 2 up, 3 down,
+// 4 Space, 5 E or Enter, 6 G or Tab
+static volatile uint32_t keysHeld = 0;
+static volatile bool escapePressed = false;
+static volatile bool gameParked = false;
+static bool escapeInShow = false;   // Ironforge: Escape stops it in show16()
+
 void show16() {
+  if (escapeInShow && escapePressed) {
+    gameParked = true;
+    while (true)
+      vTaskDelay(1000);
+  }
   lcd._bus_instance.show();
   frame_buffer = (uint16_t *)lcd._bus_instance._frame_buffer;
+  gameBuffer = frame_buffer + gameX;
   lcd._panel_instance.resetWriteBuffer();
 }
 
@@ -89,6 +110,69 @@ uint32_t scriptRand(uint32_t n) {
   return esp_random() % n;
 }
 
+float scriptSin(float a) {
+  return sinf(a);
+}
+
+float scriptHypot(float x, float y) {
+  return hypotf(x, y);
+}
+
+float scriptAtan2(float y, float x) {
+  return atan2f(y, x);
+}
+
+// --- Ironforge's WAD, /ironforge.wad: read into PSRAM when the game first
+// starts, and kept (as in examples/matouch/Ironforge) ---
+static uint8_t *wadData = NULL;
+static int wadLoaded = 0;
+
+static void loadWad(const char *path) {
+  if (wadData)
+    return;
+  File f = FFat.open(path, FILE_READ);
+  if (!f) {
+    printf("no %s on the FFat partition: Ironforge uses its own monsters\n", path);
+    return;
+  }
+  size_t size = f.size();
+  wadData = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+  if (wadData && f.read(wadData, size) == size && memcmp(wadData + 1, "WAD", 3) == 0) {
+    wadLoaded = 1;
+    printf("%s: %u bytes\n", path, (unsigned)size);
+  } else {
+    printf("%s does not read\n", path);
+    free(wadData);
+    wadData = NULL;
+  }
+  f.close();
+}
+
+// where the entry of that name starts in the WAD, -1 when it is not there
+static int wadFind(char *name) {
+  if (!wadData)
+    return -1;
+  int32_t n, dir;
+  memcpy(&n, wadData + 4, 4);
+  memcpy(&dir, wadData + 8, 4);
+  for (int i = 0; i < n; i++) {
+    const uint8_t *e = wadData + dir + 16 * i;
+    if (strncmp((const char *)e + 8, name, 8) == 0) {
+      int32_t pos;
+      memcpy(&pos, e, 4);
+      return pos;
+    }
+  }
+  return -1;
+}
+
+// the picture named prefix + frame letter + angle digit (HUSKA1)
+static int wadSprite(char *prefix, int frame, int angle) {
+  char name[9];
+  snprintf(name, sizeof(name), "%s%c%d", prefix, 'A' + frame, angle);
+  return wadFind(name);
+}
+
 // the keys, from the keyboard's task to the menu or the game
 #define KEY_QUEUE 16
 #define KEY_ESCAPE 27
@@ -111,9 +195,39 @@ static int popKey() {
   return c;
 }
 
+static int keyBit(key_return k) {
+  if (k.key_code == HID_KEY_LEFT)
+    return 0;
+  if (k.key_code == HID_KEY_RIGHT)
+    return 1;
+  if (k.key_code == HID_KEY_UP)
+    return 2;
+  if (k.key_code == HID_KEY_DOWN)
+    return 3;
+  if (k.key_code == HID_KEY_ENTER)
+    return 5;
+  if (k.key_code == HID_KEY_TAB)
+    return 6;
+  switch (tolower(k.key_char)) {
+    case 'q': return 0;
+    case 'd': return 1;
+    case 'z': return 2;
+    case 's': return 3;
+    case ' ': return 4;
+    case 'e': return 5;
+    case 'g': return 6;
+  }
+  return -1;
+}
+
 void print_char(key_return k) {
-  if (k.key_code == HID_KEY_ESC)
+  int b = keyBit(k);
+  if (b >= 0)
+    keysHeld |= 1u << b;
+  if (k.key_code == HID_KEY_ESC) {
+    escapePressed = true;
     pushKey(KEY_ESCAPE);
+  }
   else if (k.key_code == HID_KEY_UP)
     pushKey('z');
   else if (k.key_code == HID_KEY_LEFT)
@@ -129,6 +243,9 @@ void print_char(key_return k) {
 // a direction let go, as its letter + 128 (XenoWing moves while a key is
 // held; the other games ignore these)
 void release_char(key_return k) {
+  int b = keyBit(k);
+  if (b >= 0)
+    keysHeld &= ~(1u << b);
   uint8_t c = tolower(k.key_char);
   if (k.key_code == HID_KEY_UP)
     c = 'z';
@@ -146,7 +263,6 @@ void release_char(key_return k) {
 // moved, and it has to be freed when the game stops
 alignas(ScriptExecutable) static uint8_t gameSlot[sizeof(ScriptExecutable)];
 static ScriptExecutable *game = NULL;
-static volatile bool gameParked = false;
 
 // the games' readKey(): on Escape, the game's task stops here for good
 int readKey() {
@@ -326,8 +442,15 @@ static void startGame(int i) {
   printf("%s: loaded in %u ms, %u bytes of code\n", gameFile[i], (unsigned)(millis() - t0),
          (unsigned)game->exe.binary_size);
   message[0] = 0;
+  if (strncasecmp(gameFile[i], "ironforge", 9) == 0) {
+    loadWad("/ironforge.wad");
+    gameX = 13;
+    escapeInShow = true;
+  }
+  gameBuffer = frame_buffer + gameX;
   while (popKey() != 0)
     ;
+  escapePressed = false;
   gameParked = false;
   game->executeAsTask("main", 16384, 1, 1, "game");
 }
@@ -337,6 +460,8 @@ static void stopGame() {
   game->~ScriptExecutable();
   game = NULL;
   gameParked = false;
+  escapeInShow = false;
+  gameX = 0;
   while (popKey() != 0)
     ;
   setPixelsize(2);
@@ -355,18 +480,28 @@ void setup() {
   xTaskCreatePinnedToCore(lcdInitTask, "lcdInit", 4096, xTaskGetCurrentTaskHandle(), 5, NULL, 0);
   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
   frame_buffer = (uint16_t *)lcd._bus_instance._frame_buffer;
+  gameBuffer = frame_buffer;
 
   // what every game uses: the games are compiled against these names
   bindVariable((char *)"uint32_t", (char *)"width", NULL, (void *)&_sizex);
   bindVariable((char *)"uint32_t", (char *)"height", NULL, (void *)&_sizey);
   // a pointer, not an array: show16() swaps the frame buffers
-  bindVariable((char *)"uint16_t *", (char *)"led16", NULL, (void *)&frame_buffer);
+  bindVariable((char *)"uint16_t *", (char *)"led16", NULL, (void *)&gameBuffer);
   bindFunction((char *)"uint16_t", (char *)"hsv2", (char *)"int,int,int", (void *)hsv16);
   bindFunction((char *)"void", (char *)"show16", NULL, (void *)show16);
   bindFunction((char *)"void", (char *)"setPixelsize", (char *)"int", (void *)setPixelsize);
   bindFunction((char *)"uint32_t", (char *)"millis", NULL, (void *)scriptMillis);
   bindFunction((char *)"uint32_t", (char *)"rand", (char *)"uint32_t", (void *)scriptRand);
   bindFunction((char *)"int", (char *)"readKey", NULL, (void *)readKey);
+  // Ironforge: the keys held, its maths, and its monsters' WAD
+  bindVariable((char *)"uint32_t", (char *)"touchHeld", NULL, (void *)&keysHeld);
+  bindFunction((char *)"float", (char *)"sin", (char *)"float", (void *)scriptSin);
+  bindFunction((char *)"float", (char *)"hypot", (char *)"float,float", (void *)scriptHypot);
+  bindFunction((char *)"float", (char *)"atan2", (char *)"float,float", (void *)scriptAtan2);
+  bindVariable((char *)"uint8_t *", (char *)"wad", NULL, (void *)&wadData);
+  bindVariable((char *)"int", (char *)"wadLoaded", NULL, (void *)&wadLoaded);
+  bindFunction((char *)"int", (char *)"wadSprite", (char *)"char*,int,int", (void *)wadSprite);
+  bindFunction((char *)"int", (char *)"wadFind", (char *)"char*", (void *)wadFind);
   // XenoWing's sprites and the five layers of its alien world (in flash)
   bindVariable((char *)"uint16_t *", (char *)"gfx", NULL, (void *)&gfxP);
   bindVariable((char *)"uint16_t *", (char *)"sky", NULL, (void *)&skyP);
