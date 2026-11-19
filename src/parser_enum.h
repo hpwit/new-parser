@@ -72,7 +72,8 @@ enum asmInstruction
   rfr,
 
   extui,
-  rems
+  rems,
+  sra
 
 };
 

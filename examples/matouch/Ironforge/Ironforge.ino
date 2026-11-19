@@ -1064,9 +1064,10 @@ int btnp(int b)
    return 0;
 }
 
-// A cast is always put in a variable before an operator is applied to it:
-// the compiler drops the operator in `((int)(float expression)) & 63`, as
-// the left operand of & + | << >> or % (being looked into).
+// A cast is put in a variable before an operator is applied to it: older
+// versions of the compiler dropped the operator in
+// `((int)(float expression)) & 63` (fixed; this script still compiles with
+// them).
 
 // ---- the face in the status bar: a vault raider in a steel helmet, 24 x 30,
 // worse as health drops: 0 fine (over 80), 1 tired, 2 bruised, 3 cut and

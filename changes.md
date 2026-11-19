@@ -4,6 +4,23 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### ➗ `>>` keeps the sign of an int
+
+```c
+int m = -54;
+int h = m >> 1;   // -27, as in C (it gave 2147483621)
+```
+
+`>>` always shifted in zeros (`srl`), even for an `int`, so a negative value became a huge positive one. It now keeps the sign (`sra`) unless the value shifted holds a `uint32_t` (`(u + 1) >> 8` still shifts in zeros, as C's conversions give). `uint8_t` and `uint16_t` values are never negative, so nothing changes for them. The examples that shift ints compile to the same size, with `sra` in place of `srl`; where they could shift a negative value the result is masked afterwards (`& 248`), or bounds-checked as a tile coordinate, so they behave as before. Regression `test/fuzz/regressions/signed_shift_right`.
+
+### 🎯 A cast as the left operand keeps its operator
+
+```c
+int i = ((int)(x * 64.0)) & 63;   // was (int)(x * 64.0): the & was lost
+```
+
+A cast of a float expression passed the type of its operands (float) to the expression around it instead of its own, so `& | << >> %` after it were done as float operations, which dropped `&`, `|` and the shifts. The cast now gives its own type. The examples that use casts compile to smaller code with the same results (NeonRacer 336 bytes less); the others are byte-identical. Regression `test/fuzz/regressions/cast_left_operand`.
+
 ### ❓ `?:` and comparisons as values, as in v1
 
 ```c

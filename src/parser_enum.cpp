@@ -75,5 +75,6 @@ const char * asmInstructionsName[] =
         "abs a%d,a%d",
         "rfr a%d,f%d",
         "extui a%d,a%d,%d,%d",
-        "rems a%d,a%d,a%d"
+        "rems a%d,a%d,a%d",
+        "sra a%d,a%d"
 };

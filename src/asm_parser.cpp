@@ -746,6 +746,8 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         return parseOperandes(sp.operandes, 1, op_ssl, 3, bin_ssl);
     if (strcmp(op, "srl") == 0)
         return parseOperandes(sp.operandes, 2, op_mov, 3, bin_srl);
+    if (strcmp(op, "sra") == 0)
+        return parseOperandes(sp.operandes, 2, op_mov, 3, bin_sra);
     if (strcmp(op, "mull") == 0)
         return parseOperandes(sp.operandes, 3, op_add, 3, bin_mull);
     if (strcmp(op, "neg") == 0)

@@ -1206,7 +1206,11 @@ void Parser::parseFactor()
             // -- never a bare literal/identifier for the outer branches
             // to have already caught -- left the enclosing signature's
             // type at __none__.
-            uint8_t _castType = current_node->_vartype;
+            // The type is the cast's own (its outer node): the inner one
+            // has taken the type of the operands inside, float for
+            // (int)(a * 64.0), which made the whole of
+            // ((int)(a * 64.0)) & 63 a float expression and lost its &.
+            uint8_t _castType = current_node->parent->_vartype;
             current_node = current_node->parent;
             current_node = current_node->parent;
             change_type.pop_back();

@@ -1053,7 +1053,13 @@ void _visitoperatorNode(NodeToken *nd)
         // bufferText->addAfter("movi a8,32");
         // bufferText->addAfter(string_format("sub a%d,a8,a%d",register_numr.get(),register_numr.get()).c_str());
         bufferText->addAfter(string_format(wsr, register_numr.get(), 3));
-        bufferText->addAfter(string_format(srl, register_numl.get(), register_numl.get()));
+        // Signed unless the value shifted is uint32_t, as in C: `-54 >> 1`
+        // is -27. It was always unsigned (srl), which gave 2147483621. A
+        // uint32_t anywhere in the left operand makes it unsigned, as C's
+        // conversions do for (u + 1) >> 8; uint8_t and uint16_t values are
+        // never negative, so only int changes.
+        bufferText->addAfter(string_format((l == __uint32_t__ || containsValueOfType(nd->getChildPtr(0), __uint32_t__)) ? srl : sra,
+                                           register_numl.get(), register_numl.get()));
         break;
     case TokenSubstraction:
     {

@@ -578,7 +578,7 @@ void optimize(Text *text)
                 trackRemoveAt(from, to, index, ind);
         }
         else if ((strcmp(op, "neg") == 0 || strcmp(op, "abs") == 0 || strcmp(op, "mov") == 0 ||
-                  strcmp(op, "sll") == 0 || strcmp(op, "srl") == 0) &&
+                  strcmp(op, "sll") == 0 || strcmp(op, "srl") == 0 || strcmp(op, "sra") == 0) &&
                  d.size() > 1)
         {
             SplitResult d2(d.get(1), ",");

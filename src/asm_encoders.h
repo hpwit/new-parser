@@ -70,6 +70,10 @@ uint32_t bin_srl(uint32_t *values)
 {
     return ((values[0] << 12) & 0xF000) + ((values[1] << 4) & 0xF0) + 0x910000;
 }
+uint32_t bin_sra(uint32_t *values) // sra ar, at: by SAR, the sign kept
+{
+    return ((values[0] << 12) & 0xF000) + ((values[1] << 4) & 0xF0) + 0xB10000;
+}
 uint32_t bin_or(uint32_t *values)
 {
     return ((values[0] << 12) & 0xF000) + ((values[1] << 8) & 0xF00) + ((values[2] << 4) & 0xF0) + 0x200000;

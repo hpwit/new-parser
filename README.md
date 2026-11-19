@@ -1666,7 +1666,7 @@ Like any normal language you can have:
   ```
   NB: indexing a `char *` local (`s[0]`) is not supported yet.
 - `^` for power (`x^2` is x squared, not a xor)
-- `>>` and `<<`
+- `>>` and `<<` (`>>` keeps the sign of an `int`, and shifts in zeros for a `uint32_t`, as in C)
 - bitwise `&` and `|` (`if (bits & 1)`, `(v >> n) & 1`). NB: they bind like `*`, not below `+` and the comparisons as in C: `a + b & 4` is `a + (b & 4)`, so put parentheses around them when mixing
 - `&&`, `||` (or `and`, `or`)
 - type conversion `(float)(expr)`, `(int)(expr)`. The parentheses around `expr` are needed: `(int)x` alone doesn't compile.
@@ -2529,13 +2529,12 @@ then `wl_fatfsgen.py` and `esptool` as above.
 | View | 240x144, shown 480x288 (pixel size 2) |
 | Frame rate | 21 to 42 frames shown a second (the panel's 42.3 is the most); the script takes 20 to 40 ms a frame in play |
 
-Writing it found a compiler bug: a cast used as the left operand of an operator, as in `((int)(x * 64.0)) & 63`, lost the operator (the floors were noise until the cast was put in a variable first). The script works around it; the compiler is not fixed yet.
+Writing it found a compiler bug: a cast used as the left operand of an operator, as in `((int)(x * 64.0)) & 63`, lost the operator (the floors were noise until the cast was put in a variable first). The script works around it; the compiler is fixed since (the cast passed the type of its operands, float, to the expression around it, instead of its own).
 
 ---
 
 # Known limitations
 
-- **To be fixed in the compiler: a cast as the left operand of an operator loses the operator.** `((int)(x * 64.0)) & 63` gives `(int)(x * 64.0)`, and so do `+ | << >> %` after such a cast. Until it is fixed, put the cast in a variable first: `int i = (int)(x * 64.0); i = i & 63;` (see Ironforge).
 - **No `sync()` and no pre/post kill** from v1's `scriptRuntime`. Running, listing, pausing, restarting and killing scripts by name is there: see [The script scheduler](#the-script-scheduler).
 - **`import`** (v1's `import rand`...) **doesn't work yet.** Declare the function `external` and bind a host function instead.
 - **No built-in `hsv()` or led support**: bind them yourself (see [CRGB and the hue function](#crgb-and-the-hue-function)).
