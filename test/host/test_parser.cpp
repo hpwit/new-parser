@@ -3491,6 +3491,186 @@ static void runRecompileAfterErrorTest()
 // A bound function with a parameter of a structure bound by bindStruct():
 // bindFunction("void", "setRes", "res", f) is called as setRes(M2x2) on a
 // bound structure variable, and f receives its address (a10 = &M2x2).
+// setExecutableAllocator(): the code goes into the host's own block, comes
+// back to it, and an allocator with nothing to give makes a loader error
+// that says how much was needed.
+static uint32_t execBlock[1024];
+static int execAllocs = 0, execFrees = 0;
+static void *testExecNone(size_t) { return NULL; }
+static void *testExecAlloc(size_t size)
+{
+    execAllocs++;
+    return size <= sizeof(execBlock) ? execBlock : NULL;
+}
+static void testExecFree(void *code)
+{
+    if (code == execBlock)
+        execFrees++;
+}
+// parses the test's script into content/header/footer
+static bool parseForAllocatorTest()
+{
+    Parser p;
+    p.clean();
+    content.clear();
+    header.clear();
+    footer.clear();
+    Script s;
+    char *buf = strdup("int g[4]; void main(){int a; a=7; g[1]=a*6;}");
+    s.addContent(buf);
+    s.init();
+    p.parse(&s, &__allTokens);
+    return !Error.error;
+}
+static void runExecutableAllocatorTest()
+{
+    const char *name = "setExecutableAllocator(): the code in the host's block, freed back to it; none gives a sized error";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = parseForAllocatorTest();
+    Binary bin = createBinary(&footer, &header, &content, false);
+    if (!ok || bin.error.error)
+    {
+        printf("       the script does not compile\n");
+        ok = false;
+    }
+    if (ok)
+    {
+        setExecutableAllocator(testExecAlloc, testExecFree);
+        executable exe = createExecutableFromBinary(&bin);
+        if (exe.error.error || (void *)exe.start_program != (void *)execBlock)
+        {
+            printf("       the code is not in the host's block (error %d)\n", exe.error.error);
+            ok = false;
+        }
+        freeExecutable(&exe);
+        if (execAllocs != 1 || execFrees != 1)
+        {
+            printf("       %d allocation(s), %d free(s) of the block, expected 1 and 1\n", execAllocs, execFrees);
+            ok = false;
+        }
+    }
+    if (ok)
+    {
+        setExecutableAllocator(testExecNone, testExecFree);
+        executable exe = createExecutableFromBinary(&bin);
+        if (!exe.error.error || exe.error.error_message == NULL ||
+            strstr(exe.error.error_message, "bytes of executable memory") == NULL)
+        {
+            printf("       expected a loader error naming the executable memory, got: %s\n",
+                   exe.error.error && exe.error.error_message ? exe.error.error_message : "none");
+            ok = false;
+        }
+    }
+    if (ok)
+    {
+        setExecutableAllocator(NULL, NULL);
+        executable exe = createExecutableFromBinary(&bin);
+        if (exe.error.error || (void *)exe.start_program == (void *)execBlock)
+        {
+            printf("       the default allocator is not back\n");
+            ok = false;
+        }
+        freeExecutable(&exe);
+    }
+    setExecutableAllocator(NULL, NULL);
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
+// loadExecutableFromStream(): a saved binary read through a reader loads
+// as createExecutableFromBinary() loads it (the same code but for the data
+// address it holds, the same globals and functions); one cut short, or
+// not a binary, is an error, not a crash.
+static size_t memReader(void *ctx, uint8_t *buf, size_t len)
+{
+    return fread(buf, 1, len, (FILE *)ctx);
+}
+static void runStreamLoadTest()
+{
+    const char *name = "loadExecutableFromStream(): the same executable as from a buffer; cut short or wrong is an error";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = parseForAllocatorTest();
+    Binary bin = createBinary(&footer, &header, &content, false);
+    uint32_t size = 0;
+    uint8_t *blob = ok && !bin.error.error ? serializeBinary(&bin, &size) : NULL;
+    if (blob == NULL)
+    {
+        printf("       the script does not compile\n");
+        ok = false;
+    }
+    if (ok)
+    {
+        executable a = createExecutableFromBinary(&bin);
+        FILE *f = fmemopen(blob, size, "rb");
+        executable b = loadExecutableFromStream(memReader, f);
+        fclose(f);
+        if (a.error.error || b.error.error || a.binary_size != b.binary_size || a.data_size != b.data_size ||
+            a.functions.size() != b.functions.size())
+        {
+            printf("       the streamed load differs: error %d/%d, code %u/%u\n", a.error.error, b.error.error,
+                   a.binary_size, b.binary_size);
+            ok = false;
+        }
+        uint32_t da = (uint32_t)(uintptr_t)a.data, db = (uint32_t)(uintptr_t)b.data;
+        for (uint32_t i = 0; ok && i < a.binary_size / 4; i++)
+        {
+            uint32_t x = a.start_program[i], y = b.start_program[i];
+            if (x != y && x - da != y - db)
+            {
+                printf("       code word %u: %08x streamed %08x\n", i, x, y);
+                ok = false;
+            }
+        }
+        if (ok && memcmp(a.data, b.data, a.data_size) != 0)
+        {
+            printf("       the globals differ\n");
+            ok = false;
+        }
+        freeExecutable(&a);
+        freeExecutable(&b);
+    }
+    for (int bad = 0; ok && bad < 2; bad++)
+    {
+        uint8_t *copy = (uint8_t *)malloc(size);
+        memcpy(copy, blob, size);
+        if (bad == 1)
+            copy[0] ^= 0xFF; // not the magic
+        FILE *f = fmemopen(copy, bad == 0 ? size - 5 : size, "rb");
+        executable c = loadExecutableFromStream(memReader, f);
+        fclose(f);
+        if (!c.error.error || c.error.error_message == NULL ||
+            strstr(c.error.error_message, "not a valid binary") == NULL)
+        {
+            printf("       %s: expected \"not a valid binary\", got: %s\n", bad == 0 ? "cut short" : "wrong magic",
+                   c.error.error && c.error.error_message ? c.error.error_message : "none");
+            ok = false;
+        }
+        ::free(copy);
+    }
+    if (blob != NULL)
+        ::free(blob);
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 SCRIPT_STRUCT(testres, { int width; int height; int divx; int divy; })
 static testres testResObj = {400, 240, 2, 2};
 static void testSetRes(testres *) {}
@@ -4006,6 +4186,8 @@ int main()
     runRecompileAfterErrorTest();
     runNestedErrorCleanupTest();
     runStructParameterBindingTest();
+    runExecutableAllocatorTest();
+    runStreamLoadTest();
     printf("\n%d passed, %d failed, %d known-crash (of %d)\n", passed, failed, knownCrashes, passed + failed + knownCrashes);
     return failed ? 1 : 0;
 }

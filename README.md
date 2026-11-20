@@ -67,6 +67,7 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
 - [First light](#first-light-)
   * [Checking for errors](#checking-for-errors)
   * [Freeing an executable](#freeing-an-executable)
+  * [Where the code goes](#where-the-code-goes)
 
 - [The function you call can have input parameters](#the-function-you-call-can-have-input-parameters)
 
@@ -435,6 +436,39 @@ if (exec2.isExeExists())
 > A `ScriptExecutable` can't be copied or reassigned. For a second script, create a second `ScriptExecutable` as above.
 
 `free()` can be called several times without harm. See [TwoScripts](examples/TwoScripts) for the complete sketch.
+
+## Where the code goes
+
+A script's machine code goes into **one contiguous block of executable internal RAM** (`heap_caps_malloc(size, MALLOC_CAP_EXEC)`); its global variables go into the ordinary heap (PSRAM when there is some). A large script's code is tens of KB (Ironforge: 40.5 KB), and a firmware that has been running a while may have no free piece that big left, even with plenty of RAM free in total. Such a program can set a block aside at start, before anything breaks the internal RAM up, and give it to the loader:
+
+```cpp
+#include "asm_execute.h"
+
+static void *codeBlock;       // heap_caps_malloc(48 * 1024, MALLOC_CAP_EXEC) at start
+static bool codeBlockUsed;
+
+void *codeAlloc(size_t size)
+{
+   if (codeBlock && !codeBlockUsed && size <= 48 * 1024)
+   {
+      codeBlockUsed = true;
+      return codeBlock;
+   }
+   return heap_caps_malloc(size, MALLOC_CAP_EXEC);   // too big, or already taken
+}
+
+void codeFree(void *code)
+{
+   if (code == codeBlock)
+      codeBlockUsed = false;
+   else
+      heap_caps_free(code);
+}
+
+setExecutableAllocator(codeAlloc, codeFree);   // before loading a script
+```
+
+`release` gets every pointer `alloc` returned, when the script is freed. `setExecutableAllocator(NULL, NULL)` goes back to `MALLOC_CAP_EXEC`. When the code doesn't fit, the load error gives its size and the largest executable block there was.
 
 ---
 
@@ -1597,13 +1631,25 @@ else
 }
 ```
 
+Or straight from the file, without reading it into memory first: `createExecutableFromStream()` takes a function that reads the next bytes, and the code goes from the file into its executable memory a piece at a time (only the binary's relocation table is held, while it loads):
+
+```cpp
+File f = FFat.open("/game.bin");   // LittleFS, SD, ...
+ScriptExecutable exec = createExecutableFromStream(
+    [](void *ctx, uint8_t *buf, size_t len) -> size_t { return ((File *)ctx)->read(buf, len); }, &f);
+f.close();
+```
+
+With a `FILE *` from `fopen()`, the reader is `fread(buf, 1, len, (FILE *)ctx)`. Errors are the same as `createExecutableFromBuffer()`'s, and a file cut short is `not a valid binary: ...`.
+
 When the load fails, `lastLoadError()` says why (it is also printed on the console):
 
 | `lastLoadError()` | Means |
 |---|---|
 | `missing binding: led16, show16()` | the binary uses names this program has not bound: every one is listed, once, functions with `()`. Bind them (`bindVariable()` / `bindFunction()`) before loading, or recompile the script with the names this program has |
 | `not a valid binary: ...` | the buffer is not what `parseScriptToBinary()` made, or it is cut short |
-| `could not allocate executable/data memory ...` | no room for the code (`MALLOC_CAP_EXEC`) or its data |
+| `could not allocate N bytes of executable memory ... (largest MALLOC_CAP_EXEC block: M bytes)` | no free piece of executable internal RAM is as big as the code: see [Where the code goes](#where-the-code-goes) |
+| `could not allocate N bytes for this script's data ...` | no room for its global variables |
 
 It is `""` after a load that worked.
 
@@ -2744,6 +2790,7 @@ struct CompileError
 |---|---|---|---|
 | `parseScriptToBinary(script, size)` | `const char *script`; `uint32_t *size`: receives the length in bytes | `uint8_t *`, or `NULL` on a compile error | Compiles without loading and returns the machine code and its relocations as one buffer, to write to a file. You own it: `free()` it. |
 | `createExecutableFromBuffer(buf, size)` | `const uint8_t *buf`, `uint32_t size`: a buffer from `parseScriptToBinary()` | `ScriptExecutable` | Loads a saved script. Bind every `external` name it uses first, with the same names. Check `isExeExists()`. |
+| `createExecutableFromStream(read, ctx)` | `size_t read(void *ctx, uint8_t *buf, size_t len)`, `void *ctx`: the saved bytes in order | `ScriptExecutable` | The same, from a file: the code goes straight into executable memory, the file is never held whole. |
 | `lastLoadError()` | | `const char *` | Why the last load failed (`"missing binding: led16, show16()"`, every missing name), `""` when it worked. See [Saving executables](#saving-executables). |
 
 See [Saving executables](#saving-executables).

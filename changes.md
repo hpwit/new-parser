@@ -4,6 +4,20 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 📼 `createExecutableFromStream()`: a saved binary loaded from its file
+
+```cpp
+File f = FFat.open("/game.bin");
+ScriptExecutable exec = createExecutableFromStream(
+    [](void *ctx, uint8_t *buf, size_t len) -> size_t { return ((File *)ctx)->read(buf, len); }, &f);
+```
+
+`createExecutableFromBuffer()` needs the whole file in memory, then copies the code and the relocation table out of it before relocating: a binary was held three times while it loaded (Ironforge: 59 KB file, 40.5 KB of code). Streaming copies the code from the file straight into its executable block, 256 bytes at a time, and relocates it there; only the relocation table and the literals after the code are read into the heap, and only while loading. On 67 example scripts the streamed load gives the same code (but for the data address it holds), globals and functions as the buffer one. Host test `loadExecutableFromStream()`, with a file cut short and one that is not a binary.
+
+### 🧱 `setExecutableAllocator()`: the host chooses where the code goes
+
+A script's machine code needs one contiguous block of executable internal RAM. In a busy firmware (SolarOS on the ESP32-S3-Touch-LCD-7) no free piece was as big as Ironforge's 40.5 KB, even right after a reboot, and the script could not load. `setExecutableAllocator(alloc, release)` lets the program hand out a block it set aside at start (see the README's "Where the code goes"); without it nothing changes. The load error now says which allocation failed and by how much: `could not allocate 40552 bytes of executable memory for this script (largest MALLOC_CAP_EXEC block: ... bytes)`. Host test `setExecutableAllocator()`.
+
 ### 🔁 A call's result is not moved out of its loop
 
 ```c

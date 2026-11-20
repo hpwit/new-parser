@@ -1,4 +1,5 @@
 #include "asm_serialize.h"
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -122,6 +123,52 @@ Binary deserializeBinary(const uint8_t *buf, uint32_t size)
     p += bin.function_size;
 
     return bin;
+}
+
+void readBinaryHeader(ScriptReadFunction read, void *ctx, Binary *bin)
+{
+    bin->binary_data = NULL;
+    bin->function_data = NULL;
+    bin->error.error = 0;
+    bin->error.error_message = NULL;
+
+    uint8_t head[12];
+    if (read(ctx, head, sizeof(head)) != sizeof(head))
+    {
+        bin->error.error = 1;
+        bin->error.error_message = (char *)"serialized script binary is truncated";
+        return;
+    }
+    uint32_t magic;
+    memcpy(&magic, head, 4);
+    if (magic != SCRIPT_BINARY_MAGIC)
+    {
+        bin->error.error = 1;
+        bin->error.error_message = (char *)"serialized script binary has the wrong format";
+        return;
+    }
+    memcpy(&bin->instruction_size, head + 4, 2);
+    memcpy(&bin->tmp_instruction_size, head + 6, 2);
+    memcpy(&bin->function_size, head + 8, 2);
+    uint16_t narrow;
+    memcpy(&narrow, head + 10, 2);
+    bin->data_size = narrow;
+    if (narrow == DATA_SIZE_ESCAPE)
+    {
+        uint8_t wide[4];
+        if (read(ctx, wide, 4) != 4)
+        {
+            bin->error.error = 1;
+            bin->error.error_message = (char *)"serialized script binary is truncated";
+            return;
+        }
+        memcpy(&bin->data_size, wide, 4);
+    }
+    if (bin->tmp_instruction_size < bin->instruction_size)
+    {
+        bin->error.error = 1;
+        bin->error.error_message = (char *)"serialized script binary has the wrong format";
+    }
 }
 
 void freeBinary(Binary *bin)

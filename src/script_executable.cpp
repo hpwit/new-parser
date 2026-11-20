@@ -64,6 +64,22 @@ ScriptExecutable::ScriptExecutable(Binary *bin) : exe(createExecutableFromBinary
     }
 }
 
+ScriptExecutable::ScriptExecutable(ScriptReadFunction read, void *ctx) : exe(loadExecutableFromStream(read, ctx))
+{
+    // See ScriptExecutable(Binary *).
+    exe.owner = this;
+    if (exe.error.error)
+    {
+        snprintf(g_lastLoadError, sizeof(g_lastLoadError), "%s",
+                 exe.error.error_message ? exe.error.error_message : "loader error");
+        printf("loader error: %s\n", g_lastLoadError);
+    }
+    else
+    {
+        g_lastLoadError[0] = '\0';
+    }
+}
+
 bool ScriptExecutable::isExeExists()
 {
     return !exe.error.error && exe.start_program != NULL && exe.functions.size() > 0;
@@ -505,4 +521,10 @@ ScriptExecutable createExecutableFromBuffer(const uint8_t *buf, uint32_t size)
     // freeBinary()s bin, and prints any loader error -- same as
     // parseScript()'s equivalent call.
     return ScriptExecutable(&bin);
+}
+
+ScriptExecutable createExecutableFromStream(ScriptReadFunction read, void *ctx)
+{
+    // A prvalue straight through, as createExecutableFromBuffer().
+    return ScriptExecutable(read, ctx);
 }

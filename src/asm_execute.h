@@ -15,6 +15,7 @@
 // scheme produced the correct results on an emulated Xtensa CPU. Actual
 // physical hardware has not been tested.
 #include "asm_types.h"
+#include "asm_serialize.h"
 #include "arguments.h"
 
 //static int32_t callXtensaDirect(void *entry, const int32_t *args, int nargs);
@@ -22,6 +23,13 @@
 // via binded_assets, and copies the code in. On error, ex.error.error is
 // non-zero and no memory has been leaked (nothing else is populated).
 executable createExecutableFromBinary(Binary *bin);
+
+// The same for a saved binary (serializeBinary()'s bytes) read through
+// read(ctx, buf, len): from a file on flash or an SD card, without holding
+// the whole file. The code goes straight from the reader into its
+// executable block; only the relocation table and the literals after the
+// code are read into the heap, and only while loading.
+executable loadExecutableFromStream(ScriptReadFunction read, void *ctx);
 
 // Diagnostic dump: prints every function this executable exposes as a
 // callable entry point (i.e. everything callFunction()/
@@ -99,5 +107,17 @@ bool runExecutableWithArgs(executable *ex, Arguments *args);
 
 // Releases the memory createExecutableFromBinary allocated.
 void freeExecutable(executable *ex);
+
+// Where scripts' machine code goes. By default it is
+// heap_caps_malloc(size, MALLOC_CAP_EXEC) on an esp32 (malloc() on a
+// host), freed by freeExecutable(). The code needs one contiguous block of
+// executable internal RAM, which a busy firmware may have broken up long
+// before a large script loads; such a host can set a block aside at boot
+// and hand it out here. alloc returns NULL when it has nothing big enough;
+// release gets every pointer alloc returned. NULL, NULL restores the
+// default. Set it before loading a script, not while one is loaded.
+typedef void *(*ExecutableAllocFunction)(size_t size);
+typedef void (*ExecutableFreeFunction)(void *code);
+void setExecutableAllocator(ExecutableAllocFunction alloc, ExecutableFreeFunction release);
 
 #endif

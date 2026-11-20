@@ -76,6 +76,9 @@ public:
     // to check it would require the same unsafe copy/assignment this
     // class exists to avoid.
     explicit ScriptExecutable(Binary *bin);
+    // The same for a saved binary read through read(ctx, buf, len):
+    // loadExecutableFromStream(), see createExecutableFromStream().
+    ScriptExecutable(ScriptReadFunction read, void *ctx);
     // Kills the script's task first, if executeAsTask() started one.
     ~ScriptExecutable();
 
@@ -394,5 +397,18 @@ uint8_t *parseScriptToBinary(const char *script, uint32_t *size);
 //   execute()/executeOnly() the same way you would on a freshly
 //   parseScript()'d one (see examples/LoadScriptBinary).
 ScriptExecutable createExecutableFromBuffer(const uint8_t *buf, uint32_t size);
+
+// createExecutableFromBuffer() for a binary in a file, without reading the
+// whole file into memory first: read(ctx, buf, len) gives its bytes in
+// order (up to len, fewer only at the end) and the code goes straight into
+// its executable block. With an fs::File (LittleFS, FFat, SD):
+//
+//   File f = LittleFS.open("/game.bin");
+//   ScriptExecutable exec = createExecutableFromStream(
+//       [](void *ctx, uint8_t *buf, size_t len) -> size_t { return ((File *)ctx)->read(buf, len); }, &f);
+//   f.close();
+//
+// or a FILE * from fopen() with fread(). Errors as createExecutableFromBuffer().
+ScriptExecutable createExecutableFromStream(ScriptReadFunction read, void *ctx);
 
 #endif

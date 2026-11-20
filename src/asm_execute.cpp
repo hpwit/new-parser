@@ -3,6 +3,7 @@
 #include "string_functions.h"
 #include "binary_hex.h"
 #include "runtime_functions.h"
+#include "asm_serialize.h"
 #include <setjmp.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -53,6 +54,41 @@ static inline int64_t debugNowMicros()
 #endif
 #endif
 
+// Where a script's machine code goes: setExecutableAllocator() (see
+// asm_execute.h), else MALLOC_CAP_EXEC memory on target, the plain heap
+// on a host.
+static ExecutableAllocFunction execAllocFunction = NULL;
+static ExecutableFreeFunction execFreeFunction = NULL;
+
+void setExecutableAllocator(ExecutableAllocFunction alloc, ExecutableFreeFunction release)
+{
+    execAllocFunction = alloc;
+    execFreeFunction = release;
+}
+
+static void *allocExecutable(size_t size)
+{
+    if (execAllocFunction != NULL)
+        return execAllocFunction(size);
+#if ASM_EXEC_ON_TARGET
+    return heap_caps_malloc(size, MALLOC_CAP_EXEC);
+#else
+    return malloc(size);
+#endif
+}
+
+static void freeExecutableCode(void *code)
+{
+    if (execFreeFunction != NULL)
+        execFreeFunction(code);
+    else
+#if ASM_EXEC_ON_TARGET
+        heap_caps_free(code);
+#else
+        free(code);
+#endif
+}
+
 // Walks a Binary's relocation header (createBinaryHeader's output) and
 // patches every reference it describes:
 //   type 0 (data_label/number_label): an internal constant/scratch word --
@@ -86,8 +122,10 @@ static void addMissingBinding(char *list, size_t len, const char *label, size_t 
     strncat(list, item, len - strlen(list) - 1);
 }
 
+// exec: the code to patch; literals: the area after the code that the
+// embedded literal bytes (type 3) are copied from.
 static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binary_header, uint8_t *_binary_data,
-                                                     uint32_t /*exec_base*/, executable *finalexe, int offset)
+                                                     executable *finalexe, const uint8_t *literals)
 {
     // The names the binary uses but this program has not bound (bindVariable()/
     // bindFunction()), all of them: "missing binding: led16, show16()".
@@ -172,7 +210,7 @@ static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binar
             binary_header += 2;
             memcpy(&size, binary_header, 2);
             binary_header += 2;
-            memcpy(_binary_data + addr, exec + offset + tmp_data, size);
+            memcpy(_binary_data + addr, literals + tmp_data, size);
             break;
         }
         case 4:
@@ -240,32 +278,11 @@ static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binar
     return error;
 }
 
-executable createExecutableFromBinary(Binary *bin)
+// The code's block (setExecutableAllocator()) and the globals' (zeroed);
+// false, with exe's error saying which and how much, when one is missing.
+static bool allocScriptMemory(const Binary *bin, executable *exe, uint32_t **code, uint8_t **data)
 {
-    // registerBuiltinRuntimeFunctions() (runtime_functions.h) is
-    // otherwise only ever triggered by Parser::parse() -- fine for
-    // parseScript()/the raw parse -> createBinary -> here pipeline
-    // (parsing always happens first, in the same process, before this
-    // runs), but a save/load consumer (createExecutableFromBuffer(), or
-    // hand-rolled deserializeBinary() + this) never calls Parser::parse()
-    // at all: a fresh process that only ever loads a previously-compiled
-    // binary would otherwise never register printf/printfln, so a saved
-    // script that calls either fails to relocate here with "external
-    // function @_printfln(char*|Args) not found" despite them being
-    // documented as always available with no binding needed. Idempotent
-    // (registerBuiltinRuntimeFunctions() guards itself with a static
-    // bool), so unconditionally safe to call again even when parsing
-    // already did.
-    registerBuiltinRuntimeFunctions();
-
-    executable exe;
-    exe.error.error = 0;
-
-#if ASM_EXEC_ON_TARGET
-    uint32_t *exec = (uint32_t *)heap_caps_malloc(bin->instruction_size, MALLOC_CAP_EXEC);
-#else
-    uint32_t *exec = (uint32_t *)malloc(bin->instruction_size);
-#endif
+    uint32_t *exec = (uint32_t *)allocExecutable(bin->instruction_size);
     // Zeroed, so a global declared without an initializer starts at 0 as
     // in C, not with whatever the heap held (initializers are copied in
     // over this by decodeBinaryHeader()). Scripts read such globals
@@ -287,45 +304,81 @@ executable createExecutableFromBinary(Binary *bin)
     // NULL-pointer store.
     if (exec == NULL || binary_data == NULL)
     {
-        exe.error.error = 1;
-        exe.error.error_message = (char *)"could not allocate executable/data memory for this script "
-                                           "(out of MALLOC_CAP_EXEC or general heap)";
+        // Which one, and by how much: the code needs one contiguous block.
+        static char message[160];
+        if (exec == NULL)
+        {
 #if ASM_EXEC_ON_TARGET
-        if (exec != NULL)
-            heap_caps_free(exec);
+            snprintf(message, sizeof(message),
+                     "could not allocate %u bytes of executable memory for this script "
+                     "(largest MALLOC_CAP_EXEC block: %u bytes)",
+                     (unsigned)bin->instruction_size,
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_EXEC));
 #else
-        if (exec != NULL)
-            free(exec);
+            snprintf(message, sizeof(message),
+                     "could not allocate %u bytes of executable memory for this script",
+                     (unsigned)bin->instruction_size);
 #endif
+        }
+        else
+            snprintf(message, sizeof(message),
+                     "could not allocate %u bytes for this script's data (general heap)",
+                     (unsigned)bin->data_size);
+        exe->error.error = 1;
+        exe->error.error_message = message;
+        if (exec != NULL)
+            freeExecutableCode(exec);
         if (binary_data != NULL)
             free(binary_data);
-        return exe;
+        return false;
     }
+    *code = exec;
+    *data = binary_data;
+    return true;
+}
+
+executable createExecutableFromBinary(Binary *bin)
+{
+    // registerBuiltinRuntimeFunctions() (runtime_functions.h) is
+    // otherwise only ever triggered by Parser::parse() -- fine for
+    // parseScript()/the raw parse -> createBinary -> here pipeline
+    // (parsing always happens first, in the same process, before this
+    // runs), but a save/load consumer (createExecutableFromBuffer(), or
+    // hand-rolled deserializeBinary() + this) never calls Parser::parse()
+    // at all: a fresh process that only ever loads a previously-compiled
+    // binary would otherwise never register printf/printfln, so a saved
+    // script that calls either fails to relocate here with "external
+    // function @_printfln(char*|Args) not found" despite them being
+    // documented as always available with no binding needed. Idempotent
+    // (registerBuiltinRuntimeFunctions() guards itself with a static
+    // bool), so unconditionally safe to call again even when parsing
+    // already did.
+    registerBuiltinRuntimeFunctions();
+
+    executable exe;
+    exe.error.error = 0;
+
+    uint32_t *exec;
+    uint8_t *binary_data;
+    if (!allocScriptMemory(bin, &exe, &exec, &binary_data))
+        return exe;
 
     asm_error_message_struct error = decodeBinaryHeader(
         bin->binary_data, bin->function_data, binary_data,
-        (uint32_t)(uintptr_t)exec, &exe, bin->instruction_size);
+        &exe, bin->binary_data + bin->instruction_size);
 
     if (exe.functions.size() == 0)
     {
         exe.error.error = 1;
         exe.error.error_message = (char *)"No global start function found";
-#if ASM_EXEC_ON_TARGET
-        heap_caps_free(exec);
-#else
-        free(exec);
-#endif
+        freeExecutableCode(exec);
         free(binary_data);
         return exe;
     }
     if (error.error == 1)
     {
         exe.error = error;
-#if ASM_EXEC_ON_TARGET
-        heap_caps_free(exec);
-#else
-        free(exec);
-#endif
+        freeExecutableCode(exec);
         free(binary_data);
         return exe;
     }
@@ -356,6 +409,96 @@ executable createExecutableFromBinary(Binary *bin)
     exe.data_size = bin->data_size;
    // printExecutableHex(&exe);
    // printExecutableFunctions(&exe);
+    return exe;
+}
+
+// createExecutableFromBinary() for a saved binary read through `read`
+// (readBinaryHeader()'s format) without holding it all: the code goes from
+// the reader straight into its executable block, a chunk at a time, and is
+// relocated there; only the literals after it and the relocation table are
+// read into the heap, and freed before returning.
+executable loadExecutableFromStream(ScriptReadFunction read, void *ctx)
+{
+    registerBuiltinRuntimeFunctions(); // see createExecutableFromBinary()
+
+    executable exe;
+    exe.error.error = 0;
+
+    Binary bin;
+    readBinaryHeader(read, ctx, &bin);
+    if (bin.error.error)
+    {
+        static char message[96];
+        snprintf(message, sizeof(message), "not a valid binary: %s", bin.error.error_message);
+        exe.error.error = 1;
+        exe.error.error_message = message;
+        return exe;
+    }
+
+    uint32_t *exec;
+    uint8_t *binary_data;
+    if (!allocScriptMemory(&bin, &exe, &exec, &binary_data))
+        return exe;
+
+    // The code, through a small buffer: the destination is executable
+    // memory, written with memcpy() as createExecutableFromBinary() does.
+    uint32_t chunk[64];
+    bool complete = true;
+    for (uint32_t done = 0; complete && done < bin.instruction_size;)
+    {
+        size_t n = bin.instruction_size - done;
+        if (n > sizeof(chunk))
+            n = sizeof(chunk);
+        complete = read(ctx, (uint8_t *)chunk, n) == n;
+        memcpy((uint8_t *)exec + done, chunk, n);
+        done += n;
+    }
+    size_t literalSize = bin.tmp_instruction_size - bin.instruction_size;
+    uint8_t *literals = complete ? (uint8_t *)malloc(literalSize > 0 ? literalSize : 4) : NULL;
+    uint8_t *relocations = literals ? (uint8_t *)malloc(bin.function_size > 0 ? bin.function_size : 4) : NULL;
+    if (relocations != NULL)
+        complete = read(ctx, literals, literalSize) == literalSize &&
+                   read(ctx, relocations, bin.function_size) == bin.function_size;
+    if (!complete || relocations == NULL)
+    {
+        exe.error.error = 1;
+        exe.error.error_message = complete ? (char *)"could not allocate the binary's relocation table"
+                                           : (char *)"not a valid binary: serialized script binary is truncated";
+        free(literals);
+        free(relocations);
+        freeExecutableCode(exec);
+        free(binary_data);
+        return exe;
+    }
+
+    asm_error_message_struct error = decodeBinaryHeader(
+        (uint8_t *)exec, relocations, binary_data, &exe, literals);
+    free(literals);
+    free(relocations);
+    if (exe.functions.size() == 0 || error.error == 1)
+    {
+        if (error.error == 1)
+            exe.error = error;
+        else
+        {
+            exe.error.error = 1;
+            exe.error.error_message = (char *)"No global start function found";
+        }
+        freeExecutableCode(exec);
+        free(binary_data);
+        return exe;
+    }
+
+#if ASM_EXEC_ON_TARGET
+    // See createExecutableFromBinary().
+    xthal_dcache_region_writeback(exec, bin.instruction_size);
+    xthal_icache_region_invalidate(exec, bin.instruction_size);
+#endif
+
+    exe.start_program = exec;
+    exe.data = binary_data;
+    exe.binary_size = bin.instruction_size;
+    exe.data_size = bin.data_size;
     return exe;
 }
 
@@ -669,11 +812,7 @@ void freeExecutable(executable *ex)
 {
     if (ex->start_program != NULL)
     {
-#if ASM_EXEC_ON_TARGET
-        heap_caps_free(ex->start_program);
-#else
-        free(ex->start_program);
-#endif
+        freeExecutableCode(ex->start_program);
         ex->start_program = NULL;
     }
     if (ex->data != NULL)
