@@ -1,0 +1,100 @@
+{
+ "funcs": [
+  {
+   "name": "f0",
+   "params": [
+    "p0",
+    "p1",
+    "p2"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": false
+  },
+  {
+   "name": "f1",
+   "params": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": false
+  },
+  {
+   "name": "f2",
+   "params": [
+    "p0"
+   ],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": true
+  },
+  {
+   "name": "f3",
+   "params": [],
+   "body": [],
+   "ret": [
+    "lit",
+    1
+   ],
+   "pure": true
+  }
+ ],
+ "main": [
+  {
+   "kind": "for",
+   "var": "i6",
+   "count": 1,
+   "body": [
+    {
+     "kind": "assign",
+     "target": [
+      "idx",
+      "N",
+      [
+       [
+        "call",
+        "ix",
+        [
+         [
+          "call",
+          "f3",
+          []
+         ],
+         [
+          "lit",
+          4
+         ]
+        ]
+       ],
+       [
+        "lit",
+        1
+       ]
+      ]
+     ],
+     "op": "=",
+     "expr": [
+      "lit",
+      1
+     ]
+    }
+   ]
+  }
+ ],
+ "description": "A computation reading a call's result (addx4 a5,a10,a10 after call8 @_ix) was moved out of the loop, so the store N[ix(f3(), 4), 1] used the a10 of before the loop. Reduced from seed 251."
+}

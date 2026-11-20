@@ -4,6 +4,15 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 🔁 A call's result is not moved out of its loop
+
+```c
+for (int i = 0; i < n; i++)
+   N[ix(f(), 4), 1] = 1;   // wrote row 0 every time
+```
+
+The optimizer moves computations that do not change in a loop to before it. It took a value read from a register a call writes (a8..a15, the floats) as unchanged, because a call is not counted as writing anything: the row offset `ix(...) * 5` (`addx4 a5,a10,a10`, a10 being the call's result) was computed once before the loop, from whatever a10 held then. A loop with a call now keeps such lines inside. Found by the fuzzer (seed 251); regression `test/fuzz/regressions/call_result_hoisted_from_loop`. Of the examples, only two ProceduralEffects scripts change: the register allocator keeps a different constant in a register, the same size.
+
 ### ➗ `>>` keeps the sign of an int
 
 ```c
