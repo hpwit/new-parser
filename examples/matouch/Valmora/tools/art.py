@@ -1320,6 +1320,97 @@ def serpent_king(frame):
                     eyes=rgb('#a0ffe0'), big_=True)
 
 
+# the hero seen from behind and from the side (the side drawn facing left;
+# facing right is its mirror image)
+HERO_TUNIC = rgb('#2c5ab4')
+HERO_CAPE = rgb('#a82a2a')
+HERO_HAIR = rgb('#c08a3a')
+HERO_LEGS = rgb('#4a4040')
+HERO_SHIELD = rgb('#3a4a9a')
+HERO_BOOTS = rgb('#3a2414')
+
+
+def hero_back(frame):
+    big = canvas()
+    d = ImageDraw.Draw(big)
+    bob = 2 if frame else 0
+    sw = 6 if frame else -6
+    cx = 64
+    # legs, the stride as in front
+    d.rectangle((46, 88, 60, 116 - (4 if frame else 0)), fill=HERO_LEGS)
+    d.rectangle((68, 88, 82, 116 - (0 if frame else 4)), fill=shade(HERO_LEGS, .8))
+    d.rectangle((44, 108 - (4 if frame else 0), 62, 120 - (4 if frame else 0)), fill=HERO_BOOTS)
+    d.rectangle((66, 108 - (0 if frame else 4), 84, 120 - (0 if frame else 4)), fill=HERO_BOOTS)
+    # the sword's blade over the right shoulder (the hero's right, our left)
+    d.line((36, 90 + bob + sw // 2, 22, 40 + sw // 2), fill=rgb('#e0e4f0'), width=6)
+    d.line((30, 82 + bob + sw // 2, 44, 88 + bob + sw // 2), fill=rgb('#c8a030'), width=5)
+    # arms
+    d.rounded_rectangle((30, 54 + bob + sw // 3, 42, 88 + bob + sw // 2), 6, fill=shade(HERO_TUNIC, .8))
+    d.rounded_rectangle((86, 54 + bob - sw // 3, 98, 88 + bob - sw // 2), 6, fill=shade(HERO_TUNIC, .9))
+    ellipse(d, 36, 90 + bob + sw // 2, 6, 6, SKIN[1])
+    # the shield on the left arm, its back to us
+    d.polygon([(82, 58 + bob), (110, 58 + bob), (110, 88 + bob), (96, 102 + bob), (82, 88 + bob)],
+              fill=shade(HERO_SHIELD, .7))
+    d.line((96, 60 + bob, 96, 98 + bob), fill=rgb('#6a5030'), width=4)
+    # the cape over the back, from the shoulders down
+    d.polygon([(40, 48 + bob), (88, 48 + bob), (96, 114), (32, 114)], fill=HERO_CAPE)
+    d.polygon([(40, 48 + bob), (54, 48 + bob), (46, 114), (32, 114)], fill=shade(HERO_CAPE, 1.25))
+    d.polygon([(76, 48 + bob), (88, 48 + bob), (96, 114), (84, 114)], fill=shade(HERO_CAPE, .75))
+    for x in (52, 64, 76):
+        d.line((x, 56 + bob, x + (x - 64) // 4, 110), fill=shade(HERO_CAPE, .8), width=2)
+    # the back of the head: all hair
+    hy0 = 14 + bob
+    ellipse(d, cx, hy0 + 20, 18, 19, HERO_HAIR)
+    ellipse(d, cx + 5, hy0 + 24, 12, 14, shade(HERO_HAIR, .8))
+    ellipse(d, cx - 4, hy0 + 14, 9, 8, shade(HERO_HAIR, 1.2))
+    d.rectangle((cx - 20, hy0 + 14, cx - 15, hy0 + 30), fill=SKIN[1])
+    d.rectangle((cx + 15, hy0 + 14, cx + 20, hy0 + 30), fill=SKIN[2])
+    return sprite_from(big)
+
+
+def hero_side(frame):
+    """Facing left."""
+    big = canvas()
+    d = ImageDraw.Draw(big)
+    bob = 2 if frame else 0
+    st = 10 if frame else -10
+    # the cape behind, flowing to the right
+    d.polygon([(66, 48 + bob), (82, 50 + bob), (100, 112), (70, 114)], fill=shade(HERO_CAPE, .85))
+    d.polygon([(74, 52 + bob), (82, 50 + bob), (100, 112), (88, 113)], fill=shade(HERO_CAPE, .65))
+    # legs: one forward, one back
+    d.rectangle((56 - st // 2, 88, 68 - st // 2, 114), fill=shade(HERO_LEGS, .8))
+    d.rectangle((56 + st // 2, 88, 68 + st // 2, 114), fill=HERO_LEGS)
+    d.rectangle((50 - st // 2, 108, 68 - st // 2, 120), fill=HERO_BOOTS)
+    d.rectangle((50 + st // 2, 108, 68 + st // 2, 120), fill=HERO_BOOTS)
+    # body, seen from the side
+    d.rounded_rectangle((48, 50 + bob, 80, 94 + bob), 10, fill=HERO_TUNIC)
+    d.rounded_rectangle((48, 50 + bob, 58, 94 + bob), 8, fill=shade(HERO_TUNIC, 1.28))
+    d.rectangle((48, 80 + bob, 80, 86 + bob), fill=rgb('#6a4a1a'))
+    # the shield on the far arm, its edge toward us
+    d.rounded_rectangle((70, 56 + bob, 84, 98 + bob), 5, fill=HERO_SHIELD)
+    d.line((77, 58 + bob, 77, 96 + bob), fill=rgb('#e8c850'), width=3)
+    # the sword arm swinging, the blade forward and up
+    hx, hy = 52 - st // 3, 86 + bob
+    d.rounded_rectangle((52, 54 + bob, 64, 84 + bob), 6, fill=shade(HERO_TUNIC, .9))
+    d.line((hx, hy, hx - 22, hy - 40), fill=rgb('#e0e4f0'), width=6)
+    d.line((hx - 2, hy - 2, hx - 22, hy - 38), fill=rgb('#a0a8bc'), width=2)
+    d.line((hx - 8, hy - 6, hx + 8, hy + 2), fill=rgb('#c8a030'), width=5)
+    ellipse(d, hx, hy, 6, 6, SKIN[1])
+    # the head in profile, looking left
+    hy0 = 14 + bob
+    ellipse(d, 62, hy0 + 20, 17, 19, SKIN[0])
+    ellipse(d, 68, hy0 + 24, 11, 14, SKIN[1])
+    d.polygon([(46, hy0 + 20), (40, hy0 + 27), (47, hy0 + 28)], fill=SKIN[0])
+    d.pieslice((44, hy0 - 2, 82, hy0 + 34), 180, 360, fill=HERO_HAIR)
+    d.rectangle((66, hy0 + 14, 82, hy0 + 32), fill=HERO_HAIR)
+    d.rectangle((50, hy0 + 20, 55, hy0 + 26), fill=OUTLINE)
+    return sprite_from(big)
+
+
+def hero_side_right(frame):
+    return hero_side(frame).transpose(Image.FLIP_LEFT_RIGHT)
+
+
 def make_creatures():
     """(name, [frame0, frame1]) for every creature, in the WAD's order."""
     C = []
@@ -1373,6 +1464,10 @@ def make_creatures():
                                      legs=rgb('#2a2a2a'), cape=rgb('#4a2a2a')))
     add('blueslime', lambda f: slime(f, rgb('#4a80e0')))
     add('ghost', ghost)
+    # the hero's other ways of facing (front is 'hero', above)
+    add('hero_up', hero_back)
+    add('hero_left', hero_side)
+    add('hero_right', hero_side_right)
     return C
 
 

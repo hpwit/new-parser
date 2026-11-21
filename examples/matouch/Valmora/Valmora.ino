@@ -338,10 +338,13 @@ char valmora[] = R"EOF(// VALMORA - The Sundered Crown. A top-down adventure in 
 #define T_SPR_BANDIT 177
 #define T_SPR_BLUESLIME 179
 #define T_SPR_GHOST 181
-#define T_VOID 183
-#define T_PILLAR_D 184
-#define NTILES 185
-#define PAL_WORDS 5920
+#define T_SPR_HERO_UP 183
+#define T_SPR_HERO_LEFT 185
+#define T_SPR_HERO_RIGHT 187
+#define T_VOID 189
+#define T_PILLAR_D 190
+#define NTILES 191
+#define PAL_WORDS 6112
 #define M_RAT 0
 #define M_BAT 1
 #define M_SLIME 2
@@ -1107,6 +1110,18 @@ void drawBar(int x, int y, int w, int v, int m, uint16_t c)
       fillRect(x + 1, y + 1, (w - 2) * imin(v, m) / m, 6, c);
 }
 
+// the hero turned the way of the last step (or bump, or spark)
+int heroSprite()
+{
+   if (faceY < 0)
+      return T_SPR_HERO_UP;
+   if (faceX < 0)
+      return T_SPR_HERO_LEFT;
+   if (faceX > 0)
+      return T_SPR_HERO_RIGHT;
+   return T_SPR_HERO;
+}
+
 // the view, the moves of this turn px pixels along (0..TS)
 void drawView(int px)
 {
@@ -1151,7 +1166,7 @@ void drawView(int px)
    int pdim = 0;
    if (plHit > 0)
       pdim = 1;
-   blitTile(T_SPR_HERO + fr, pdim, 9 * TS, 7 * TS, 1, 0);
+   blitTile(heroSprite() + fr, pdim, 9 * TS, 7 * TS, 1, 0);
 }
 
 // ------------------------------------------------------------ the panel
@@ -2315,6 +2330,8 @@ void spark()
       dx = 1;
    mp = mp - 3;
    panelDirty = 2;
+   faceX = dx;
+   faceY = dy;
    int x = plX;
    int y = plY;
    for (int n = 0; n < 8; n++)
@@ -2485,6 +2502,8 @@ void newGame()
    turn = 0;
    worldTurn = 40;
    won = 0;
+   faceX = 0;
+   faceY = 1;
    for (int i = 0; i < 12 * MAXO; i++)
       done[i] = 0;
    clearLog();
