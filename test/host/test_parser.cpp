@@ -3676,13 +3676,14 @@ static void runStreamLoadTest()
 // it was written.
 static void runCodeMemoryTest()
 {
-    const char *name = "setScriptCodeMemory(): PSRAM refused off an ESP32-S3; IRAM code runs where it was written";
+    const char *name = "setScriptCodeMemory(): PSRAM and AUTO refused off an ESP32-S3; IRAM code runs where it was written";
     printf("RUNNING: %s\n", name);
     fflush(stdout);
     bool ok = true;
-    if (setScriptCodeMemory(SCRIPT_CODE_PSRAM) || scriptCodeMemory() != SCRIPT_CODE_IRAM)
+    if (setScriptCodeMemory(SCRIPT_CODE_PSRAM) || setScriptCodeMemory(SCRIPT_CODE_AUTO) ||
+        scriptCodeMemory() != SCRIPT_CODE_IRAM)
     {
-        printf("       PSRAM accepted on a host\n");
+        printf("       PSRAM or AUTO accepted on a host\n");
         ok = false;
     }
     if (ok && !setScriptCodeMemory(SCRIPT_CODE_IRAM))
@@ -3694,7 +3695,8 @@ static void runCodeMemoryTest()
     {
         Binary bin = createBinary(&footer, &header, &content, false);
         executable exe = createExecutableFromBinary(&bin);
-        if (exe.error.error || exe.code_data == NULL || exe.code_data != exe.start_program)
+        if (exe.error.error || exe.code_data == NULL || exe.code_data != exe.start_program ||
+            executableCodeMemory(&exe) != SCRIPT_CODE_IRAM)
         {
             printf("       code_data %p, start_program %p\n", (void *)exe.code_data, (void *)exe.start_program);
             ok = false;

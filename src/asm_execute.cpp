@@ -83,7 +83,7 @@ static ScriptCodeMemory codeMemory = SCRIPT_CODE_IRAM;
 
 bool setScriptCodeMemory(ScriptCodeMemory where)
 {
-    if (where == SCRIPT_CODE_PSRAM && !ASM_EXEC_PSRAM)
+    if (where != SCRIPT_CODE_IRAM && !ASM_EXEC_PSRAM)
         return false;
     codeMemory = where;
     return true;
@@ -94,28 +94,49 @@ ScriptCodeMemory scriptCodeMemory()
     return codeMemory;
 }
 
-static void *allocExecutable(size_t size)
+#if ASM_EXEC_PSRAM
+static void *allocPsramCode(size_t size)
 {
+    void *code = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    // Only PSRAM mapped in the data window has an instruction alias.
+    if (code != NULL && ((uintptr_t)code < SOC_DROM_LOW || (uintptr_t)code + size > SOC_DROM_HIGH))
+    {
+        heap_caps_free(code);
+        return NULL;
+    }
+    return code;
+}
+#endif
+
+// The code's block in the memory setScriptCodeMemory() chose; *where says
+// which one it is in (SCRIPT_CODE_AUTO: internal RAM, else PSRAM).
+static void *allocExecutable(size_t size, ScriptCodeMemory *where)
+{
+    *where = SCRIPT_CODE_IRAM;
 #if ASM_EXEC_PSRAM
     if (codeMemory == SCRIPT_CODE_PSRAM)
     {
-        void *code = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        // Only PSRAM mapped in the data window has an instruction alias.
-        if (code != NULL && ((uintptr_t)code < SOC_DROM_LOW || (uintptr_t)code + size > SOC_DROM_HIGH))
-        {
-            heap_caps_free(code);
-            return NULL;
-        }
-        return code;
+        *where = SCRIPT_CODE_PSRAM;
+        return allocPsramCode(size);
     }
 #endif
+    void *code;
     if (execAllocFunction != NULL)
-        return execAllocFunction(size);
+        code = execAllocFunction(size);
+    else
 #if ASM_EXEC_ON_TARGET
-    return heap_caps_malloc(size, MALLOC_CAP_EXEC);
+        code = heap_caps_malloc(size, MALLOC_CAP_EXEC);
 #else
-    return malloc(size);
+        code = malloc(size);
 #endif
+#if ASM_EXEC_PSRAM
+    if (code == NULL && codeMemory == SCRIPT_CODE_AUTO)
+    {
+        *where = SCRIPT_CODE_PSRAM;
+        code = allocPsramCode(size);
+    }
+#endif
+    return code;
 }
 
 // Frees code allocExecutable() gave, with the memory it was loaded into.
@@ -140,22 +161,16 @@ static void freeExecutableCodeIn(void *code, ScriptCodeMemory where)
 #endif
 }
 
-// A load that fails frees its code in the memory it is being loaded into.
-static void freeExecutableCode(void *code)
-{
-    freeExecutableCodeIn(code, codeMemory);
-}
-
 // The written code made visible to instruction fetch; returns the address it
 // runs from. Without this a plain store only guarantees the data side sees
 // the new bytes: a script can run cleanly once, then fault later (or a
 // different script loaded at the same reused address does) -- a real,
 // reproduced-on-hardware crash (InstrFetchProhibited / wild jump) that
 // QEMU, which doesn't model the caches, never shows.
-static uint32_t *finishCode(uint32_t *code, uint32_t size)
+static uint32_t *finishCode(uint32_t *code, uint32_t size, ScriptCodeMemory where)
 {
 #if ASM_EXEC_PSRAM
-    if (codeMemory == SCRIPT_CODE_PSRAM)
+    if (where == SCRIPT_CODE_PSRAM)
     {
         // As ESP-IDF's ELF loader: the data cache written back, then the
         // instruction cache's lines for the alias invalidated.
@@ -167,6 +182,8 @@ static uint32_t *finishCode(uint32_t *code, uint32_t size)
         esp_cache_msync((void *)begin, end - begin, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_TYPE_INST);
         return (uint32_t *)run;
     }
+#else
+    (void)where;
 #endif
 #if ASM_EXEC_ON_TARGET
     xthal_dcache_region_writeback(code, size);
@@ -366,9 +383,11 @@ static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binar
 
 // The code's block (setExecutableAllocator()) and the globals' (zeroed);
 // false, with exe's error saying which and how much, when one is missing.
-static bool allocScriptMemory(const Binary *bin, executable *exe, uint32_t **code, uint8_t **data)
+// *where: the memory the code is in.
+static bool allocScriptMemory(const Binary *bin, executable *exe, uint32_t **code, uint8_t **data,
+                              ScriptCodeMemory *where)
 {
-    uint32_t *exec = (uint32_t *)allocExecutable(bin->instruction_size);
+    uint32_t *exec = (uint32_t *)allocExecutable(bin->instruction_size, where);
     // Zeroed, so a global declared without an initializer starts at 0 as
     // in C, not with whatever the heap held (initializers are copied in
     // over this by decodeBinaryHeader()). Scripts read such globals
@@ -396,6 +415,10 @@ static bool allocScriptMemory(const Binary *bin, executable *exe, uint32_t **cod
             snprintf(message, sizeof(message),
                      "could not allocate %u bytes of PSRAM for this script's code",
                      (unsigned)bin->instruction_size);
+        else if (exec == NULL && codeMemory == SCRIPT_CODE_AUTO)
+            snprintf(message, sizeof(message),
+                     "could not allocate %u bytes of executable memory or PSRAM for this script's code",
+                     (unsigned)bin->instruction_size);
         else if (exec == NULL)
         {
 #if ASM_EXEC_ON_TARGET
@@ -417,7 +440,7 @@ static bool allocScriptMemory(const Binary *bin, executable *exe, uint32_t **cod
         exe->error.error = 1;
         exe->error.error_message = message;
         if (exec != NULL)
-            freeExecutableCode(exec);
+            freeExecutableCodeIn(exec, *where);
         if (binary_data != NULL)
             free(binary_data);
         return false;
@@ -450,7 +473,8 @@ executable createExecutableFromBinary(Binary *bin)
 
     uint32_t *exec;
     uint8_t *binary_data;
-    if (!allocScriptMemory(bin, &exe, &exec, &binary_data))
+    ScriptCodeMemory where;
+    if (!allocScriptMemory(bin, &exe, &exec, &binary_data, &where))
         return exe;
 
     asm_error_message_struct error = decodeBinaryHeader(
@@ -461,14 +485,14 @@ executable createExecutableFromBinary(Binary *bin)
     {
         exe.error.error = 1;
         exe.error.error_message = (char *)"No global start function found";
-        freeExecutableCode(exec);
+        freeExecutableCodeIn(exec, where);
         free(binary_data);
         return exe;
     }
     if (error.error == 1)
     {
         exe.error = error;
-        freeExecutableCode(exec);
+        freeExecutableCodeIn(exec, where);
         free(binary_data);
         return exe;
     }
@@ -476,7 +500,7 @@ executable createExecutableFromBinary(Binary *bin)
     memcpy(exec, bin->binary_data, bin->instruction_size);
 
     exe.code_data = exec;
-    exe.start_program = finishCode(exec, bin->instruction_size);
+    exe.start_program = finishCode(exec, bin->instruction_size, where);
     exe.data = binary_data;
     exe.binary_size = bin->instruction_size;
     exe.data_size = bin->data_size;
@@ -510,7 +534,8 @@ executable loadExecutableFromStream(ScriptReadFunction read, void *ctx)
 
     uint32_t *exec;
     uint8_t *binary_data;
-    if (!allocScriptMemory(&bin, &exe, &exec, &binary_data))
+    ScriptCodeMemory where;
+    if (!allocScriptMemory(&bin, &exe, &exec, &binary_data, &where))
         return exe;
 
     // The code, through a small buffer: the destination is executable
@@ -539,7 +564,7 @@ executable loadExecutableFromStream(ScriptReadFunction read, void *ctx)
                                            : (char *)"not a valid binary: serialized script binary is truncated";
         free(literals);
         free(relocations);
-        freeExecutableCode(exec);
+        freeExecutableCodeIn(exec, where);
         free(binary_data);
         return exe;
     }
@@ -557,13 +582,13 @@ executable loadExecutableFromStream(ScriptReadFunction read, void *ctx)
             exe.error.error = 1;
             exe.error.error_message = (char *)"No global start function found";
         }
-        freeExecutableCode(exec);
+        freeExecutableCodeIn(exec, where);
         free(binary_data);
         return exe;
     }
 
     exe.code_data = exec;
-    exe.start_program = finishCode(exec, bin.instruction_size);
+    exe.start_program = finishCode(exec, bin.instruction_size, where);
     exe.data = binary_data;
     exe.binary_size = bin.instruction_size;
     exe.data_size = bin.data_size;
@@ -876,14 +901,18 @@ void runExecutable(executable *ex)
     runExecutableWithArgs(ex, NULL, 0);
 }
 
+ScriptCodeMemory executableCodeMemory(const executable *ex)
+{
+    // Run from somewhere else than where it was written: PSRAM.
+    return ex->code_data != NULL && ex->code_data != ex->start_program ? SCRIPT_CODE_PSRAM : SCRIPT_CODE_IRAM;
+}
+
 void freeExecutable(executable *ex)
 {
     if (ex->start_program != NULL)
     {
-        // Run from somewhere else than where it was written: PSRAM.
         freeExecutableCodeIn(ex->code_data != NULL ? ex->code_data : ex->start_program,
-                             ex->code_data != NULL && ex->code_data != ex->start_program ? SCRIPT_CODE_PSRAM
-                                                                                        : SCRIPT_CODE_IRAM);
+                             executableCodeMemory(ex));
         ex->start_program = NULL;
         ex->code_data = NULL;
     }

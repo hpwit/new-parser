@@ -481,7 +481,9 @@ ScriptExecutable exec = parseScript(script);    // this one's code is in PSRAM
 setScriptCodeMemory(SCRIPT_CODE_IRAM);          // back to the default
 ```
 
-The S3's data and instruction buses share one MMU table, so PSRAM seen as data at `0x3C000000 + n` is also code at `0x42000000 + n`: the loader writes and relocates the code through the first address and runs it through the second, the way ESP-IDF's ELF loader runs code from PSRAM. The code is then fetched through the 16 or 32 KB instruction cache, which the firmware's own flash code shares: a small script runs about as fast, a large one (tens of KB in its main loop) may be slower. A script keeps the memory it was loaded into.
+The S3's data and instruction buses share one MMU table, so PSRAM seen as data at `0x3C000000 + n` is also code at `0x42000000 + n`: the loader writes and relocates the code through the first address and runs it through the second, the way ESP-IDF's ELF loader runs code from PSRAM. The code is then fetched through the 16 or 32 KB instruction cache, which the firmware's own flash code shares: a small script runs about as fast, a large one (tens of KB in its main loop) may be slower. A script keeps the memory it was loaded into; `executableCodeMemory(&exe)` says which.
+
+`SCRIPT_CODE_AUTO` puts the code in internal RAM when a block that big is free and in PSRAM otherwise: once a busy firmware has broken up its internal RAM, a large script still loads.
 
 ---
 

@@ -4,6 +4,10 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 🧠 `SCRIPT_CODE_AUTO`: internal RAM, else PSRAM
+
+`setScriptCodeMemory(SCRIPT_CODE_AUTO)` puts a script's code in executable internal RAM when a block that big is free, else in PSRAM (ESP32-S3 with PSRAM; false elsewhere). `executableCodeMemory(&exe)` says where a loaded script's code went.
+
 ### 🧠 `setScriptCodeMemory()`: a script's code in PSRAM (ESP32-S3)
 
 `setScriptCodeMemory(SCRIPT_CODE_PSRAM)` puts the code of the scripts loaded next in PSRAM instead of executable internal RAM: written and relocated at its data address, run through the instruction bus's view of the same memory (`+0x06000000`), with ESP-IDF's `esp_cache_msync()` between the two, as ESP-IDF's ELF loader does. The code is then fetched through the instruction cache: on the matouch board, Ironforge (40.5 KB of code) runs about as fast from PSRAM as from internal RAM. It returns false, and changes nothing, on a chip that can't (the ESP32, a host). The ESP-IDF component now requires `esp_mm`. Host test `setScriptCodeMemory()`.

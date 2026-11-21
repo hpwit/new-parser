@@ -127,15 +127,21 @@ void freeExecutable(executable *ex);
 //                      code from PSRAM. Leaves the internal RAM alone; the
 //                      code is fetched through the cache, so a large script
 //                      may run slower.
-// Returns false (and changes nothing) when this chip or build can't run
-// code from PSRAM. A script keeps the memory it was loaded into.
+//   SCRIPT_CODE_AUTO   internal RAM when a block is free, else PSRAM: a
+//                      large script still loads once the internal RAM is
+//                      broken up.
+// Returns false (and changes nothing) for PSRAM or AUTO when this chip or
+// build can't run code from PSRAM. A script keeps the memory it was loaded
+// into; executableCodeMemory() says which (SCRIPT_CODE_IRAM or _PSRAM).
 enum ScriptCodeMemory
 {
     SCRIPT_CODE_IRAM,
-    SCRIPT_CODE_PSRAM
+    SCRIPT_CODE_PSRAM,
+    SCRIPT_CODE_AUTO
 };
 bool setScriptCodeMemory(ScriptCodeMemory where);
 ScriptCodeMemory scriptCodeMemory();
+ScriptCodeMemory executableCodeMemory(const executable *ex);
 
 typedef void *(*ExecutableAllocFunction)(size_t size);
 typedef void (*ExecutableFreeFunction)(void *code);
