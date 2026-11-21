@@ -1,4 +1,5 @@
 #include "optimize.h"
+#include "compile_progress.h"
 #include "parser_define.h"
 #include "string_functions.h"
 #include "vect.h"
@@ -200,6 +201,7 @@ void optimize(Text *text)
     // invalidated it.
     for (int regnum = 3; regnum < 11; regnum++)
     {
+        compileProgressStep(regnum - 3, 8);
         char *registername = string_format("a%d", regnum);
         char *str = ownedCopy("__");
         char base[8] = "";
@@ -1482,6 +1484,7 @@ void preserveAcrossCalls(Text *text)
     int i = 0;
     while (i < text->size())
     {
+        compileProgressStep(i, text->size());
         trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
         if (strncmp(line, "entry a1,", 9) != 0)
         {
@@ -3237,6 +3240,7 @@ void allocateLoopRegisters(Text *text)
     int i = 0;
     while (i < text->size())
     {
+        compileProgressStep(i, text->size());
         trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
         if (!isFunctionLabel(line))
         {

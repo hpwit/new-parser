@@ -68,10 +68,18 @@ public:
 
     void insert(char *toInsert);
     void insertAtEnd(char *toInsert);
+    // How far the tokenizer has read into the script's own text (the last
+    // piece at init(): what comes in front is a line or two of
+    // declarations), for the compile progress. Text inserted while reading
+    // (a #define's value) doesn't count: the furthest point reached stays.
+    void progress(uint32_t *done, uint32_t *total);
 
 private:
     // string * script;
     int position;
+    char *mainText = NULL;
+    uint32_t mainLength = 0;
+    uint32_t mainRead = 0;
 
     vect<char *> script;
     char **it;

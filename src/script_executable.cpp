@@ -360,6 +360,7 @@ static void resetCompilerState(Parser &p)
 static Binary compileScriptToBinary(const char *script)
 {
     memset(&g_lastCompileError, 0, sizeof(g_lastCompileError));
+    compileProgressStart();
     Script s;
     // addContent()/the tokenizer need a mutable buffer they can own for
     // the duration of parsing -- build kPrelude+script fresh rather than
@@ -444,6 +445,8 @@ static Binary compileScriptToBinary(const char *script)
     free(buf);
 
     Binary bin = createBinary(&footer, &header, &content, false);
+    if (!bin.error.error)
+        compileProgress(PROGRESS_ASSEMBLED, "assembling");
     // The parse tree, the tokens and their text, the functions and types:
     // the binary has its own copies of everything it needs. Freed here, they
     // used to stay until the next compile -- ~10 KB in ~500 small blocks
@@ -451,6 +454,8 @@ static Binary compileScriptToBinary(const char *script)
     // through the heap, so that the next large block (a script's code and
     // data, which must be in one piece) no longer found room.
     p.clean();
+    if (!bin.error.error)
+        compileProgress(100, "done");
     if (bin.error.error)
     {
         printf("assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");

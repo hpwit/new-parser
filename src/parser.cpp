@@ -1,5 +1,6 @@
 
 #include "parser.h"
+#include "compile_progress.h"
 #include "nodetoken.h"
 #include "compiler_error.h"
 #include "string_constants.h"
@@ -105,6 +106,8 @@ bool Parser::Match(tokenType tt, int index)
 }
 
 void (*parserPhaseHook)(const char *phase) = NULL;
+// the script being read, for the compile progress
+static Script *progressScript = NULL;
 #define PARSER_PHASE(name) \
     if (parserPhaseHook != NULL) \
         parserPhaseHook(name);
@@ -148,12 +151,17 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     _tokenizer_start_line = startLine - frontLines;
 
     _tks = __tks;
+    progressScript = main_script;
+    compileProgress(0, "reading");
     _tks->tokenize(main_script, true, true, 1);
     _tokenizer_start_line = startLine;
     parseProgram();
+    // the script's text may not outlive this compile
+    progressScript = NULL;
     if(Error.error)
     return;
     PARSER_PHASE("parsed")
+    compileProgress(PROGRESS_PARSED, "generating");
  PARSER_LOG("build parents")
     buildParents(&program);
     PARSER_LOG("visit parents")
@@ -173,8 +181,10 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     nodeTokenList.clear();
     nodePoolRelease();
     PARSER_PHASE("code generated")
+    compileProgress(PROGRESS_GENERATED, "optimizing");
     PARSER_LOG("promote frame slots")
     promoteFrameSlots(&content);
+    compileProgressRange(PROGRESS_GENERATED, PROGRESS_OPTIMIZE1, "optimizing");
     PARSER_LOG("optimize")
     optimize(&content);
     removeBlankLines(&content);
@@ -192,17 +202,22 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     // every subsequent one). A single optimize() pass never reaches this
     // state, at the cost of leaving a few extra peephole wins on the
     // table that only the second pass could see.
+    compileProgressRange(PROGRESS_OPTIMIZE1, PROGRESS_OPTIMIZE2, "optimizing");
     PARSER_LOG("optimize speed")
     optimizeSpeed(&content);
     removeBlankLines(&content);
     appendFfloatDivision(&content); // hand-written: after the optimizer
+    compileProgressRange(PROGRESS_OPTIMIZE2, PROGRESS_OPTIMIZE3, "optimizing");
     PARSER_LOG("preserve across calls")
     preserveAcrossCalls(&content);
+    compileProgressRange(PROGRESS_OPTIMIZE3, PROGRESS_OPTIMIZED, "optimizing");
     PARSER_LOG("loop registers")
     allocateLoopRegisters(&content);
     // Global initializers run as one more function, @__footer.
+    compileProgressRange(PROGRESS_OPTIMIZED, PROGRESS_OPTIMIZED, "optimizing");
     preserveAcrossCalls(&footer);
     PARSER_PHASE("optimized")
+    compileProgressRange(PROGRESS_OPTIMIZED, PROGRESS_ASM_LINES, "assembling");
 }
 
 // C layout for struct members: a member starts at a multiple of its
@@ -317,6 +332,13 @@ void Parser::parseProgram()
     Error.error = 0;
     while (Match(TokenEndOfFile) == false)
     {
+        if (progressScript != NULL && compileProgressWanted())
+        {
+            // one top-level declaration at a time: how far into the text
+            uint32_t done, total;
+            progressScript->progress(&done, &total);
+            compileProgressPart(0, PROGRESS_PARSED, done, total, "parsing");
+        }
         isStructFunction = false;
         current_cntx=&main_context;
         if (Match(TokenUnknown))

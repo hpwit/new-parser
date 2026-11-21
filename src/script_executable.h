@@ -15,6 +15,7 @@
 //   // no explicit cleanup needed -- ~ScriptExecutable() frees the
 //   // loaded executable automatically when exec goes out of scope.
 #include "asm_execute.h"
+#include "compile_progress.h"
 #include "arguments.h"
 
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)

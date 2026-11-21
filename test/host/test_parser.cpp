@@ -3674,6 +3674,96 @@ static void runStreamLoadTest()
 // setScriptCodeMemory(): PSRAM is refused where code can't run from it (a
 // host, any chip but an ESP32-S3 with PSRAM), and the code then runs where
 // it was written.
+// setCompileProgress(): the callback sees 0 "reading" first, a percentage
+// that never goes back, the stages in order, and 100 "done" last; a script
+// with an error stops before "done"; no callback, no call.
+static int progressCalls;
+static int progressLast;
+static int progressBadOrder;
+static int progressDone;
+static int progressStageIndex;
+static const char *progressFirst;
+
+static void recordProgress(int percent, const char *stage, void *ctx)
+{
+    static const char *order[] = {"reading", "parsing", "generating", "optimizing", "assembling", "done"};
+    (void)ctx;
+    if (progressCalls == 0)
+        progressFirst = stage;
+    progressCalls++;
+    if (percent < progressLast || percent > 100)
+        progressBadOrder = 1;
+    progressLast = percent;
+    int k = -1;
+    for (int i = 0; i < 6; i++)
+        if (strcmp(order[i], stage) == 0)
+            k = i;
+    if (k < progressStageIndex)
+        progressBadOrder = 1;
+    progressStageIndex = k;
+    if (strcmp(stage, "done") == 0 && percent == 100)
+        progressDone++;
+}
+
+static void resetProgress()
+{
+    progressCalls = 0;
+    progressLast = 0;
+    progressBadOrder = 0;
+    progressDone = 0;
+    progressStageIndex = 0;
+    progressFirst = NULL;
+}
+
+static void runCompileProgressTest()
+{
+    const char *name = "setCompileProgress(): 0 to 100, stages in order, no done after an error";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+    const char *good = "int total;\nint add(int a, int b)\n{\n   return a + b;\n}\n"
+                       "void main()\n{\n   for (int i = 0; i < 10; i++)\n      total = add(total, i);\n}\n";
+    uint32_t size = 0;
+    resetProgress();
+    setCompileProgress(recordProgress, NULL);
+    uint8_t *bin = parseScriptToBinary(good, &size);
+    if (bin == NULL || progressFirst == NULL || strcmp(progressFirst, "reading") != 0 || progressBadOrder ||
+        progressDone != 1 || progressLast != 100)
+    {
+        printf("       good script: bin %p, first %s, order %d, done %d, last %d\n", (void *)bin,
+               progressFirst ? progressFirst : "-", progressBadOrder, progressDone, progressLast);
+        ok = false;
+    }
+    free(bin);
+    resetProgress();
+    bin = parseScriptToBinary("void main()\n{\n   int a = ;\n}\n", &size);
+    if (bin != NULL || progressDone != 0 || progressBadOrder)
+    {
+        printf("       bad script: bin %p, done %d, order %d\n", (void *)bin, progressDone, progressBadOrder);
+        ok = false;
+    }
+    free(bin);
+    setCompileProgress(NULL, NULL);
+    resetProgress();
+    bin = parseScriptToBinary(good, &size);
+    if (progressCalls != 0)
+    {
+        printf("       %d calls with no callback set\n", progressCalls);
+        ok = false;
+    }
+    free(bin);
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 static void runCodeMemoryTest()
 {
     const char *name = "setScriptCodeMemory(): PSRAM and AUTO refused off an ESP32-S3; IRAM code runs where it was written";
@@ -4251,6 +4341,7 @@ int main()
     runExecutableAllocatorTest();
     runStreamLoadTest();
     runCodeMemoryTest();
+    runCompileProgressTest();
     printf("\n%d passed, %d failed, %d known-crash (of %d)\n", passed, failed, knownCrashes, passed + failed + knownCrashes);
     return failed ? 1 : 0;
 }

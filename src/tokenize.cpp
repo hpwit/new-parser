@@ -442,6 +442,20 @@ varType _varTypes[] = {
     {
         it = script.begin();
         position = -1;
+        mainText = script.size() > 0 ? *(script.end() - 1) : NULL;
+        mainLength = mainText != NULL ? strlen(mainText) : 0;
+        mainRead = 0;
+    }
+    void Script::progress(uint32_t *done, uint32_t *total)
+    {
+        *total = mainLength;
+        if (mainText != NULL && it != NULL && position >= 0)
+        {
+            char *at = &((*it)[position]);
+            if (at >= mainText && at < mainText + mainLength && (uint32_t)(at - mainText) > mainRead)
+                mainRead = (uint32_t)(at - mainText);
+        }
+        *done = mainRead;
     }
     void Script::addContent(char *str)
     {

@@ -3,6 +3,7 @@
 #include "string_functions.h"
 #include "vect.h"
 #include "parser.h"
+#include "compile_progress.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1028,11 +1029,16 @@ static const BranchForm *branchFormOf(const char *line)
     return NULL;
 }
 
+// every line assembled, for the compile progress
+static int assembleTotal = 0;
+
 static void assembleBuffer(Text *text, int lineOffset, parsedLines *asm_parsed, asm_error_message_struct *main_error)
 {
     int size = text->size();
     for (int i = lineOffset; i < lineOffset + size; i++)
     {
+        if ((i & 63) == 0)
+            compileProgressPart(PROGRESS_ASM_LINES, PROGRESS_ASM_LINES_END, i, assembleTotal, "assembling");
         char *front = text->front();
         if (front != NULL && strcmp(front, " ") != 0)
         {
@@ -1169,11 +1175,14 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
     // One entry per line, two for a callExt: reserved up front so that the
     // array is allocated once and pointers into it stay valid.
     asm_parsed->reserve(_header->size() + _content->size() + _footer->size() + nb_callExt + 8);
+    assembleTotal = _header->size() + _content->size() + _footer->size();
+    compileProgress(PROGRESS_ASM_LINES, "assembling");
     assembleBuffer(_header, 0, asm_parsed, &main_error);
     assembleBuffer(_content, tmp_size, asm_parsed, &main_error);
     assembleBuffer(_footer, tmp_size2, asm_parsed, &main_error);
     if (parserPhaseHook != NULL)
         parserPhaseHook("assembler lines");
+    compileProgress(PROGRESS_ASM_LINES_END, "assembling");
 
     if (main_error.error == 1)
         free(tmp_exec);
@@ -1503,7 +1512,11 @@ static void relaxBranches(Text *t)
         assert(offset != NULL);
         offset[0] = 0;
         for (int i = 0; i < n; i++)
+        {
+            if ((i & 63) == 0)
+                compileProgressStep(i, n);
             offset[i + 1] = offset[i] + maxLineBytes(t->getText(i));
+        }
         for (int i = n - 1; i >= 0; i--)
         {
             const char *line = t->getText(i);
