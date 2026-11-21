@@ -188,6 +188,6 @@ void findFunction(NodeToken *nd, char *st);
 void findVariable(NodeToken *nd, char *, bool forCreation);
 void findVariable(NodeToken *nd, Token *t, bool forCreation);
 void copyPrty(NodeToken *from, NodeToken *to);
-uint16_t stringToInt(char *str);
+uint32_t stringToInt(char *str);
 void buildParents(NodeToken *__nd);
 #endif

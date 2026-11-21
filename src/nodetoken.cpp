@@ -1092,10 +1092,12 @@ void copyPrty(NodeToken *from, NodeToken *to)
 	}
 }
 
-uint16_t stringToInt(char *str)
+// A decimal literal: an array dimension (uint16_t wrapped 400000 to 6784)
+// or a constant compared with (65537 became 1, an immediate beqi).
+uint32_t stringToInt(char *str)
 
 {
-	uint16_t res = 0;
+	uint32_t res = 0;
 	int i = 0;
 	while (str[i] != 0)
 	{

@@ -4225,6 +4225,19 @@ int main()
             ballEffectScript,
             noError, "callExt", false,
         },
+        {
+            // stringToInt() returned a uint16_t: 400000 elements became
+            // 6784, and the globals after the array overlapped it
+            "array of more than 65535 elements: its whole size reserved",
+            "uint16_t big[400000]; int after; void main(){ after = 1; }",
+            noError, ".bytes 800000", false,
+        },
+        {
+            // ... and 65537 in a comparison became 1: beqi/bnei a2,1
+            "a constant over 65535 compared with: not cut to 16 bits",
+            "void main(){ int x; int y; x = 3; y = 0; if (x == 65537) { y = 7; } }",
+            noError, ".bytes 4 01 00 01 00", false,
+        },
     };
 
     int n = sizeof(tests) / sizeof(tests[0]);
