@@ -116,6 +116,27 @@ void freeExecutable(executable *ex);
 // and hand it out here. alloc returns NULL when it has nothing big enough;
 // release gets every pointer alloc returned. NULL, NULL restores the
 // default. Set it before loading a script, not while one is loaded.
+// Where scripts loaded from now on keep their machine code:
+//   SCRIPT_CODE_IRAM   executable internal RAM (MALLOC_CAP_EXEC, or the
+//                      block setExecutableAllocator() hands out): the
+//                      default, the fastest
+//   SCRIPT_CODE_PSRAM  PSRAM, on an ESP32-S3 with PSRAM: written through
+//                      its data address and run through the instruction
+//                      bus's view of the same memory (0x42000000 + what
+//                      0x3C000000 + n holds), as ESP-IDF's ELF loader runs
+//                      code from PSRAM. Leaves the internal RAM alone; the
+//                      code is fetched through the cache, so a large script
+//                      may run slower.
+// Returns false (and changes nothing) when this chip or build can't run
+// code from PSRAM. A script keeps the memory it was loaded into.
+enum ScriptCodeMemory
+{
+    SCRIPT_CODE_IRAM,
+    SCRIPT_CODE_PSRAM
+};
+bool setScriptCodeMemory(ScriptCodeMemory where);
+ScriptCodeMemory scriptCodeMemory();
+
 typedef void *(*ExecutableAllocFunction)(size_t size);
 typedef void (*ExecutableFreeFunction)(void *code);
 void setExecutableAllocator(ExecutableAllocFunction alloc, ExecutableFreeFunction release);

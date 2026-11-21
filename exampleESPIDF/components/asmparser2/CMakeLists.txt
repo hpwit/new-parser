@@ -17,7 +17,7 @@ file(GLOB ASMPARSER2_SRCS "${ASMPARSER2_SRC_DIR}/*.cpp")
 idf_component_register(
     SRCS ${ASMPARSER2_SRCS}
     INCLUDE_DIRS "${ASMPARSER2_SRC_DIR}"
-    REQUIRES freertos heap esp_timer xtensa
+    REQUIRES freertos heap esp_timer xtensa esp_mm
 )
 
 target_compile_definitions(${COMPONENT_LIB} PUBLIC ESP32=1)

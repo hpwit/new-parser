@@ -470,6 +470,19 @@ setExecutableAllocator(codeAlloc, codeFree);   // before loading a script
 
 `release` gets every pointer `alloc` returned, when the script is freed. `setExecutableAllocator(NULL, NULL)` goes back to `MALLOC_CAP_EXEC`. When the code doesn't fit, the load error gives its size and the largest executable block there was.
 
+**Code in PSRAM.** On an ESP32-S3 with PSRAM the code can also run from PSRAM, leaving the internal RAM alone:
+
+```cpp
+#include "asm_execute.h"
+
+if (!setScriptCodeMemory(SCRIPT_CODE_PSRAM))   // false on a chip that can't
+   printf("no PSRAM code here\n");
+ScriptExecutable exec = parseScript(script);    // this one's code is in PSRAM
+setScriptCodeMemory(SCRIPT_CODE_IRAM);          // back to the default
+```
+
+The S3's data and instruction buses share one MMU table, so PSRAM seen as data at `0x3C000000 + n` is also code at `0x42000000 + n`: the loader writes and relocates the code through the first address and runs it through the second, the way ESP-IDF's ELF loader runs code from PSRAM. The code is then fetched through the 16 or 32 KB instruction cache, which the firmware's own flash code shares: a small script runs about as fast, a large one (tens of KB in its main loop) may be slower. A script keeps the memory it was loaded into.
+
 ---
 
 # The function you call can have input parameters

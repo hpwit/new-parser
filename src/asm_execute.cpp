@@ -25,8 +25,21 @@
 // automatically kept coherent with plain stores the way x86 is.
 #include "xtensa/hal.h"
 #define ASM_EXEC_ON_TARGET 1
+#include "sdkconfig.h"
+#include "esp_idf_version.h"
+#if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_SPIRAM && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0)
+// The ESP32-S3's data and instruction buses share one MMU table: PSRAM seen
+// at 0x3C000000 + n as data is at 0x42000000 + n as code.
+#include "esp_cache.h"
+#include "soc/soc.h"
+#define ASM_EXEC_PSRAM 1
+#define ASM_PSRAM_CODE_OFFSET (SOC_IROM_LOW - SOC_DROM_LOW)
+#endif
 #else
 #define ASM_EXEC_ON_TARGET 0
+#endif
+#ifndef ASM_EXEC_PSRAM
+#define ASM_EXEC_PSRAM 0
 #endif
 
 #ifdef ASM_PARSER_DEBUG
@@ -66,8 +79,36 @@ void setExecutableAllocator(ExecutableAllocFunction alloc, ExecutableFreeFunctio
     execFreeFunction = release;
 }
 
+static ScriptCodeMemory codeMemory = SCRIPT_CODE_IRAM;
+
+bool setScriptCodeMemory(ScriptCodeMemory where)
+{
+    if (where == SCRIPT_CODE_PSRAM && !ASM_EXEC_PSRAM)
+        return false;
+    codeMemory = where;
+    return true;
+}
+
+ScriptCodeMemory scriptCodeMemory()
+{
+    return codeMemory;
+}
+
 static void *allocExecutable(size_t size)
 {
+#if ASM_EXEC_PSRAM
+    if (codeMemory == SCRIPT_CODE_PSRAM)
+    {
+        void *code = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        // Only PSRAM mapped in the data window has an instruction alias.
+        if (code != NULL && ((uintptr_t)code < SOC_DROM_LOW || (uintptr_t)code + size > SOC_DROM_HIGH))
+        {
+            heap_caps_free(code);
+            return NULL;
+        }
+        return code;
+    }
+#endif
     if (execAllocFunction != NULL)
         return execAllocFunction(size);
 #if ASM_EXEC_ON_TARGET
@@ -77,8 +118,18 @@ static void *allocExecutable(size_t size)
 #endif
 }
 
-static void freeExecutableCode(void *code)
+// Frees code allocExecutable() gave, with the memory it was loaded into.
+static void freeExecutableCodeIn(void *code, ScriptCodeMemory where)
 {
+#if ASM_EXEC_PSRAM
+    if (where == SCRIPT_CODE_PSRAM)
+    {
+        heap_caps_free(code);
+        return;
+    }
+#else
+    (void)where;
+#endif
     if (execFreeFunction != NULL)
         execFreeFunction(code);
     else
@@ -87,6 +138,41 @@ static void freeExecutableCode(void *code)
 #else
         free(code);
 #endif
+}
+
+// A load that fails frees its code in the memory it is being loaded into.
+static void freeExecutableCode(void *code)
+{
+    freeExecutableCodeIn(code, codeMemory);
+}
+
+// The written code made visible to instruction fetch; returns the address it
+// runs from. Without this a plain store only guarantees the data side sees
+// the new bytes: a script can run cleanly once, then fault later (or a
+// different script loaded at the same reused address does) -- a real,
+// reproduced-on-hardware crash (InstrFetchProhibited / wild jump) that
+// QEMU, which doesn't model the caches, never shows.
+static uint32_t *finishCode(uint32_t *code, uint32_t size)
+{
+#if ASM_EXEC_PSRAM
+    if (codeMemory == SCRIPT_CODE_PSRAM)
+    {
+        // As ESP-IDF's ELF loader: the data cache written back, then the
+        // instruction cache's lines for the alias invalidated.
+        esp_cache_msync(code, size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+        uintptr_t run = (uintptr_t)code + ASM_PSRAM_CODE_OFFSET;
+        const uintptr_t line = CONFIG_ESP32S3_INSTRUCTION_CACHE_LINE_SIZE;
+        uintptr_t begin = run & ~(line - 1);
+        uintptr_t end = (run + size + line - 1) & ~(line - 1);
+        esp_cache_msync((void *)begin, end - begin, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_TYPE_INST);
+        return (uint32_t *)run;
+    }
+#endif
+#if ASM_EXEC_ON_TARGET
+    xthal_dcache_region_writeback(code, size);
+    xthal_icache_region_invalidate(code, size);
+#endif
+    return code;
 }
 
 // Walks a Binary's relocation header (createBinaryHeader's output) and
@@ -306,7 +392,11 @@ static bool allocScriptMemory(const Binary *bin, executable *exe, uint32_t **cod
     {
         // Which one, and by how much: the code needs one contiguous block.
         static char message[160];
-        if (exec == NULL)
+        if (exec == NULL && codeMemory == SCRIPT_CODE_PSRAM)
+            snprintf(message, sizeof(message),
+                     "could not allocate %u bytes of PSRAM for this script's code",
+                     (unsigned)bin->instruction_size);
+        else if (exec == NULL)
         {
 #if ASM_EXEC_ON_TARGET
             snprintf(message, sizeof(message),
@@ -385,25 +475,8 @@ executable createExecutableFromBinary(Binary *bin)
 
     memcpy(exec, bin->binary_data, bin->instruction_size);
 
-#if ASM_EXEC_ON_TARGET
-    // Without this, a script that runs cleanly the first time (or that
-    // never got called through this exact heap_caps_malloc() address
-    // before) can still fault later, unpredictably, on a *different*
-    // script loaded at the same now-reused address, or partway through
-    // its own execution once instruction fetch outruns what the data
-    // side actually flushed to memory -- a real, reproduced-on-hardware
-    // crash (Guru Meditation Error: InstrFetchProhibited/wild jump) that
-    // never shows up under QEMU (its simple TCG-based CPU emulation
-    // doesn't model instruction/data cache incoherency for freshly
-    // written code the way real Xtensa silicon does), confirmed by
-    // comparing execution of identical compiled bytes from a
-    // statically-linked .text location (fine) against a copy freshly
-    // written into a heap buffer immediately before being called (not).
-    xthal_dcache_region_writeback(exec, bin->instruction_size);
-    xthal_icache_region_invalidate(exec, bin->instruction_size);
-#endif
-
-    exe.start_program = exec;
+    exe.code_data = exec;
+    exe.start_program = finishCode(exec, bin->instruction_size);
     exe.data = binary_data;
     exe.binary_size = bin->instruction_size;
     exe.data_size = bin->data_size;
@@ -489,13 +562,8 @@ executable loadExecutableFromStream(ScriptReadFunction read, void *ctx)
         return exe;
     }
 
-#if ASM_EXEC_ON_TARGET
-    // See createExecutableFromBinary().
-    xthal_dcache_region_writeback(exec, bin.instruction_size);
-    xthal_icache_region_invalidate(exec, bin.instruction_size);
-#endif
-
-    exe.start_program = exec;
+    exe.code_data = exec;
+    exe.start_program = finishCode(exec, bin.instruction_size);
     exe.data = binary_data;
     exe.binary_size = bin.instruction_size;
     exe.data_size = bin.data_size;
@@ -595,7 +663,7 @@ void printExecutableHex(executable *ex)
     // (createExecutableFromBinary() never puts it in MALLOC_CAP_EXEC), so
     // ordinary byte access via printHex() is fine there.
     printf("instructions (%u bytes):\n", ex->binary_size);
-    printHexWords(ex->start_program, ex->binary_size);
+    printHexWords(ex->code_data != NULL ? ex->code_data : ex->start_program, ex->binary_size);
 
     printf("data (%u bytes):\n", ex->data_size);
     printHex(ex->data, ex->data_size);
@@ -812,8 +880,12 @@ void freeExecutable(executable *ex)
 {
     if (ex->start_program != NULL)
     {
-        freeExecutableCode(ex->start_program);
+        // Run from somewhere else than where it was written: PSRAM.
+        freeExecutableCodeIn(ex->code_data != NULL ? ex->code_data : ex->start_program,
+                             ex->code_data != NULL && ex->code_data != ex->start_program ? SCRIPT_CODE_PSRAM
+                                                                                        : SCRIPT_CODE_IRAM);
         ex->start_program = NULL;
+        ex->code_data = NULL;
     }
     if (ex->data != NULL)
     {

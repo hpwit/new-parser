@@ -228,7 +228,12 @@ struct executable
     asm_error_message_struct error;
     vect<globalcall> functions;
     vect<jsonVariable> jsonVars;
+    // Where the code runs from: what callFunction() and the tasks jump into.
     uint32_t *start_program = NULL;
+    // Where it was written, and is read back and freed: start_program,
+    // unless the code runs from PSRAM, through the instruction-bus alias of
+    // the PSRAM it was written to (see setScriptCodeMemory()).
+    uint32_t *code_data = NULL;
     uint8_t *data = NULL;
     uint32_t binary_size = 0;
     uint32_t data_size = 0;

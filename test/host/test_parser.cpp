@@ -3671,6 +3671,53 @@ static void runStreamLoadTest()
     }
 }
 
+// setScriptCodeMemory(): PSRAM is refused where code can't run from it (a
+// host, any chip but an ESP32-S3 with PSRAM), and the code then runs where
+// it was written.
+static void runCodeMemoryTest()
+{
+    const char *name = "setScriptCodeMemory(): PSRAM refused off an ESP32-S3; IRAM code runs where it was written";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+    if (setScriptCodeMemory(SCRIPT_CODE_PSRAM) || scriptCodeMemory() != SCRIPT_CODE_IRAM)
+    {
+        printf("       PSRAM accepted on a host\n");
+        ok = false;
+    }
+    if (ok && !setScriptCodeMemory(SCRIPT_CODE_IRAM))
+    {
+        printf("       IRAM refused\n");
+        ok = false;
+    }
+    if (ok && parseForAllocatorTest())
+    {
+        Binary bin = createBinary(&footer, &header, &content, false);
+        executable exe = createExecutableFromBinary(&bin);
+        if (exe.error.error || exe.code_data == NULL || exe.code_data != exe.start_program)
+        {
+            printf("       code_data %p, start_program %p\n", (void *)exe.code_data, (void *)exe.start_program);
+            ok = false;
+        }
+        freeExecutable(&exe);
+        if (exe.code_data != NULL || exe.start_program != NULL)
+        {
+            printf("       not cleared by freeExecutable()\n");
+            ok = false;
+        }
+    }
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 SCRIPT_STRUCT(testres, { int width; int height; int divx; int divy; })
 static testres testResObj = {400, 240, 2, 2};
 static void testSetRes(testres *) {}
@@ -4188,6 +4235,7 @@ int main()
     runStructParameterBindingTest();
     runExecutableAllocatorTest();
     runStreamLoadTest();
+    runCodeMemoryTest();
     printf("\n%d passed, %d failed, %d known-crash (of %d)\n", passed, failed, knownCrashes, passed + failed + knownCrashes);
     return failed ? 1 : 0;
 }
