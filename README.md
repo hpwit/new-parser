@@ -71,6 +71,7 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
   * [Where the code goes](#where-the-code-goes)
 
 - [The function you call can have input parameters](#the-function-you-call-can-have-input-parameters)
+  * [Fewer values than parameters: `argc`](#fewer-values-than-parameters-argc)
 
 - [Filling variables from JSON](#filling-variables-from-json)
   * [Changing the settings of a running script](#changing-the-settings-of-a-running-script)
@@ -605,6 +606,55 @@ factorial of 7 is 5040
 
 > [!NOTE]
 > `execute()` calls the function directly, like one script function calling another, which is why you get the return value. `main()` is no exception: `exec.execute("main", &result)` works too.
+
+## Fewer values than parameters: `argc`
+
+You don't have to give a function a value for every parameter. A call carries up to 6 values, and they fill the parameters in order:
+
+- a parameter with no value gets **0**: `0` for an `int`, `0.0` for a `float`, `NULL` for a pointer or a `char *`;
+- values beyond the parameters are ignored.
+
+So a function can have optional parameters. But a parameter that received `0` looks exactly like one that received nothing. When the difference matters, have the sketch say how many values it gave: bind a variable, conventionally `argc`, and set it before each call.
+
+```cpp
+int argc = 0;    // how many values the sketch gives main()
+
+void setup()
+{
+   bindVariable((char *)"int", (char *)"argc", NULL, &argc);    // before compiling
+   ScriptExecutable exec = parseScript(script);
+
+   argc = 0;
+   exec.execute("main");                    // main() with no value: the whole table
+
+   int32_t values[1] = {40};
+   argc = 1;
+   exec.execute("main", values, 1);         // main(40): only fib(40)
+}
+```
+
+```c
+int fib(int n)
+{
+   if (n < 2)
+      return n;
+   return fib(n - 1) + fib(n - 2);
+}
+
+int main(int n)
+{
+   if (argc > 0)                            // a value was given: n is it
+   {
+      printfln("fib(%d) = %d", n, fib(n));
+      return 0;
+   }
+   for (int i = 0; i <= 20; i++)            // none: n is 0, and means nothing
+      printfln("fib(%d) = %d", i, fib(i));
+   return 0;
+}
+```
+
+A script can then work like a command-line program: SolarOS's `asm run fib.sc 40` passes the `40` to `main` this way, binds `argc`, and adds `arg(i)`, `argf(i)` and `argstr(i)` to read any of the values anywhere in the script (bound host functions returning the values the sketch keeps). `Arguments` lists and `executeAsTask(name, args, nargs, ...)` behave the same: missing parameters are 0.
 
 ---
 
