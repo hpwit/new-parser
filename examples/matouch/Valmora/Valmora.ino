@@ -386,9 +386,9 @@ int zoneLvl[30] = {99, 99, 99, 99, 99, 1, 1, 2, 3, 5, 1, 2, 2, 4, 7, 1, 2, 3, 6,
 #define KEY 8
 #define MAXE 64
 #define MAXO 64
-#define LOGN 11
+#define LOGN 10
 #define LOGW 48
-#define LOG_SIZE 528
+#define LOG_SIZE 480
 #define DONE_SIZE 768
 #define DAY 300
 #define NIGHT 220
@@ -474,6 +474,14 @@ int plHit;
 
 int camLeft;
 int camTop;
+// Valmora Low: the WAD's tiles are 16x16 (and its font 8 rows): everything
+// is laid out in 800x480 coordinates and drawn at half of them, 400x240;
+// org: where that picture starts on the panel (centred at pixel size 1)
+int half = 0;
+int tileSz = 32;
+int orgX = 0;
+int orgY = 0;
+int pixelSize = 1;
 int viewW = 608;     // the map view: 608 beside the panel, 800 on the title
 int showHero = 1;
 int animTick;
@@ -574,9 +582,22 @@ int breathe(int n)
 
 void fillRect(int x, int y, int w, int h, uint16_t c)
 {
+   if (half == 1)
+   {
+      int x1 = (x + w) >> 1;
+      int y1 = (y + h) >> 1;
+      x = x >> 1;
+      y = y >> 1;
+      w = x1 - x;
+      h = y1 - y;
+      if (w <= 0)
+         w = 1;
+      if (h <= 0)
+         h = 1;
+   }
    for (int j = 0; j < h; j++)
    {
-      int o = (y + j) * stride + x;
+      int o = (y + j + orgY) * stride + x + orgX;
       for (int i = 0; i < w; i++)
          display[o + i] = c;
       if ((j & 7) == 7)
@@ -602,11 +623,12 @@ void setInk(uint16_t fg, uint16_t bg)
    ink[3] = fg;
 }
 
+// a character's width in 800x480 coordinates (Valmora Low's font is half)
 int glyphW(int c)
 {
    if (c < 32 || c > 126)
       return 0;
-   return wad[fontOff + 3 + (c - 32) * 3];
+   return wad[fontOff + 3 + (c - 32) * 3] << half;
 }
 
 int drawChar(int c, int x, int y)
@@ -617,9 +639,12 @@ int drawChar(int c, int x, int y)
    int w = wad[g];
    int o = fontOff + rd16(g + 1);
    int bpr = (w + 3) >> 2;
-   for (int r = 0; r < 16; r++)
+   int rows = wad[fontOff];
+   int gx = (x >> half) + orgX;
+   int gy = (y >> half) + orgY;
+   for (int r = 0; r < rows; r++)
    {
-      int d = (y + r) * stride + x;
+      int d = (gy + r) * stride + gx;
       for (int i = 0; i < w; i++)
       {
          int v = (wad[o + (i >> 2)] >> (6 - ((i & 3) << 1))) & 3;
@@ -628,7 +653,7 @@ int drawChar(int c, int x, int y)
       }
       o = o + bpr;
    }
-   return x + w;
+   return x + (w << half);
 }
 
 int drawText(char *s, int x, int y)
@@ -877,6 +902,10 @@ void decodeTiles()
    int o = wadFind("TILES");
    int n = rd16(o);
    o = o + 2;
+   tileSz = wad[o + 1];
+   if (tileSz == 0)
+      tileSz = 32;
+   int bytes = 34 + tileSz * tileSz / 2;
    for (int t = 0; t < n; t++)
    {
       tflag[t] = wad[o];
@@ -887,7 +916,7 @@ void decodeTiles()
          tpal[t * 32 + 16 + i] = dimmed(c);
       }
       tpix[t] = o + 34;
-      o = o + 34 + 512;
+      o = o + bytes;
    }
    int pr = wadFind("TPROP");
    int an = wadFind("TANIM");
@@ -903,29 +932,36 @@ void decodeTiles()
 // dark 1: every other pixel black (remembered, out of the light)
 void blitTile(int t, int dim, int sx, int sy, int key, int dark)
 {
+   // on the panel: at half of the 800x480 coordinates in Valmora Low
+   int tp = tileSz;
+   int limW = viewW >> half;
+   int limH = VIEWH >> half;
+   sx = sx >> half;
+   sy = sy >> half;
    int x0 = 0;
-   int x1 = TS;
+   int x1 = tp;
    int y0 = 0;
-   int y1 = TS;
+   int y1 = tp;
    if (sx < 0)
       x0 = -sx;
-   if (sx + TS > viewW)
-      x1 = viewW - sx;
+   if (sx + tp > limW)
+      x1 = limW - sx;
    if (sy < 0)
       y0 = -sy;
-   if (sy + TS > VIEWH)
-      y1 = VIEWH - sy;
+   if (sy + tp > limH)
+      y1 = limH - sy;
    if (x0 >= x1 || y0 >= y1)
       return;
    int pb = t * 32 + dim * 16;
+   int rowBytes = tp >> 1;
    for (int y = y0; y < y1; y++)
    {
-      int d = (sy + y) * stride + sx;
-      int p = tpix[t] + y * 16;
-      if (x0 == 0 && x1 == TS && key == 0 && dark == 0)
+      int d = (sy + y + orgY) * stride + sx + orgX;
+      int p = tpix[t] + y * rowBytes;
+      if (x0 == 0 && x1 == tp && key == 0 && dark == 0)
       {
          // the whole row: two pixels a byte
-         for (int i = 0; i < 16; i++)
+         for (int i = 0; i < rowBytes; i++)
          {
             int b = wad[p + i];
             display[d] = tpal[pb + (b >> 4)];
@@ -956,11 +992,15 @@ void blitTile(int t, int dim, int sx, int sy, int key, int dark)
 void blit2x(int t, int sx, int sy)
 {
    int pb = t * 32;
-   for (int y = 0; y < 64; y++)
+   int tp = tileSz;
+   int rowBytes = tp >> 1;
+   sx = (sx >> half) + orgX;
+   sy = (sy >> half) + orgY;
+   for (int y = 0; y < tp * 2; y++)
    {
       int d = (sy + y) * stride + sx;
-      int p = tpix[t] + (y >> 1) * 16;
-      for (int x = 0; x < 64; x++)
+      int p = tpix[t] + (y >> 1) * rowBytes;
+      for (int x = 0; x < tp * 2; x++)
       {
          int b = wad[p + (x >> 2)];
          if (((x >> 1) & 1) == 0)
@@ -1251,9 +1291,10 @@ void drawPanel()
          k++;
       }
    }
-   fillRect(616, 452, 176, 1, C_EDGE);
+   fillRect(616, 436, 176, 1, C_EDGE);
    setInk(C_DIM, C_BG);
-   drawText("M mend F spark P potion", 614, 458);
+   drawText("M mend  F spark", 614, 440);
+   drawText("P potion Space wait", 614, 458);
 }
 
 // ------------------------------------------------------------ frames
@@ -2275,21 +2316,25 @@ void drinkPotion()
 // a bolt flying from the hero: a glow drawn over the map
 void glow(int sx, int sy)
 {
-   int r = 9;
+   int r = 9 >> half;
+   int limW = viewW >> half;
+   int limH = VIEWH >> half;
+   sx = sx >> half;
+   sy = sy >> half;
    for (int j = -r; j <= r; j++)
       for (int i = -r; i <= r; i++)
       {
          int d = i * i + j * j;
          int x = sx + i;
          int y = sy + j;
-         if (d <= r * r && x >= 0 && y >= 0 && x < viewW && y < VIEWH)
+         if (d <= r * r && x >= 0 && y >= 0 && x < limW && y < limH)
          {
             uint16_t c = col(255, 120, 30);
-            if (d < 30)
+            if (d < (30 >> (half * 2)))
                c = col(255, 240, 140);
-            else if (d < 55)
+            else if (d < (55 >> (half * 2)))
                c = col(255, 190, 60);
-            display[y * stride + x] = c;
+            display[(y + orgY) * stride + x + orgX] = c;
          }
       }
 }
@@ -2378,6 +2423,22 @@ void drawLogo(int cx, int y)
       pal[i] = rd16(logoOff + 4 + i * 2);
    int p = logoOff + 36;
    int x0 = cx - w / 2;
+   if (half == 1)
+   {
+      // every other pixel of every other row: the logo at half its size
+      for (int j = 0; j < h; j = j + 2)
+      {
+         int d = ((y + j) / 2 + orgY) * stride + x0 / 2 + orgX;
+         int r = p + j * (w / 2);
+         for (int i = 0; i < w; i = i + 2)
+         {
+            int b = wad[r + i / 2] >> 4;
+            if (b != 0)
+               display[d + i / 2] = pal[b];
+         }
+      }
+      return;
+   }
    for (int j = 0; j < h; j++)
    {
       int d = (y + j) * stride + x0;
@@ -2399,36 +2460,69 @@ void centred(char *s, int y, uint16_t c, uint16_t bg)
    drawText(s, (800 - textW(s)) / 2, y);
 }
 
-// the world drifting by behind the name; 1 to play, 0 to leave
+// the world behind the name; 1 to play, 0 to leave
 int title()
 {
    loadMap(0, 30, 40);
    viewW = 800;
    showHero = 0;
    int t0 = millis();
+   int shown = -1;
    while (true)
    {
       tick();
-      int t = (millis() - t0) / 40;
+      // the world behind the name: drifting a pixel every 40 ms at pixel
+      // size 2, with its water moving and the line below blinking; at
+      // pixel size 1 (where the panel's refresh needs the PSRAM bus most)
+      // nothing moves at all: drawn once, then only waited on
+      int blink = 0;
+      int t = 0;
+      int now = 0;
+      if (pixelSize == 2)
+      {
+         blink = ((millis() - t0) / 600) % 2;
+         t = (millis() - t0) / 40;
+         now = t * 64 + blink * 32 + (animTick & 31);
+      }
+      else
+         animTick = 0;
+      if (now == shown)
+      {
+         delay(10);
+         int k0 = getKey();
+         if (k0 == 13 || k0 == 32 || k0 == 27)
+         {
+            viewW = 608;
+            showHero = 1;
+            panelDirty = 2;
+            if (k0 == 27)
+               return 0;
+            return 1;
+         }
+         continue;
+      }
+      shown = now;
       plX = 30 + (t / TS) % 40;
       plY = 40;
-      plPX = plX - 1;
+      plPX = plX;
+      plPY = plY;
+      if (pixelSize == 2)
+         plPX = plX - 1;
       drawView(t % TS);
       // the band behind the name
-      for (int y = 120; y < 330; y++)
+      for (int y = 120 >> half; y < 330 >> half; y++)
       {
-         int d = y * stride;
-         for (int x = 0; x < 800; x = x + 1)
+         int d = (y + orgY) * stride + orgX;
+         for (int x = 0; x < 800 >> half; x = x + 1)
             if (((x + y) & 1) == 0)
                display[d + x] = C_BLACK;
       }
       drawLogo(400, 140);
       centred("The Sundered Crown", 262, C_GOLD, C_BLACK);
-      if (((millis() - t0) / 600) % 2 == 0)
+      if (blink == 0)
          centred("Press Enter to begin", 292, C_TEXT, C_BLACK);
       centred("Escape to leave", 312, C_DIM, C_BLACK);
       present();
-      delay(25);              // about 30 frames a second is plenty here
       int k = getKey();
       if (k == 13 || k == 32 || k == 27)
       {
@@ -2559,6 +2653,27 @@ void setup()
       dlgStart[i] = o;
       o = o + 1 + wad[o] * 3;
    }
+   // 16x16 tiles: Valmora Low, drawn at 400x240, with its own pixel font
+   // and brighter greys (the small letters need the contrast)
+   int tl = wadFind("TILES");
+   if (wad[tl + 3] == 16)
+   {
+      half = 1;
+      C_TEXT = col(250, 246, 236);
+      C_DIM = col(196, 190, 204);
+   }
+}
+
+// the screen, then the tiles
+void start()
+{
+   setPixelsize(pixelSize);
+   // Valmora Low at pixel size 1: its 400x240 in the middle of the panel
+   if (half == 1 && pixelSize == 1)
+   {
+      orgX = 200;
+      orgY = 120;
+   }
    fillRect(0, 0, 800, 480, C_BLACK);
    setInk(C_TEXT, C_BLACK);
    drawText("Painting Valmora...", 330, 230);
@@ -2574,8 +2689,11 @@ int main()
       return 1;
    }
    enableGraphicMode();
-   setPixelsize(1);
    setup();
+   // --- the pixel size (make_wad.py --low changes these lines) ---
+   pixelSize = 1;
+   // --- end of the pixel size ---
+   start();
    int held = 0;
    uint32_t lastStep = 0;
    while (true)

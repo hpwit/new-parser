@@ -2,14 +2,19 @@
 script uses (between its "generated" markers).
 
     python make_wad.py ../data/valmora.wad valmora.sc [preview-dir]
+    python make_wad.py --low valmoralow.wad valmoralow.sc
+
+--low: Valmora Low, for SolarOS at 400x240: 16x16 tiles (the same art made
+smaller), a font of 8 rows, and valmoralow.sc written from valmora.sc with
+the pixel size taken from the command line (asm run valmoralow.bin 1 or 2).
 
 The WAD is a PWAD of named lumps (asm reads it next to the script, wadFind()
 gives where a lump starts):
 
   TILES  u16 count, then per tile: u8 flags (1 = colour 0 transparent),
-         u8 0, 16 x u16 colours (RGB565, byte-swapped for the panel, each
-         one of the 4096 colours of 4 bits a channel), 512 bytes of 4-bit
-         pixels (left pixel in the high nibble)
+         u8 size (32, or 16 for Valmora Low), 16 x u16 colours (RGB565, byte-swapped for the panel, each
+         one of the 4096 colours of 4 bits a channel), size*size/2 bytes of
+         4-bit pixels (left pixel in the high nibble)
   TPROP  u8 per tile: 1 blocks, 2 burns, 4 water, 8 lights the dark,
          zone << 4 (what roams there)
   TANIM  u8 per tile: frames (1 = still; the frames follow the first)
@@ -39,6 +44,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 import art
 import content as C
+import font6
 
 KEY = 0x0008  # never a colour: RGB565 with red 1 is out of the 4096
 
@@ -500,16 +506,17 @@ def make_dungeon(mid, look, floor_no, kinds, boss, rnd, special):
 
 # ------------------------------------------------------------ font and logo
 
-def make_font():
-    font = ImageFont.load_default(15)
-    H = 16
+def make_font(size=15, H=16, dy=-3, crisp=0):
+    """crisp > 0: every pixel on or off (on from that much ink of 255),
+    for the small font shown at pixel size 2, where grey edges blur."""
+    font = ImageFont.load_default(size)
     widths, glyphs = [], []
     for ch in range(32, 127):
         c = chr(ch)
         adv = int(round(font.getlength(c))) + (1 if c != ' ' else 0)
         adv = max(adv, 3)
         im = Image.new('L', (adv + 2, H), 0)
-        ImageDraw.Draw(im).text((0, -3), c, font=font, fill=255)
+        ImageDraw.Draw(im).text((0, dy), c, font=font, fill=255)
         im = im.crop((0, 0, adv, H))
         widths.append(adv)
         glyphs.append(im)
@@ -523,13 +530,39 @@ def make_font():
             bits = []
             for x in range(adv):
                 v = px[x, y]
-                bits.append(0 if v < 48 else 1 if v < 120 else 2 if v < 190 else 3)
+                if crisp:
+                    bits.append(3 if v >= crisp else 0)
+                else:
+                    bits.append(0 if v < 48 else 1 if v < 120 else 2 if v < 190 else 3)
             while len(bits) % 4:
                 bits.append(0)
             for i in range(0, len(bits), 4):
                 data.append((bits[i] << 6) | (bits[i + 1] << 4) | (bits[i + 2] << 2) | bits[i + 3])
     lump = struct.pack('<BBB', H, 32, 95) + table + data
     return lump, widths, font
+
+
+def make_pixel_font():
+    """Valmora Low's font (font6.py): 8 rows, each pixel on or off."""
+    H = 8
+    widths, rows_of = [], []
+    for ch in range(32, 127):
+        w, rows = font6.glyph(chr(ch))
+        adv = w + 1                      # a column of space after it
+        widths.append(adv)
+        rows_of.append([r + [0] for r in rows])
+    data = bytearray()
+    table = bytearray()
+    base = 3 + 95 * 3
+    for adv, rows in zip(widths, rows_of):
+        table += struct.pack('<BH', adv, base + len(data))
+        for r in rows:
+            bits = [3 if v else 0 for v in r]
+            while len(bits) % 4:
+                bits.append(0)
+            for i in range(0, len(bits), 4):
+                data.append((bits[i] << 6) | (bits[i + 1] << 4) | (bits[i + 2] << 2) | bits[i + 3])
+    return struct.pack('<BBB', H, 32, 95) + table + data, widths, None
 
 
 def wrap(text, widths, maxw):
@@ -615,9 +648,23 @@ def wad(lumps):
     return bytes(out)
 
 
+LOW_PIXEL_SIZE = """   // --- the pixel size (make_wad.py --low changes these lines) ---
+   // Valmora Low: asm run valmoralow.bin 2 fills the panel with its 400x240
+   // (the default), 1 shows them as they are, in the middle of it
+   pixelSize = 2;
+   if (argc >= 1 && arg(0) == 1)
+      pixelSize = 1;
+   // --- end of the pixel size ---"""
+
+
 def main():
-    out_wad, out_sc = sys.argv[1], sys.argv[2]
-    prev_dir = sys.argv[3] if len(sys.argv) > 3 else None
+    low = '--low' in sys.argv
+    args = [a for a in sys.argv[1:] if a != '--low']
+    out_wad, out_sc = args[0], args[1]
+    prev_dir = args[2] if len(args) > 2 and not low else None
+    size = 16 if low else 32
+    if low:
+        art.SPR = 16
     rnd = random.Random(1987)
     t = build_tiles()
     t.add('void', Image.new('RGB', (32, 32), (0, 0, 0)))
@@ -625,13 +672,18 @@ def main():
     props = tile_props(t)
     T = t.index
     text = Text()
-    font_lump, widths, _ = make_font()
+    font_lump, widths, _ = make_pixel_font() if low else make_font()
+    if low:
+        # the layout is in 800x480 coordinates: the small font counts double
+        widths = [w * 2 for w in widths]
 
     tile_data = bytearray(struct.pack('<H', len(t.names)))
     previews = []
     for img, fl in zip(t.images, t.flags):
+        if img.size[0] != size:
+            img = img.resize((size, size), Image.LANCZOS)
         cols, pix, pv = pack_picture(img, fl == 1)
-        tile_data += struct.pack('<BB', fl, 0) + cols + pix
+        tile_data += struct.pack('<BB', fl, size) + cols + pix
         previews.append(pv)
 
     maps = {}
@@ -761,6 +813,15 @@ def main():
     defs.append('#define HOME_X %d' % bx)
     defs.append('#define HOME_Y %d' % by)
     defs.append('// --- end of generated ---')
+    if low:
+        # valmoralow.sc: valmora.sc with the pixel size from the command line
+        sc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'valmora.sc')).read()
+        a = sc.find('   // --- the pixel size')
+        b = sc.find('   // --- end of the pixel size ---')
+        sc = sc[:a] + LOW_PIXEL_SIZE + sc[b + len('   // --- end of the pixel size ---'):]
+        sc = sc.replace('printfln("valmora.wad must be next to the script");',
+                        'printfln("valmoralow.wad must be next to the script");')
+        open(out_sc, 'w').write(sc)
     sc = open(out_sc).read() if os.path.exists(out_sc) else ''
     a = sc.find('// --- generated by')
     b = sc.find('// --- end of generated ---')

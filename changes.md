@@ -4,13 +4,23 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### ⏳ `setCompileProgress()`: how far a compile has got
+
+```cpp
+void showProgress(int percent, const char *stage, void *ctx) { Serial.printf("%3d%% %s\n", percent, stage); }
+setCompileProgress(showProgress, NULL);
+ScriptExecutable exec = parseScript(script);
+```
+
+The compiler calls the function as it works: a percentage from 0 to 100 that never goes back, and the stage (`reading`, `parsing`, `generating`, `optimizing`, `assembling`, `done`). The stages are weighted from their time on Valmora, Ironforge, Tetris and NeonRacer, and the long ones (parsing, two optimizer passes, the assembler) report as they go, so the number follows the clock to within a few percent; 70 to 100 calls a compile. The generated code is unchanged (every SolarOS example script compiles to the same bytes). New example [CompileProgress](examples/CompileProgress), README [Watching a long compile](README.md#watching-a-long-compile), host test.
+
 ### 🐛 Numbers above 65535 in a script
 
 A decimal number in a script was read into 16 bits: `uint16_t cache[378880]` reserved 6784 elements, so the globals declared after it shared its memory (Valmora crashed as soon as it filled its tile cache), and `x == 65537` was compiled as a comparison with 1 (`bnei a2,1`). The number is read as 32 bits now. Host tests for both; the SolarOS example scripts compile to the same bytes as before.
 
 ### 🗺️ Valmora: an adventure in the style of the early role-playing games
 
-[matouch/Valmora](examples/matouch/Valmora): a world map, three towns and 30 people, four torch-lit dungeons, every picture (32x32 tiles of 16 colours each out of 4096), map and line of talk in a WAD on the FFat partition, made by its `tools`. The GameLauncher runs it too (`valmora.bin`, `valmora.wad` beside it): it binds SolarOS's names (`display`, `stride`, `updateDisplay`, `enableGraphicMode`, `keyHeld`, `delay`), keeps one WAD at a time, and puts a game's code in PSRAM when internal RAM is short (`SCRIPT_CODE_AUTO`). See the README's [Valmora](README.md#valmora-an-adventure-in-the-style-of-the-early-role-playing-games).
+[matouch/Valmora](examples/matouch/Valmora): a world map, three towns and 30 people, four torch-lit dungeons, every picture (32x32 tiles of 16 colours each out of 4096), map and line of talk in a WAD on the FFat partition, made by its `tools`. The GameLauncher runs it too (`valmora.bin`, `valmora.wad` beside it): it binds SolarOS's names (`display`, `stride`, `updateDisplay`, `enableGraphicMode`, `keyHeld`, `delay`), keeps one WAD at a time, and puts a game's code in PSRAM when internal RAM is short (`SCRIPT_CODE_AUTO`). See the README's [Valmora](README_GAMES.md#valmora-an-adventure-in-the-style-of-the-early-role-playing-games).
 
 ### 🧠 `SCRIPT_CODE_AUTO`: internal RAM, else PSRAM
 
@@ -156,23 +166,23 @@ An array bound or declared without a size (`bindVariable("CRGB", "leds", "[]", l
 
 ### 🖥️ Examples for the ESP32-S3-Touch-LCD-7
 
-[RainbowScript, BouncingBalls, GameOfLife, Mandelbrot and Tetris](examples/matouch) for the ESP32-S3-Touch-LCD-7, a 7-inch 800x480 RGB touch screen: each script draws straight into the screen's frame buffer. Run on the board, Tetris played with a USB keyboard. Tetris is a whole game in about 400 lines of script; the README shows frames from it and what it uses from the language. → [Tetris: a whole game in a script](README.md#tetris-a-whole-game-in-a-script) [CreateTetrisBinary](examples/matouch/CreateTetrisBinary) compiles it and saves the binary to the microSD card, [ExecuteTetrisBinary](examples/matouch/ExecuteTetrisBinary) plays it from there: loaded in 3 ms instead of compiled in 9.9 s, run on the board. → [On the ESP32-S3-Touch-LCD-7](README.md#on-the-esp32-s3-touch-lcd-7)
+[RainbowScript, BouncingBalls, GameOfLife, Mandelbrot and Tetris](examples/matouch) for the ESP32-S3-Touch-LCD-7, a 7-inch 800x480 RGB touch screen: each script draws straight into the screen's frame buffer. Run on the board, Tetris played with a USB keyboard. Tetris is a whole game in about 400 lines of script; the README shows frames from it and what it uses from the language. → [Tetris: a whole game in a script](README_GAMES.md#tetris-a-whole-game-in-a-script) [CreateTetrisBinary](examples/matouch/CreateTetrisBinary) compiles it and saves the binary to the microSD card, [ExecuteTetrisBinary](examples/matouch/ExecuteTetrisBinary) plays it from there: loaded in 3 ms instead of compiled in 9.9 s, run on the board. → [On the ESP32-S3-Touch-LCD-7](README_GAMES.md#on-the-esp32-s3-touch-lcd-7)
 
 ### 🕹️ MazeChase
 
-[MazeChase](examples/matouch/MazeChase), a maze game for the ESP32-S3-Touch-LCD-7 in about 1100 lines of script: an orb, four drones with their own strategies, power cells, a bonus apple, score, lives, levels, and a demo that plays itself until Space is pressed. The README shows frames from it. → [MazeChase: a maze game with four hunters](README.md#mazechase-a-maze-game-with-four-hunters)
+[MazeChase](examples/matouch/MazeChase), a maze game for the ESP32-S3-Touch-LCD-7 in about 1100 lines of script: an orb, four drones with their own strategies, power cells, a bonus apple, score, lives, levels, and a demo that plays itself until Space is pressed. The README shows frames from it. → [MazeChase: a maze game with four hunters](README_GAMES.md#mazechase-a-maze-game-with-four-hunters)
 
 ### 🏁 NeonRacer and the GameLauncher
 
-[NeonRacer](examples/matouch/NeonRacer), an anti-gravity race on a neon track drawn in perspective (curves, hills, boost pads, three rivals, 3 laps) with 3D ships (lit polygons, rolling in the turns), in about 1050 lines of script. [GameLauncher](examples/matouch/GameLauncher) lists the compiled games on the FFat partition and runs the one you pick, with Escape back to the menu; its `data` folder has Tetris, MazeChase and NeonRacer as binaries. The README says how to make the partition's image and write it. → [NeonRacer: a race in perspective](README.md#neonracer-a-race-in-perspective), [GameLauncher: games from the FFat partition](README.md#gamelauncher-games-from-the-ffat-partition)
+[NeonRacer](examples/matouch/NeonRacer), an anti-gravity race on a neon track drawn in perspective (curves, hills, boost pads, three rivals, 3 laps) with 3D ships (lit polygons, rolling in the turns), in about 1050 lines of script. [GameLauncher](examples/matouch/GameLauncher) lists the compiled games on the FFat partition and runs the one you pick, with Escape back to the menu; its `data` folder has Tetris, MazeChase and NeonRacer as binaries. The README says how to make the partition's image and write it. → [NeonRacer: a race in perspective](README_GAMES.md#neonracer-a-race-in-perspective), [GameLauncher: games from the FFat partition](README_GAMES.md#gamelauncher-games-from-the-ffat-partition)
 
 ### 🛸 XenoWing
 
-[XenoWing](examples/matouch/XenoWing), a horizontal shoot'em up with pixel art in flash: an organic manta ship over an alien world in five parallax layers (a ringed planet, far mountains, a forest of strange trees, a crystal ridge, plants in front), waves of bio creatures, a boss, power-ups and spore bombs, in about 1250 lines of script. The art comes from a Python tool in the example and reaches the script through bound pointers. Its binary is in the GameLauncher, which carries the art too. → [XenoWing: a shoot'em up with real art](README.md#xenowing-a-shootem-up-with-real-art)
+[XenoWing](examples/matouch/XenoWing), a horizontal shoot'em up with pixel art in flash: an organic manta ship over an alien world in five parallax layers (a ringed planet, far mountains, a forest of strange trees, a crystal ridge, plants in front), waves of bio creatures, a boss, power-ups and spore bombs, in about 1250 lines of script. The art comes from a Python tool in the example and reaches the script through bound pointers. Its binary is in the GameLauncher, which carries the art too. → [XenoWing: a shoot'em up with real art](README_GAMES.md#xenowing-a-shootem-up-with-real-art)
 
 ### 🌍 ChromaQuest
 
-[ChromaQuest](examples/matouch/ChromaQuest), three grey worlds made from public-domain NASA photographs (the Moon with the Earth rising, Mount Sharp on Mars, Saturn): a lantern drone shoots the colour thieves and catches their red, green and blue drops, and the script gives each colour back to the photograph, mixing its grey and its colour channel by channel every frame. About 1000 lines of script; in the GameLauncher too. → [ChromaQuest: colour back to three worlds](README.md#chromaquest-colour-back-to-three-worlds)
+[ChromaQuest](examples/matouch/ChromaQuest), three grey worlds made from public-domain NASA photographs (the Moon with the Earth rising, Mount Sharp on Mars, Saturn): a lantern drone shoots the colour thieves and catches their red, green and blue drops, and the script gives each colour back to the photograph, mixing its grey and its colour channel by channel every frame. About 1000 lines of script; in the GameLauncher too. → [ChromaQuest: colour back to three worlds](README_GAMES.md#chromaquest-colour-back-to-three-worlds)
 
 ### 🛠️ Assembly functions, as in v1
 
@@ -196,7 +206,7 @@ After a compile, the parse tree, the tokens and their text, and the assembler's 
 
 ### 🧱 PrismBreak, Escape in every game, GIFs
 
-[PrismBreak](examples/matouch/PrismBreak), a brick breaker with patterned bevelled bricks, a scrolling diamond background, capsules (wider paddle, three balls, slower ball, a life) and five layouts, in about 1030 lines of script; its binary is in the GameLauncher. In every game Escape now gives the game up (in the launcher it comes back to the menu) and the arrows work as Z Q S D. The README shows each game moving: GIFs rendered frame by frame on the emulated ESP32-S3. → [PrismBreak: a brick breaker](README.md#prismbreak-a-brick-breaker)
+[PrismBreak](examples/matouch/PrismBreak), a brick breaker with patterned bevelled bricks, a scrolling diamond background, capsules (wider paddle, three balls, slower ball, a life) and five layouts, in about 1030 lines of script; its binary is in the GameLauncher. In every game Escape now gives the game up (in the launcher it comes back to the menu) and the arrows work as Z Q S D. The README shows each game moving: GIFs rendered frame by frame on the emulated ESP32-S3. → [PrismBreak: a brick breaker](README_GAMES.md#prismbreak-a-brick-breaker)
 
 ### 🐛 Negative values in array initializers
 

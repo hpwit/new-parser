@@ -2,6 +2,11 @@
  * stubbed, keys read from a file, frames saved as PPM.
  *
  *   cc -O2 -o host host.c && ./host ../data/valmora.wad keys.txt outdir
+ *   cc -O2 -DSCRIPT='"valmoralow.sc"' -o hostlow host.c &&
+ *       ./hostlow valmoralow.wad keys.txt outdir [arg]
+ *
+ * The shots are what the panel shows: at pixel size 2, the top-left 400x240
+ * of the frame buffer, each pixel 2x2.
  *
  * keys.txt: tokens separated by spaces or new lines: a letter (z q s d m f
  * p y n, or 1..5), ENTER, ESC, SPACE, wait:N (N reads with no key), and
@@ -26,6 +31,9 @@ static char **keys;
 static int nkeys, ki, waiting;
 static const char *outdir;
 static uint32_t seed = 12345;
+static int pixel = 1;
+int argc_ = 0;
+static int arg0 = 0;
 static void (*cheat)(const char *t);
 
 static void save(const char *name)
@@ -36,7 +44,7 @@ static void save(const char *name)
     fprintf(f, "P6\n800 480\n255\n");
     const uint16_t *b = frames[back ^ 1];
     for (int i = 0; i < 800 * 480; i++) {
-        uint16_t s = b[i];
+        uint16_t s = b[((i / 800) / pixel) * 800 + (i % 800) / pixel];
         uint16_t v = (uint16_t)((s << 8) | (s >> 8));
         unsigned char px[3] = {(unsigned char)(((v >> 11) & 31) * 255 / 31),
                                (unsigned char)(((v >> 5) & 63) * 255 / 63),
@@ -67,7 +75,8 @@ uint32_t host_rand(uint32_t n)
 }
 int keyHeld(int c) { (void)c; return 0; }
 void enableGraphicMode(void) {}
-void setPixelsize(int n) { (void)n; }
+void setPixelsize(int n) { pixel = n; }
+int arg(int i) { return i == 0 ? arg0 : 0; }
 void printfln(const char *f, ...)
 {
     va_list a;
@@ -121,9 +130,14 @@ int readKey(void)
     return (k++ & 1) ? 'y' : 27;
 }
 
+#ifndef SCRIPT
+#define SCRIPT "valmora.sc"
+#endif
 #define main script_main
 #define rand(n) host_rand(n)
-#include "valmora.sc"
+#define argc argc_
+#include SCRIPT
+#undef argc
 #undef main
 
 static void do_cheat(const char *t)
@@ -163,6 +177,10 @@ int main(int argc, char **argv)
         keys[nkeys++] = strdup(tok);
     fclose(f);
     outdir = argv[3];
+    if (argc > 4) {
+        argc_ = 1;
+        arg0 = atoi(argv[4]);
+    }
     int r = script_main();
     printf("script returned %d after %ld frames\n", r, shown);
     return 0;

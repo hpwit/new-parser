@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFilter
 T = 32          # tile size
 S = 4           # supersampling for shapes
 B = T * S
+SPR = T         # creatures and overlays come out this size (16: Valmora Low)
 
 
 def rgb(h):
@@ -146,10 +147,10 @@ def outline_sprite(img, colour=(20, 16, 24)):
 
 
 def sprite_from(big, outline=True):
-    small = down(big)
+    small = big.resize((SPR, SPR), Image.LANCZOS)
     px = small.load()
-    for y in range(T):
-        for x in range(T):
+    for y in range(SPR):
+        for x in range(SPR):
             r, g, b, a = px[x, y]
             if a >= 110:
                 # undo the premultiplied look of the edge pixels
