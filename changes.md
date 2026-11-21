@@ -4,6 +4,14 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 🐛 Numbers above 65535 in a script
+
+A decimal number in a script was read into 16 bits: `uint16_t cache[378880]` reserved 6784 elements, so the globals declared after it shared its memory (Valmora crashed as soon as it filled its tile cache), and `x == 65537` was compiled as a comparison with 1 (`bnei a2,1`). The number is read as 32 bits now. Host tests for both; the SolarOS example scripts compile to the same bytes as before.
+
+### 🗺️ Valmora: an adventure in the style of the early role-playing games
+
+[matouch/Valmora](examples/matouch/Valmora): a world map, three towns and 30 people, four torch-lit dungeons, every picture (32x32 tiles of 16 colours each out of 4096), map and line of talk in a WAD on the FFat partition, made by its `tools`. The GameLauncher runs it too (`valmora.bin`, `valmora.wad` beside it): it binds SolarOS's names (`display`, `stride`, `updateDisplay`, `enableGraphicMode`, `keyHeld`, `delay`), keeps one WAD at a time, and puts a game's code in PSRAM when internal RAM is short (`SCRIPT_CODE_AUTO`). See the README's [Valmora](README.md#valmora-an-adventure-in-the-style-of-the-early-role-playing-games).
+
 ### 🧠 `SCRIPT_CODE_AUTO`: internal RAM, else PSRAM
 
 `setScriptCodeMemory(SCRIPT_CODE_AUTO)` puts a script's code in executable internal RAM when a block that big is free, else in PSRAM (ESP32-S3 with PSRAM; false elsewhere). `executableCodeMemory(&exe)` says where a loaded script's code went.

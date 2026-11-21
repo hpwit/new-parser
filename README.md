@@ -2252,7 +2252,8 @@ A game doesn't have to be compiled every time it starts. `parseScriptToBinary()`
 | `matouch/ChromaQuest` | Three grey worlds made from NASA photographs (the Moon with the Earth rising, Mount Sharp on Mars, Saturn) whose red, green and blue come back as a lantern drone catches the colour drops of the thieves it shoots: the script mixes each photograph's grey and colour, channel by channel, every frame. |
 | `matouch/Vault13H` | A first-person maze shooter in the VGA style: 320x240 in the 256 colours of the VGA default palette, each pixel 2x2, so 640x480 in the middle of the panel. Ray-cast textured walls, drones to shoot, gold, health and ammo, three looks (a keep, a crypt, a base). Everything is drawn by the script, no art files. |
 | `matouch/Ironforge` | The first-person shooter of the Guition chapter ([Ironforge](#ironforge-a-shooter-with-mid-90s-technology)), played with the USB keyboard: its 240x128 view and the status bar at pixel size 3, 720x480 in the middle of the panel; the monsters, the face and the guns from a WAD on the FFat partition. |
-| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing, ChromaQuest and Ironforge are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
+| `matouch/Valmora` | A top-down adventure in the style of the early role-playing games ([Valmora](#valmora-an-adventure-in-the-style-of-the-early-role-playing-games)): a world map, towns, torch-lit dungeons; every picture, map and line of talk from a WAD on the FFat partition. |
+| `matouch/GameLauncher` | A menu of compiled games read from the FFat partition (Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing, ChromaQuest, Ironforge and Valmora are in its `data` folder): pick one with the keyboard, it loads in a few milliseconds and runs; Escape comes back to the menu. |
 
 In every game, **Escape** gives the game up (Tetris ends it, the others go back to their demo; in the GameLauncher it goes back to the menu), and the **arrow keys** work as Z Q S D.
 
@@ -2432,8 +2433,8 @@ Writing it found and fixed two compiler issues: a parse error inside nested bloc
 <img src="examples/matouch/GameLauncher/gamelauncher_menu.png" width="400" alt="The launcher's menu">
 
 - **Keys**: Z/S or the arrows to choose, Space or Enter to play, 1-9 to play a game at once; in a game, Escape comes back to the menu. The arrows arrive in the games as Z Q S D.
-- **Bindings**: the launcher binds the names the games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`, XenoWing's art: `gfx`, `sky`, `farRidge`, `forest`, `nearRidge`, `frontPlants`, from a copy of `xenowing_assets.h` in the launcher, and ChromaQuest's: `chromaGfx`, `worldColor`, `worldLum`, from `chroma_assets.h`); Ironforge's: `touchHeld`, `sin`, `hypot`, `atan2`, `wad`, `wadLoaded`, `wadSprite`, `wadFind`; any other game compiled against the same names shows up in the menu too.
-- **Coming back**: each game runs on its own task (`executeAsTask()`). Every game calls `readKey()` once per frame; after Escape, `readKey()` never returns, so the game's task waits in a function of the sketch that holds nothing, and the launcher kills it and frees the game (built with placement `new`, since a `ScriptExecutable` can't be moved). Killing it anywhere else, inside the panel driver say, could leave the screen half way. Ironforge never calls `readKey()`: it reads the keys held in `touchHeld` (a bit per key, as in its own sketch), so after Escape its task waits at the start of `show16()` instead, before the panel is touched. The launcher reads `ironforge.wad` into PSRAM when Ironforge first starts, and draws it 13 pixels in, as its sketch does.
+- **Bindings**: the launcher binds the names the games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`, XenoWing's art: `gfx`, `sky`, `farRidge`, `forest`, `nearRidge`, `frontPlants`, from a copy of `xenowing_assets.h` in the launcher, and ChromaQuest's: `chromaGfx`, `worldColor`, `worldLum`, from `chroma_assets.h`); Ironforge's: `touchHeld`, `sin`, `hypot`, `atan2`, `wad`, `wadLoaded`, `wadSprite`, `wadFind`; Valmora's, the names of SolarOS's script runtime, so that one `valmora.bin` runs in both: `display` (the same frame buffer as `led16`), `stride`, `updateDisplay` (`show16`), `enableGraphicMode`, `keyHeld`, `delay`; any other game compiled against the same names shows up in the menu too. The launcher sets `setScriptCodeMemory(SCRIPT_CODE_AUTO)`: a game's code goes to PSRAM when no internal block is big enough.
+- **Coming back**: each game runs on its own task (`executeAsTask()`). Every game calls `readKey()` once per frame; after Escape, `readKey()` never returns, so the game's task waits in a function of the sketch that holds nothing, and the launcher kills it and frees the game (built with placement `new`, since a `ScriptExecutable` can't be moved). Killing it anywhere else, inside the panel driver say, could leave the screen half way. Ironforge never calls `readKey()`: it reads the keys held in `touchHeld` (a bit per key, as in its own sketch), so after Escape its task waits at the start of `show16()` instead, before the panel is touched. The launcher reads `ironforge.wad` into PSRAM when Ironforge first starts, and draws it 13 pixels in, as its sketch does; Valmora gets `valmora.wad` the same way (one WAD is kept at a time).
 
 **Putting the data folder on the partition.** The partition scheme is *16M Flash (3MB APP/9.9MB FATFS)*: the FFat partition starts at `0x610000` and is `0x9E0000` bytes. FFat keeps a wear-levelling layer around the FAT, so the image is made with ESP-IDF's `wl_fatfsgen.py`, with the core's settings (4096-byte sectors, long names), and written with esptool:
 
@@ -2443,7 +2444,7 @@ python $IDF_PATH/components/fatfs/wl_fatfsgen.py --output_file ffat.img \
 esptool.py --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ffat.img
 ```
 
-For Ironforge's monsters, make the image from a folder holding the `.bin` files and `examples/matouch/Ironforge/data/ironforge.wad` (see [Ironforge](#ironforge-a-shooter-with-mid-90s-technology)); without the WAD it plays with drawings of its own.
+For Ironforge's monsters, make the image from a folder holding the `.bin` files and `examples/matouch/Ironforge/data/ironforge.wad` (see [Ironforge](#ironforge-a-shooter-with-mid-90s-technology)); without the WAD it plays with drawings of its own. Valmora needs `examples/matouch/Valmora/data/valmora.wad` beside it (without it the game stops at once).
 
 (esptool comes with the core: `~/Library/Arduino15/packages/esp32/tools/esptool_py/<version>/esptool` on a Mac.) The launcher mounts the partition with `FFat.begin(false)`: a partition that doesn't mount is never formatted; the menu then says there is no game.
 
@@ -2592,6 +2593,39 @@ then `wl_fatfsgen.py` and `esptool` as above.
 
 Writing it found a compiler bug: a cast used as the left operand of an operator, as in `((int)(x * 64.0)) & 63`, lost the operator (the floors were noise until the cast was put in a variable first). The script works around it; the compiler is fixed since (the cast passed the type of its operands, float, to the expression around it, instead of its own).
 
+
+#### Valmora: an adventure in the style of the early role-playing games
+
+[matouch/Valmora](examples/matouch/Valmora) is a top-down adventure of the kind the first role-playing games made: a world seen from above, tile by tile, towns where everybody has something to say, dungeons lit by the torch you carry. The story, the world, the people and every picture are its own: the sorcerer Morvath has broken the Sunstone Crown in three, and the shards wait in the Mossdeep Caves, the Drowned Crypt and the Ember Mines, each at the bottom of two floors and guarded; bring them to King Aldren and the gate to Morvath's Spire, beyond the lava lake, opens.
+
+| | |
+| --- | --- |
+| <img src="examples/matouch/Valmora/valmora_title.png" width="400" alt="The title: the world drifting by behind the name"> | <img src="examples/matouch/Valmora/valmora_talk.png" width="400" alt="Elder Corwin, by the well in Brindle"> |
+| <img src="examples/matouch/Valmora/valmora_world.png" width="400" alt="The road, the river and its bridge"> | <img src="examples/matouch/Valmora/valmora_night.png" width="400" alt="The same road at night: the hero's light"> |
+| <img src="examples/matouch/Valmora/valmora_shop.png" width="400" alt="Hal the smith's weapons"> | <img src="examples/matouch/Valmora/valmora_boss.png" width="400" alt="The Moss Golem, by the torch's light"> |
+
+- **The world**: 96x80 tiles, from a 48x40 map drawn as text, with roads found between the places, a bridge where they cross the river, beaches where grass meets water. Three towns (Brindle, Highmere and its castle, the port of Saltmarsh, drawn as text too) and 30 people: shopkeepers (weapons, armour, potions), inns, healers, the King, and everyone else with a hint. Four dungeons of two floors, rooms and corridors made from a seed, with chests, monsters and, on the last floor, a boss and the shard's altar.
+- **Playing**: you walk tile by tile (the view scrolls smoothly, the creatures too); walking into someone talks, into a monster fights. Monsters roam the world by its ground and your level, hunt you when near. Levels, gold, five weapons and five armours, potions, two spells (Mend, Spark). Night falls on the world: everything dims but a pool of light around you. In a dungeon you see what your torch lights, and remember, darker, what you have seen.
+- **The pictures**: 32x32 tiles and creatures, each with its own 16 colours out of the 4096 of 4 bits a channel, 4 bits a pixel in the WAD. The script draws them straight from the WAD, two pixels a byte, through each tile's palette at full light or dimmed (made at start, 12 KB). A first version decoded every tile into a 758 KB cache of panel colours: reading that much per frame on SolarOS, whose panel refresh copies its lines from PSRAM through the same cache, made the picture shake; a quarter of the reads, and a pause of 1 ms every two rows of tiles, keep it steady. Text in an antialiased font (4 shades), proportional.
+- **Drawing only when needed**: a new picture only when something changed (a key, a move, the animation's tick, the panel), else `delay(10)`, so the other tasks run and the panel keeps its share of the PSRAM bus.
+- **The tools** ([tools](examples/matouch/Valmora/tools)): `art.py` draws every tile and creature (shapes 4 times larger, antialiased, scaled down; tileable textures), `content.py` holds the world, the towns, the people, their words and the monsters, `make_wad.py` packs them into `data/valmora.wad` and writes the `#define` block at the top of `valmora.sc`, `make_sketch.py` puts the script into `Valmora.ino`, and `host.c` runs the script as C on a computer, played from a file of keys, saving screenshots (the pictures above).
+
+Keys: the arrows or Z Q S D walk, M mends, F then a direction throws a spark, P drinks a potion, Space waits, Enter turns a page. Its FFat partition holds the WAD:
+
+```sh
+mkdir ffat && cp examples/matouch/Valmora/data/valmora.wad ffat/
+```
+
+then `wl_fatfsgen.py` and `esptool` as above (with the GameLauncher's games beside it, the launcher runs `valmora.bin` too). The same script runs on SolarOS (`asm run valmora.bin`, the WAD beside it).
+
+| | |
+| --- | --- |
+| Script | 2,420 lines, 52 KB of text |
+| Saved binary | 32 KB |
+| Its arrays | about 30 KB: the tiles' palettes (12 KB), the map being played and what has been seen of it (16 KB) |
+| The WAD | 185 pictures (4-bit, 16 colours each), 12 maps, 30 people and their words, the font; 151 KB |
+
+Writing it found a compiler bug: a number above 65535 in the script was cut to 16 bits, so `uint16_t cache[378880]` reserved 6784 elements (the globals after it overlapped it, and the game crashed as soon as it decoded its tiles), and `x == 65537` compared with 1. Fixed: the literal is read as 32 bits.
 ---
 
 # Known limitations

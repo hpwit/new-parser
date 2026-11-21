@@ -5,10 +5,14 @@
 //
 // The data folder next to this sketch holds the games of the matouch examples:
 // tetris.bin, mazechase.bin, neonracer.bin, prismbreak.bin, xenowing.bin,
-// chromaquest.bin and ironforge.bin (XenoWing's and ChromaQuest's art are in
-// this sketch too, xenowing_assets.h and chroma_assets.h; Ironforge's
-// monsters are in ironforge.wad, on the partition next to the games; its
-// keys are held, a bit each in touchHeld, as in examples/matouch/Ironforge).
+// chromaquest.bin, ironforge.bin and valmora.bin (XenoWing's and
+// ChromaQuest's art are in this sketch too, xenowing_assets.h and
+// chroma_assets.h; Ironforge's monsters are in ironforge.wad and Valmora's
+// pictures and maps in valmora.wad, on the partition next to the games;
+// Ironforge's keys are held, a bit each in touchHeld, as in
+// examples/matouch/Ironforge). Valmora is compiled against the names of
+// SolarOS's script runtime (display, updateDisplay, keyHeld...), bound here
+// too, so the same valmora.bin runs in both.
 // Any other .bin
 // compiled with the same bindings (below) shows in the menu too.
 // To put them on the board's FFat partition, see the README's "GameLauncher:
@@ -42,6 +46,7 @@
 #include "FastLED.h"
 #include "keyboard.h"
 #include "script_executable.h"
+#include "asm_execute.h"
 #include "binding.h"
 // XenoWing's art: the game reads it through six bound pointers
 #include "xenowing_assets.h"
@@ -74,6 +79,9 @@ static volatile uint32_t keysHeld = 0;
 static volatile bool escapePressed = false;
 static volatile bool gameParked = false;
 static bool escapeInShow = false;   // Ironforge: Escape stops it in show16()
+// keyHeld(c): 1 while the key that readKey() gives as c is down (Valmora)
+static volatile uint8_t keyDown[128];
+static uint32_t stride = 800;
 
 void show16() {
   if (escapeInShow && escapePressed) {
@@ -85,6 +93,13 @@ void show16() {
   frame_buffer = (uint16_t *)lcd._bus_instance._frame_buffer;
   gameBuffer = frame_buffer + gameX;
   lcd._panel_instance.resetWriteBuffer();
+}
+
+void enableGraphicMode() {
+}
+
+int keyHeld(int c) {
+  return keyDown[c & 127];
 }
 
 void clearscreen() {
@@ -106,6 +121,13 @@ uint32_t scriptMillis() {
   return millis();
 }
 
+// as SolarOS's delay(): the task sleeps, at least one tick, so the other
+// tasks (the idle task, the keyboard) run
+void scriptDelay(uint32_t ms) {
+  TickType_t t = pdMS_TO_TICKS(ms);
+  vTaskDelay(t > 0 ? t : 1);
+}
+
 uint32_t scriptRand(uint32_t n) {
   return esp_random() % n;
 }
@@ -122,17 +144,22 @@ float scriptAtan2(float y, float x) {
   return atan2f(y, x);
 }
 
-// --- Ironforge's WAD, /ironforge.wad: read into PSRAM when the game first
-// starts, and kept (as in examples/matouch/Ironforge) ---
+// --- the game's WAD, /ironforge.wad or /valmora.wad: read into PSRAM when
+// the game starts, and kept until another game wants another one ---
 static uint8_t *wadData = NULL;
 static int wadLoaded = 0;
+static char wadPath[32] = "";
 
 static void loadWad(const char *path) {
-  if (wadData)
+  if (wadData && strcmp(path, wadPath) == 0)
     return;
+  free(wadData);
+  wadData = NULL;
+  wadLoaded = 0;
+  strlcpy(wadPath, path, sizeof(wadPath));
   File f = FFat.open(path, FILE_READ);
   if (!f) {
-    printf("no %s on the FFat partition: Ironforge uses its own monsters\n", path);
+    printf("no %s on the FFat partition\n", path);
     return;
   }
   size_t size = f.size();
@@ -220,10 +247,24 @@ static int keyBit(key_return k) {
   return -1;
 }
 
+// the letter readKey() gives for a key: arrows as Z Q S D
+static uint8_t keyLetter(key_return k) {
+  if (k.key_code == HID_KEY_UP)
+    return 'z';
+  if (k.key_code == HID_KEY_LEFT)
+    return 'q';
+  if (k.key_code == HID_KEY_DOWN)
+    return 's';
+  if (k.key_code == HID_KEY_RIGHT)
+    return 'd';
+  return tolower(k.key_char) & 127;
+}
+
 void print_char(key_return k) {
   int b = keyBit(k);
   if (b >= 0)
     keysHeld |= 1u << b;
+  keyDown[keyLetter(k)] = 1;
   if (k.key_code == HID_KEY_ESC) {
     escapePressed = true;
     pushKey(KEY_ESCAPE);
@@ -246,6 +287,7 @@ void release_char(key_return k) {
   int b = keyBit(k);
   if (b >= 0)
     keysHeld &= ~(1u << b);
+  keyDown[keyLetter(k)] = 0;
   uint8_t c = tolower(k.key_char);
   if (k.key_code == HID_KEY_UP)
     c = 'z';
@@ -447,6 +489,8 @@ static void startGame(int i) {
     gameX = 13;
     escapeInShow = true;
   }
+  if (strncasecmp(gameFile[i], "valmora", 7) == 0)
+    loadWad("/valmora.wad");
   gameBuffer = frame_buffer + gameX;
   while (popKey() != 0)
     ;
@@ -502,6 +546,15 @@ void setup() {
   bindVariable((char *)"int", (char *)"wadLoaded", NULL, (void *)&wadLoaded);
   bindFunction((char *)"int", (char *)"wadSprite", (char *)"char*,int,int", (void *)wadSprite);
   bindFunction((char *)"int", (char *)"wadFind", (char *)"char*", (void *)wadFind);
+  // Valmora: SolarOS's names for the same things
+  bindVariable((char *)"uint16_t *", (char *)"display", NULL, (void *)&gameBuffer);
+  bindVariable((char *)"uint32_t", (char *)"stride", NULL, (void *)&stride);
+  bindFunction((char *)"void", (char *)"updateDisplay", NULL, (void *)show16);
+  bindFunction((char *)"void", (char *)"enableGraphicMode", NULL, (void *)enableGraphicMode);
+  bindFunction((char *)"int", (char *)"keyHeld", (char *)"int", (void *)keyHeld);
+  bindFunction((char *)"void", (char *)"delay", (char *)"uint32_t", (void *)scriptDelay);
+  // a large game's code goes to PSRAM when no internal block is big enough
+  setScriptCodeMemory(SCRIPT_CODE_AUTO);
   // XenoWing's sprites and the five layers of its alien world (in flash)
   bindVariable((char *)"uint16_t *", (char *)"gfx", NULL, (void *)&gfxP);
   bindVariable((char *)"uint16_t *", (char *)"sky", NULL, (void *)&skyP);
