@@ -111,6 +111,21 @@ def unlz(blob):
     return bytes(out)
 
 
+def vivid(pal):
+    """Colours that pop: saturation up by half, a little brighter, the
+    darks lifted (a toy-bright look rather than a murky one)."""
+    import colorsys
+    out = []
+    for i in range(0, len(pal), 3):
+        r, g, b = (c / 255.0 for c in pal[i:i + 3])
+        h, l, s = colorsys.rgb_to_hls(r, g, b)
+        s = min(1.0, s * 1.55 + 0.08)
+        l = min(0.92, 0.1 + l * 1.02)
+        r, g, b = colorsys.hls_to_rgb(h, l, s)
+        out += [int(round(min(1, max(0, v)) * 255)) for v in (r, g, b)]
+    return out
+
+
 def palette_and_textures():
     imgs = [f().image() for _, f in textures.TEXTURES]
     sheet = Image.new('RGB', (32, 32 * len(imgs)))
@@ -120,6 +135,7 @@ def palette_and_textures():
     pal = q.getpalette()[:NTEXCOL * 3]
     while len(pal) < NTEXCOL * 3:
         pal += [0, 0, 0]
+    pal = vivid(pal)
     for _, c in textures.FLAT:
         pal += list(c)
     assert len(pal) == 256 * 3

@@ -537,12 +537,12 @@ TEXTURES = [
 
 # the characters' flat colours: they take the palette's last entries
 FLAT = [
-    ('FOX', rgb('#e8782a')), ('FOX_DARK', rgb('#a0481a')), ('CREAM', rgb('#f4e0c0')),
-    ('BRASS', rgb('#d8a840')), ('BRASS_DARK', rgb('#8a6420')), ('EYE', rgb('#1a1428')),
-    ('EYE_GLOW', rgb('#80f0ff')), ('FLAME', rgb('#ffd060')), ('FLAME_HOT', rgb('#fff8e0')),
-    ('GHOST', rgb('#c8e0ff')), ('GHOST_DARK', rgb('#6a8ac0')), ('BOMB', rgb('#2a2a34')),
-    ('BOMB_HI', rgb('#6a6a80')), ('FUSE_RED', rgb('#ff3a20')), ('ARMOUR', rgb('#9aa0b0')),
-    ('ARMOUR_DARK', rgb('#4a4e5c')), ('PLUME', rgb('#c02040')), ('BAT', rgb('#3a2a4a')),
-    ('SPIDER', rgb('#2a1a1a')), ('SPIDER_EYE', rgb('#ff2a2a')), ('HEART', rgb('#ff4a6a')),
-    ('KEY', rgb('#ffd040')), ('WHITE', rgb('#ffffff')), ('SHADOW', rgb('#08080c')),
+    ('FOX', rgb('#ff7a1a')), ('FOX_DARK', rgb('#d04a10')), ('CREAM', rgb('#fff2d8')),
+    ('BRASS', rgb('#ffc830')), ('BRASS_DARK', rgb('#c88a10')), ('EYE', rgb('#1a1030')),
+    ('EYE_GLOW', rgb('#60ffff')), ('FLAME', rgb('#ffd830')), ('FLAME_HOT', rgb('#fffbe0')),
+    ('GHOST', rgb('#d8f0ff')), ('GHOST_DARK', rgb('#70a8ff')), ('BOMB', rgb('#30305a')),
+    ('BOMB_HI', rgb('#8a8ab8')), ('FUSE_RED', rgb('#ff3010')), ('ARMOUR', rgb('#c0d0f0')),
+    ('ARMOUR_DARK', rgb('#5870a8')), ('PLUME', rgb('#ff2050')), ('BAT', rgb('#6a3aa0')),
+    ('SPIDER', rgb('#5a2a40')), ('SPIDER_EYE', rgb('#ff3030')), ('HEART', rgb('#ff3a70')),
+    ('KEY', rgb('#ffe020')), ('WHITE', rgb('#ffffff')), ('SHADOW', rgb('#100820')),
 ]

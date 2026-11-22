@@ -21,10 +21,10 @@ def courtyard():
     """1: The courtyard at dusk: a drawbridge over the moat, the gatehouse,
     a walled yard of grass and flagstones, stairs to the wall walk."""
     w = World('The Courtyard')
-    w.sky = ((14, 16, 52), (150, 80, 90))
-    w.fog = (60, 40, 70)
+    w.sky = ((30, 60, 200), (255, 140, 120))
+    w.fog = (150, 110, 190)
     w.fog_near, w.fog_far = 12.0, 30.0
-    w.ambient = 4.5
+    w.ambient = 7.0
     w.moon = (-0.35, 0.75, 0.55)
 
     # the approach: a flagstone path between grass banks
@@ -169,10 +169,10 @@ def staircase():
     suits of armour, stairs up to a gallery, a locked door, and a spiral
     stair round a column to the top of the tower."""
     w = World('The Grand Staircase')
-    w.sky = ((8, 8, 30), (40, 30, 60))
-    w.fog = (24, 16, 30)
+    w.sky = ((30, 20, 90), (120, 60, 140))
+    w.fog = (90, 50, 110)
     w.fog_near, w.fog_far = 14.0, 30.0
-    w.ambient = 3.5
+    w.ambient = 6.0
     w.stars = 0
 
     # the hall
@@ -247,10 +247,10 @@ def gallery():
     """3: The ghost gallery: a long hall of portraits and stained glass,
     its floor fallen in places; ghosts drift through the walls."""
     w = World('The Ghost Gallery')
-    w.sky = ((8, 10, 30), (30, 30, 70))
-    w.fog = (20, 22, 44)
+    w.sky = ((20, 30, 110), (80, 90, 200))
+    w.fog = (60, 70, 170)
     w.fog_near, w.fog_far = 10.0, 26.0
-    w.ambient = 3.0
+    w.ambient = 5.5
     w.stars = 0
     L = 96
     w.wall(-4, L, -4, 0, -6, 6, T['STONE_DARK'])
@@ -322,10 +322,10 @@ def rooftops():
     """4: The rooftops: slate ridges to run along, chimneys, towers, gaps
     over the dark yards, bats and bombs, the moon high up."""
     w = World('The Rooftops')
-    w.sky = ((6, 8, 34), (70, 50, 100))
-    w.fog = (40, 34, 70)
+    w.sky = ((20, 30, 140), (200, 110, 220))
+    w.fog = (120, 90, 200)
     w.fog_near, w.fog_far = 14.0, 30.0
-    w.ambient = 4.5
+    w.ambient = 7.0
     w.moon = (-0.4, 0.8, 0.45)
     w.boxes.append((-60, -30, -20, 60, -6, 160, KILL))
     blocks = [(-3, 0, 3, 16, 0), (-3, 19, 3, 30, 0.5), (-3, 33, 3, 44, 1.5), (-3, 48, 3, 56, 1.0),
@@ -367,10 +367,10 @@ def moonlets():
     """5: The moonlets: little round moons floating over the keep; a launch
     lantern throws Wick from one to the next, gravity pulls him round."""
     w = World('The Moonlets')
-    w.sky = ((4, 4, 24), (40, 30, 90))
-    w.fog = (30, 26, 70)
+    w.sky = ((20, 10, 90), (120, 60, 220))
+    w.fog = (90, 60, 200)
     w.fog_near, w.fog_far = 16.0, 30.0
-    w.ambient = 5.0
+    w.ambient = 7.5
     # the starting platform of star-stone
     w.box(-3, -1, -3, 3, 0, 5, T['STARSTONE'], T['STARSTONE'])
     w.thing('START', 0, 0, -1)
@@ -406,10 +406,10 @@ def belltower():
     """6: The bell tower: a round chamber open to the sky, the great bronze
     bell, and the Bell-Wraith wound round it."""
     w = World('The Bell Tower')
-    w.sky = ((10, 4, 24), (80, 30, 60))
-    w.fog = (40, 20, 40)
+    w.sky = ((60, 10, 90), (255, 90, 120))
+    w.fog = (160, 60, 120)
     w.fog_near, w.fog_far = 14.0, 30.0
-    w.ambient = 4.0
+    w.ambient = 6.5
     cx, cz = 0, 12
     w.floor(-11, 0, 11, 24, 0, T['FLAGS'])
     w.cylinder(cx, cz, 11, 0, 7, 24, T['STONE'], collide=False, inside=True)

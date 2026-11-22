@@ -698,15 +698,16 @@ void loadTextures()
 }
 
 // every palette colour at 16 light levels (12 is the colour itself, 15 a
-// little brighter) and 8 fog levels (7: the fog's colour)
+// little brighter) and 8 fog levels (7: the fog's colour). The light
+// rises fast from dark (2l / (l + 12)): shadows stay coloured, not murky.
 void makeShades()
 {
    for (int f = 0; f < 8; f++)
    {
-      int fogK = f * 256 / 7;
+      int fogK = f * 256 / 9;
       for (int l = 0; l < 16; l++)
       {
-         int lightK = l * 256 / 12;
+         int lightK = (2 * l * 256) / (l + 12);
          int base = (f * 16 + l) * 256;
          for (int c = 0; c < 256; c++)
          {
@@ -1024,6 +1025,15 @@ int ghostly;
 int trisDrawn;
 int pixelsDrawn;
 
+float fclampf(float v, float lo, float hi)
+{
+   if (v < lo)
+      return lo;
+   if (v > hi)
+      return hi;
+   return v;
+}
+
 void drawTri(int a, int b, int c)
 {
    float x0 = px[a];
@@ -1049,9 +1059,20 @@ void drawTri(int a, int b, int c)
    float dvdy = (dv2 * (x1 - x0) - dv1 * (x2 - x0)) * inv;
    float dwdx = (dw1 * (y2 - y0) - dw2 * (y1 - y0)) * inv;
    float dwdy = (dw2 * (x1 - x0) - dw1 * (x2 - x0)) * inv;
-   float u0 = pu[a];
-   float v0 = pv[a];
-   float w0 = pw[a];
+   // u, v and w as planes over the screen, in integers: the value at
+   // (x, y) is C + DX * x + DY * y (u and v in 4096ths of a texel, w in
+   // 2^-20); each row starts from them, no float per row
+   float cu = pu[a] - dudx * x0 - dudy * y0;
+   float cv = pv[a] - dvdx * x0 - dvdy * y0;
+   float cw = pw[a] - dwdx * x0 - dwdy * y0;
+   int CU = (int)(cu * 4096.0);
+   int CV = (int)(cv * 4096.0);
+   int CW = (int)(cw * 1048576.0);
+   int DUY = (int)(dudy * 4096.0);
+   int DVY = (int)(dvdy * 4096.0);
+   int DUX = (int)(dudx * 4096.0);
+   int DVX = (int)(dvdx * 4096.0);
+   int DWY = (int)(dwdy * 1048576.0);
    // top, middle, bottom
    int t = a;
    int m = b;
@@ -1082,19 +1103,39 @@ void drawTri(int a, int b, int c)
    float xt = px[t];
    float xm = px[m];
    float xb = px[btm];
-   float sLong = (xb - xt) / (yb - yt);
-   float sTop = 0;
-   if (ym - yt > 0.001)
-      sTop = (xm - xt) / (ym - yt);
-   float sBot = 0;
-   if (yb - ym > 0.001)
-      sBot = (xb - xm) / (yb - ym);
    int ys = (int)(yt + 0.9999);
    int ye = (int)(yb + 0.9999);
+   int yMid = (int)(ym + 0.9999);
    if (yt < 0)
       ys = 0;
    if (ye > SH)
       ye = SH;
+   if (ys >= ye)
+      return;
+   // the edges in 16.16, stepped a row at a time (slopes kept in range)
+   float sLong = (xb - xt) / (yb - yt);
+   sLong = fclampf(sLong, -8000.0, 8000.0);
+   float sTop = 0;
+   if (ym - yt > 0.001)
+      sTop = fclampf((xm - xt) / (ym - yt), -8000.0, 8000.0);
+   float sBot = 0;
+   if (yb - ym > 0.001)
+      sBot = fclampf((xb - xm) / (yb - ym), -8000.0, 8000.0);
+   float fys = ys;
+   int xA = (int)((xt + (fys - yt) * sLong) * 65536.0);
+   int dA = (int)(sLong * 65536.0);
+   int xB;
+   int dB;
+   if (ys < yMid)
+   {
+      xB = (int)((xt + (fys - yt) * sTop) * 65536.0);
+      dB = (int)(sTop * 65536.0);
+   }
+   else
+   {
+      xB = (int)((xm + (fys - ym) * sBot) * 65536.0);
+      dB = (int)(sBot * 65536.0);
+   }
    float ru = 0.5;
    if (dudx < 0)
       ru = -0.5;
@@ -1107,34 +1148,34 @@ void drawTri(int a, int b, int c)
    int tb = texBase;
    int sb = shadeBase;
    uint16_t flat = shade[sb + flatCol];
+   int duv = (dv << 16) + (du & 65535);
    trisDrawn++;
    for (int y = ys; y < ye; y++)
    {
-      float fy = y;
-      float xa = xt + (fy - yt) * sLong;
-      float xc;
-      if (fy < ym)
-         xc = xt + (fy - yt) * sTop;
-      else
-         xc = xm + (fy - ym) * sBot;
-      if (xc < xa)
+      if (y == yMid)
       {
-         float s = xa;
-         xa = xc;
-         xc = s;
+         float fy2 = y;
+         xB = (int)((xm + (fy2 - ym) * sBot) * 65536.0);
+         dB = (int)(sBot * 65536.0);
       }
-      int xs = (int)(xa + 0.9999);
-      int xe = (int)(xc + 0.9999);
-      if (xa < 0)
+      int lo = xA;
+      int hi = xB;
+      if (hi < lo)
+      {
+         lo = xB;
+         hi = xA;
+      }
+      xA = xA + dA;
+      xB = xB + dB;
+      int xs = (lo + 65535) >> 16;
+      int xe = (hi + 65535) >> 16;
+      if (xs < 0)
          xs = 0;
       if (xe > SW)
          xe = SW;
       if (xs >= xe)
          continue;
-      float fx = xs;
-      float ex = fx - x0;
-      float ey = fy - y0;
-      int w = (int)((w0 + dwdx * ex + dwdy * ey) * 1048576.0);
+      int w = CW + DWY * y + dw * xs;
       // one index across the depth buffer; the frame's is `i + dOff`
       int i = y * SW + xs;
       int iEnd = y * SW + xe;
@@ -1144,10 +1185,9 @@ void drawTri(int a, int b, int c)
       {
          // u and v packed in one int, 10.6 fixed point each, v on top:
          // a carry between them is a 64th of a texel, never seen
-         int u = (int)((u0 + dudx * ex + dudy * ey) * 64.0);
-         int v = (int)((v0 + dvdx * ex + dvdy * ey) * 64.0);
+         int u = (CU + DUY * y + DUX * xs) >> 6;
+         int v = (CV + DVY * y + DVX * xs) >> 6;
          int uv = (v << 16) + (u & 65535);
-         int duv = (dv << 16) + (du & 65535);
          if (ghostly == 0)
          {
             while (i < iEnd)
@@ -1472,14 +1512,21 @@ void makeStars()
    }
 }
 
+// the sky's colour a row, and the depth buffer cleared, in one pass
 void drawSky()
 {
+   int i = 0;
    for (int y = 0; y < SH; y++)
    {
       uint16_t c = skyRow[y];
-      int o = orgOff + y * stride;
-      for (int x = 0; x < SW; x++)
-         display[o + x] = c;
+      int dOff = orgOff + y * stride - y * SW;
+      int iEnd = i + SW;
+      while (i < iEnd)
+      {
+         display[i + dOff] = c;
+         zb[i] = 0;
+         i++;
+      }
    }
    if (starsOn == 0)
       return;
@@ -1916,6 +1963,27 @@ void ballFace(int a, int b, int c, int d, int colour)
    bwy[3] = swy[d];
    bwz[3] = swz[d];
    modelFace(0, 1, 2, 3, colour);
+}
+
+// a small round part (6 corners round, a top and a bottom: 12 faces), for
+// hands, feet, ears, the tail: round without costing a full ball
+void pebble(ffloat x, ffloat y, ffloat z, ffloat rx, ffloat ry, ffloat rz, int colour)
+{
+   ballPoint(0, x, y + ry, z);
+   for (int k = 0; k < 6; k++)
+   {
+      int a = k * 171;
+      ballPoint(1 + k, x + isin(a) * rx, y, z + icos(a) * rz);
+   }
+   ballPoint(7, x, y - ry, z);
+   for (int k = 0; k < 6; k++)
+   {
+      int k2 = k + 1;
+      if (k2 == 6)
+         k2 = 0;
+      ballFace(0, 1 + k, 1 + k2, 1 + k2, colour);
+      ballFace(1 + k, 7, 7, 1 + k2, colour);
+   }
 }
 
 void ball(ffloat x, ffloat y, ffloat z, ffloat rx, ffloat ry, ffloat rz, int colour)
@@ -3989,55 +4057,57 @@ void drawWick()
       ffloat nfz = dZ * c + aZ * s;
       modelOn(hx, hy, hz, gux, guy, guz, nfx, nfy, nfz);
    }
-   modelLight = 2;
-   int stride2 = 0;
-   if (hGround == 1)
-      stride2 = isin(hRun) * 300;
-   int legA = (int)(stride2);
-   int legB = -legA;
+   modelLight = 3;
+   ffloat sw = isin(hRun);
    if (hGround == 0)
-   {
-      legA = 120;
-      legB = -60;
-   }
-   // legs, pivoting at the hips
-   part(-0.12, 0.13, 0, 0.065, 0.13, 0.07, legA, 0.26, 0, C_FOX_DARK);
-   part(0.12, 0.13, 0, 0.065, 0.13, 0.07, legB, 0.26, 0, C_FOX_DARK);
-   part(-0.12, 0.02, 0.05, 0.07, 0.03, 0.1, legA, 0.26, 0, C_BRASS_DARK);
-   part(0.12, 0.02, 0.05, 0.07, 0.03, 0.1, legB, 0.26, 0, C_BRASS_DARK);
-   // the body, and the candle's window on the chest
-   int bob = 0;
-   if (hGround == 1)
-      bob = (hRun >> 7) & 1;
-   ffloat by = 0.45;
-   if (bob == 1)
-      by = 0.47;
-   ball(0, by, 0, 0.24, 0.24, 0.22, C_FOX);
-   part(0, by + 0.02, 0.2, 0.09, 0.11, 0.03, 0, 0, 0, C_BRASS);
-   part(0, by + 0.02, 0.225, 0.06, 0.08, 0.01, 0, 0, 0, C_FLAME);
-   // arms
-   int arm = -legA / 2;
-   part(-0.27, by + 0.02, 0, 0.05, 0.12, 0.05, arm, by + 0.1, 0, C_FOX_DARK);
-   part(0.27, by + 0.02, 0, 0.05, 0.12, 0.05, -arm, by + 0.1, 0, C_FOX_DARK);
-   // the head: cream muzzle, black nose, eyes, ears
-   ffloat hyh = by + 0.38;
-   ball(0, hyh, 0.02, 0.2, 0.18, 0.19, C_FOX);
-   ball(0, hyh - 0.05, 0.17, 0.1, 0.08, 0.1, C_CREAM);
-   part(0, hyh - 0.02, 0.27, 0.03, 0.025, 0.02, 0, 0, 0, C_EYE);
-   part(-0.08, hyh + 0.04, 0.165, 0.025, 0.035, 0.01, 0, 0, 0, C_EYE);
-   part(0.08, hyh + 0.04, 0.165, 0.025, 0.035, 0.01, 0, 0, 0, C_EYE);
-   part(-0.11, hyh + 0.2, -0.02, 0.05, 0.09, 0.03, 0, 0, 0, C_FOX_DARK);
-   part(0.11, hyh + 0.2, -0.02, 0.05, 0.09, 0.03, 0, 0, 0, C_FOX_DARK);
-   part(-0.11, hyh + 0.19, 0.005, 0.03, 0.06, 0.01, 0, 0, 0, C_CREAM);
-   part(0.11, hyh + 0.19, 0.005, 0.03, 0.06, 0.01, 0, 0, 0, C_CREAM);
-   // the tail: three brass rings curling up behind
-   int wag = isin(frameNo * 20) * 60;
+      sw = 0;
+   // the body bobs as he runs
+   ffloat by = 0.4;
+   if (hGround == 1 && ((hRun >> 7) & 1) == 1)
+      by = 0.42;
+   // feet: round paws that swing forward and back
+   ffloat fa = sw * 0.12;
+   ffloat lift = 0;
+   if (hGround == 0)
+      lift = 0.06;
+   pebble(-0.12, 0.06 + lift + fabsx(sw) * 0.04, fa, 0.08, 0.06, 0.11, C_FOX_DARK);
+   pebble(0.12, 0.06 + lift + fabsx(sw) * 0.04, -fa, 0.08, 0.06, 0.11, C_FOX_DARK);
+   // a round belly, cream in front, the candle glowing in it
+   ball(0, by, 0, 0.22, 0.21, 0.2, C_FOX);
+   pebble(0, by - 0.02, 0.12, 0.13, 0.14, 0.1, C_CREAM);
+   modelLight = 7;
+   pebble(0, by + 0.02, 0.2, 0.05, 0.065, 0.03, C_FLAME);
+   modelLight = 3;
+   // round hands swinging opposite the feet, up in a jump
+   ffloat hand = by - 0.02;
+   if (hGround == 0)
+      hand = by + 0.1;
+   pebble(-0.25, hand, -fa, 0.065, 0.065, 0.065, C_FOX_DARK);
+   pebble(0.25, hand, fa, 0.065, 0.065, 0.065, C_FOX_DARK);
+   // a big round head, a cream muzzle, a dark nose, round eyes
+   ffloat hyh = by + 0.33;
+   ball(0, hyh, 0.02, 0.21, 0.19, 0.2, C_FOX);
+   pebble(0, hyh - 0.06, 0.15, 0.11, 0.08, 0.09, C_CREAM);
+   pebble(0, hyh - 0.03, 0.245, 0.035, 0.03, 0.025, C_EYE);
+   pebble(-0.085, hyh + 0.04, 0.16, 0.035, 0.045, 0.02, C_EYE);
+   pebble(0.085, hyh + 0.04, 0.16, 0.035, 0.045, 0.02, C_EYE);
+   modelLight = 8;
+   pebble(-0.075, hyh + 0.055, 0.175, 0.012, 0.014, 0.008, C_WHITE);
+   pebble(0.095, hyh + 0.055, 0.175, 0.012, 0.014, 0.008, C_WHITE);
+   modelLight = 3;
+   // pointed but rounded ears, cream inside
+   pebble(-0.12, hyh + 0.2, -0.01, 0.06, 0.1, 0.035, C_FOX_DARK);
+   pebble(0.12, hyh + 0.2, -0.01, 0.06, 0.1, 0.035, C_FOX_DARK);
+   pebble(-0.12, hyh + 0.19, 0.015, 0.035, 0.065, 0.015, C_CREAM);
+   pebble(0.12, hyh + 0.19, 0.015, 0.035, 0.065, 0.015, C_CREAM);
+   // a fluffy tail: balls swaying behind, a cream tip
+   ffloat wag = isin(frameNo * 20) * 0.06;
    if (hSpin > 0)
       wag = 0;
-   part(0, by - 0.05, -0.28, 0.05, 0.05, 0.08, 80 + wag, by - 0.05, -0.2, C_BRASS);
-   part(0, by + 0.05, -0.38, 0.06, 0.06, 0.07, 160 + wag, by - 0.05, -0.2, C_BRASS_DARK);
-   part(0, by + 0.18, -0.42, 0.07, 0.07, 0.06, 230 + wag, by - 0.05, -0.2, C_BRASS);
-   part(0, by + 0.3, -0.42, 0.05, 0.05, 0.05, 0, 0, 0, C_CREAM);
+   pebble(wag * 0.5, by - 0.04, -0.24, 0.08, 0.08, 0.09, C_FOX);
+   pebble(wag, by + 0.04, -0.33, 0.09, 0.09, 0.09, C_FOX);
+   pebble(wag * 1.5, by + 0.15, -0.38, 0.09, 0.09, 0.08, C_FOX);
+   pebble(wag * 2, by + 0.26, -0.38, 0.07, 0.07, 0.07, C_CREAM);
 }
 
 // a dark blob on the ground under Wick, so a jump can be judged
@@ -4595,8 +4665,7 @@ void renderFrame()
    uint32_t t0 = millis();
    drawSky();
    uint32_t t1 = millis();
-   clearDepth();
-   uint32_t t2 = millis();
+   uint32_t t2 = t1;
    drawWorld();
    uint32_t t3 = millis();
    drawShadow();
@@ -4703,7 +4772,6 @@ int title()
       heroZ = 0;
       frameNo++;
       drawSky();
-      clearDepth();
       drawWorld();
       drawThings();
       hyaw = (a + 512) & 1023;
