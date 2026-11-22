@@ -167,8 +167,9 @@ struct Binary
     asm_error_message_struct error;
     uint8_t *binary_data = NULL;
     uint8_t *function_data = NULL;
-    uint16_t instruction_size = 0;
-    uint16_t tmp_instruction_size = 0;
+    // 32 bits: a large script's code passes 64KB
+    uint32_t instruction_size = 0;
+    uint32_t tmp_instruction_size = 0;
     uint16_t function_size = 0;
     // 32 bits: a script's globals can pass 64KB (`uint8_t copy[480, 800]`
     // for an 800x480 screen is 384000 bytes).

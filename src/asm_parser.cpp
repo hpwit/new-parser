@@ -18,11 +18,13 @@ static uint8_t *binary_header = NULL;
 static uint32_t _address_instr = 0;
 static uint32_t _address_data = 0;
 static uint32_t _tmp_data_address = 0;
-static uint16_t _instr_size = 0;
-static uint16_t tmp_instr_size = 0;
+// 32 bits: a large script's code passes 64KB (the sizes wrapped round,
+// and the buffer below came out too small)
+static uint32_t _instr_size = 0;
+static uint32_t tmp_instr_size = 0;
 static uint32_t _data_size = 0; // globals can pass 64KB
-static uint16_t tmp_data_size = 0;
-static uint16_t binary_header_size = 0;
+static uint32_t tmp_data_size = 0;
+static uint32_t binary_header_size = 0;
 static parsedLines _asm_parsed;
 
 // RAII wrapper around a space/comma split -- see optimize.cpp for the same
@@ -1155,16 +1157,16 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
             if (strchr(rest, ' ') != NULL)
             {
                 long n = strtol(rest, NULL, 10);
-                tmp_data_size += (uint16_t)((n / 4) * 4 + 4);
+                tmp_data_size += (uint32_t)((n / 4) * 4 + 4);
             }
         }
     }
 
-    _instr_size = (uint16_t)((nb_align_label + 1) * ALIGN_INSTR +
+    _instr_size = (uint32_t)((nb_align_label + 1) * ALIGN_INSTR +
                               (_content->size() + _footer->size() - nb_not_aligned_label) * 3 +
                               header_reservations * 4 + nb_callExt * 3 + _loopHeads.size() * 2);
     _instr_size = (_instr_size / 8) * 8 + 8;
-    tmp_instr_size = (uint16_t)(_instr_size + (tmp_data_size / 4) * 4 + 4);
+    tmp_instr_size = (uint32_t)(_instr_size + (tmp_data_size / 4) * 4 + 4);
 
     tmp_exec = (uint8_t *)malloc(tmp_instr_size);
     memset(tmp_exec, 0, tmp_instr_size);

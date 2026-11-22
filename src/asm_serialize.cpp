@@ -13,22 +13,32 @@
 // binaries saved before keep loading.
 #define DATA_SIZE_ESCAPE 0xFFFF
 
+// The code sizes: 2 bytes each as they always were, or, for code of 0xFFFF
+// bytes or more, both 0xFFFF and the two sizes on 4 bytes each after the
+// data size. The sizes are multiples of 8, so a binary saved before never
+// has both at 0xFFFF and keeps loading.
+#define CODE_SIZE_ESCAPE 0xFFFF
+
 uint8_t *serializeBinary(Binary *bin, uint32_t *outSize)
 {
     if (bin->error.error || bin->binary_data == NULL || bin->function_data == NULL)
         return NULL;
 
     bool wideData = bin->data_size >= DATA_SIZE_ESCAPE;
-    uint32_t total = 4 + 2 * 4 + (wideData ? 4 : 0) + (uint32_t)bin->tmp_instruction_size + (uint32_t)bin->function_size;
+    bool wideCode = bin->tmp_instruction_size >= CODE_SIZE_ESCAPE;
+    uint32_t total = 4 + 2 * 4 + (wideData ? 4 : 0) + (wideCode ? 8 : 0) + (uint32_t)bin->tmp_instruction_size +
+                     (uint32_t)bin->function_size;
     uint8_t *buf = (uint8_t *)malloc(total);
     uint8_t *p = buf;
     uint32_t magic = SCRIPT_BINARY_MAGIC;
 
     memcpy(p, &magic, 4);
     p += 4;
-    memcpy(p, &bin->instruction_size, 2);
+    uint16_t codeNarrow = wideCode ? CODE_SIZE_ESCAPE : (uint16_t)bin->instruction_size;
+    memcpy(p, &codeNarrow, 2);
     p += 2;
-    memcpy(p, &bin->tmp_instruction_size, 2);
+    codeNarrow = wideCode ? CODE_SIZE_ESCAPE : (uint16_t)bin->tmp_instruction_size;
+    memcpy(p, &codeNarrow, 2);
     p += 2;
     memcpy(p, &bin->function_size, 2);
     p += 2;
@@ -45,6 +55,13 @@ uint8_t *serializeBinary(Binary *bin, uint32_t *outSize)
         uint16_t narrow = (uint16_t)bin->data_size;
         memcpy(p, &narrow, 2);
         p += 2;
+    }
+    if (wideCode)
+    {
+        memcpy(p, &bin->instruction_size, 4);
+        p += 4;
+        memcpy(p, &bin->tmp_instruction_size, 4);
+        p += 4;
     }
     memcpy(p, bin->binary_data, bin->tmp_instruction_size);
     p += bin->tmp_instruction_size;
@@ -83,10 +100,13 @@ Binary deserializeBinary(const uint8_t *buf, uint32_t size)
         return bin;
     }
 
-    memcpy(&bin.instruction_size, p, 2);
+    uint16_t code1, code2;
+    memcpy(&code1, p, 2);
     p += 2;
-    memcpy(&bin.tmp_instruction_size, p, 2);
+    memcpy(&code2, p, 2);
     p += 2;
+    bin.instruction_size = code1;
+    bin.tmp_instruction_size = code2;
     memcpy(&bin.function_size, p, 2);
     p += 2;
     uint16_t narrow;
@@ -103,6 +123,20 @@ Binary deserializeBinary(const uint8_t *buf, uint32_t size)
             return bin;
         }
         memcpy(&bin.data_size, p, 4);
+        p += 4;
+    }
+    if (code1 == CODE_SIZE_ESCAPE && code2 == CODE_SIZE_ESCAPE)
+    {
+        headerSize += 8;
+        if (size < headerSize)
+        {
+            bin.error.error = 1;
+            bin.error.error_message = (char *)"serialized script binary is truncated";
+            return bin;
+        }
+        memcpy(&bin.instruction_size, p, 4);
+        p += 4;
+        memcpy(&bin.tmp_instruction_size, p, 4);
         p += 4;
     }
 
@@ -147,8 +181,11 @@ void readBinaryHeader(ScriptReadFunction read, void *ctx, Binary *bin)
         bin->error.error_message = (char *)"serialized script binary has the wrong format";
         return;
     }
-    memcpy(&bin->instruction_size, head + 4, 2);
-    memcpy(&bin->tmp_instruction_size, head + 6, 2);
+    uint16_t code1, code2;
+    memcpy(&code1, head + 4, 2);
+    memcpy(&code2, head + 6, 2);
+    bin->instruction_size = code1;
+    bin->tmp_instruction_size = code2;
     memcpy(&bin->function_size, head + 8, 2);
     uint16_t narrow;
     memcpy(&narrow, head + 10, 2);
@@ -163,6 +200,18 @@ void readBinaryHeader(ScriptReadFunction read, void *ctx, Binary *bin)
             return;
         }
         memcpy(&bin->data_size, wide, 4);
+    }
+    if (code1 == CODE_SIZE_ESCAPE && code2 == CODE_SIZE_ESCAPE)
+    {
+        uint8_t wide[8];
+        if (read(ctx, wide, 8) != 8)
+        {
+            bin->error.error = 1;
+            bin->error.error_message = (char *)"serialized script binary is truncated";
+            return;
+        }
+        memcpy(&bin->instruction_size, wide, 4);
+        memcpy(&bin->tmp_instruction_size, wide + 4, 4);
     }
     if (bin->tmp_instruction_size < bin->instruction_size)
     {

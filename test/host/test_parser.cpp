@@ -6,6 +6,7 @@
 // take down the rest of the suite -- it's reported as CRASH instead.
 //
 // Build/run with `make run` in this directory.
+#include <string>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -2764,6 +2765,94 @@ static void runLargeGlobalsTest()
     }
 }
 
+// Code past 64KB: the assembler's sizes were 16 bits, so a large script's
+// code size wrapped round, its buffer came out too small and the
+// assembler wrote past it (a crash, or a label "not found"). The sizes
+// are 32 bits now; a .bin of such code keeps them after an escape, and
+// a .bin read back gives the same code.
+static void runLargeCodeTest()
+{
+    const char *name = "code past 64KB: 32-bit code sizes, kept by serialize/deserialize and the stream reader";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    bool ok = true;
+    // many functions, each a few hundred bytes of code
+    std::string script = "int acc;\n";
+    for (int f = 0; f < 200; f++)
+    {
+        script += "int work" + std::to_string(f) + "(int a, int b)\n{\n   int s = 0;\n";
+        for (int k = 0; k < 24; k++)
+            script += "   s = s + a * " + std::to_string(k + 1) + " - b / " + std::to_string(k + 2) + ";\n";
+        script += "   return s;\n}\n";
+    }
+    script += "int main()\n{\n";
+    for (int f = 0; f < 200; f++)
+        script += "   acc = acc + work" + std::to_string(f) + "(" + std::to_string(f) + ", 3);\n";
+    script += "   return acc;\n}\n";
+    if (!compileForTest(script.c_str()))
+        ok = false;
+    else
+    {
+        Binary bin = createBinary(&footer, &header, &content, false);
+        if (bin.error.error || bin.instruction_size <= 0xFFFF)
+        {
+            printf("       error %d, instruction_size %u (expected past 64KB)\n", bin.error.error,
+                   (unsigned)bin.instruction_size);
+            ok = false;
+        }
+        else
+        {
+            uint32_t size = 0;
+            uint8_t *buf = serializeBinary(&bin, &size);
+            Binary back = deserializeBinary(buf, size);
+            if (back.error.error || back.instruction_size != bin.instruction_size ||
+                back.tmp_instruction_size != bin.tmp_instruction_size || back.function_size != bin.function_size ||
+                memcmp(back.binary_data, bin.binary_data, bin.tmp_instruction_size) != 0)
+            {
+                printf("       round trip: instruction_size %u -> %u\n", (unsigned)bin.instruction_size,
+                       (unsigned)back.instruction_size);
+                ok = false;
+            }
+            // the header as the streaming loader reads it
+            struct Cursor
+            {
+                const uint8_t *p;
+                uint32_t left;
+            } cur = {buf, size};
+            Binary head;
+            readBinaryHeader(
+                [](void *ctx, uint8_t *dst, size_t len) -> size_t {
+                    Cursor *c = (Cursor *)ctx;
+                    size_t n = len < c->left ? len : c->left;
+                    memcpy(dst, c->p, n);
+                    c->p += n;
+                    c->left -= (uint32_t)n;
+                    return n;
+                },
+                &cur, &head);
+            if (head.error.error || head.instruction_size != bin.instruction_size ||
+                head.tmp_instruction_size != bin.tmp_instruction_size)
+            {
+                printf("       stream header: instruction_size %u\n", (unsigned)head.instruction_size);
+                ok = false;
+            }
+            free(buf);
+            freeBinary(&back);
+        }
+        freeBinary(&bin);
+    }
+    if (ok)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 // Indexing a pointer variable loads the pointer first: `led16[i]` with
 // `external uint16_t *led16;` (bound to the address of a host pointer),
 // or a global `uint16_t *gp;`. An array (`uint16_t arr[8];`) is indexed
@@ -3942,6 +4031,7 @@ int main()
     runSafeModeTest();
     runCompileErrorReportTest();
     runLargeGlobalsTest();
+    runLargeCodeTest();
     runPointerIndexTest();
     runUnsizedArrayTest();
     runPointerDimensionsTest();

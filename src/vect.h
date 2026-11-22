@@ -44,13 +44,16 @@ public:
 
 private:
     T *point=NULL;
-     uint16_t _size=0;
+    // 32 bits: a large script's lines of assembly pass 65535 (16 bits
+    // wrapped the capacity round to 0 at 32768 and the next insert wrote
+    // past the buffer)
+    uint32_t _size=0;
     uint16_t size_item;
     // How many elements `point` actually has room for -- may be larger
     // than _size (see push_back()'s amortized-doubling growth below).
     // Distinct from _size, which is "how many are actually live" --
     // get()/getptr()/etc. all bounds-check against _size, never this.
-    uint16_t _capacity=0;
+    uint32_t _capacity=0;
     void _growIfFull();
 };
 
@@ -110,7 +113,7 @@ T *vect<T>::push_back(T asset)
             return NULL;
         }
         point = point2;
-        _capacity = (uint16_t)new_capacity;
+        _capacity = (uint32_t)new_capacity;
     }
     memcpy(point + _size, &asset, size_item);
     _size++;
@@ -206,7 +209,7 @@ void vect<T>::_growIfFull()
     {
         int new_capacity = (_capacity == 0) ? 1 : (int)_capacity * 2;
         point = (T *)p_realloc(point, new_capacity * size_item);
-        _capacity = (uint16_t)new_capacity;
+        _capacity = (uint32_t)new_capacity;
     }
 }
 

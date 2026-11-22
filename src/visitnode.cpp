@@ -1044,23 +1044,48 @@ void _visitoperatorNode(NodeToken *nd)
     }
     break;
     case TokenShiftLeft:
-        // bufferText->addAfter("movi a8,32");
-        // bufferText->addAfter(string_format("sub a%d,a8,a%d",register_numr.get(),register_numr.get()).c_str());
-        bufferText->addAfter(string_format(ssl, register_numr.get()));
-        bufferText->addAfter(string_format(sll, register_numl.get(), register_numl.get()));
-        break;
     case TokenShiftRight:
-        // bufferText->addAfter("movi a8,32");
-        // bufferText->addAfter(string_format("sub a%d,a8,a%d",register_numr.get(),register_numr.get()).c_str());
-        bufferText->addAfter(string_format(wsr, register_numr.get(), 3));
+    {
+        bool right = nd->type == TokenShiftRight;
         // Signed unless the value shifted is uint32_t, as in C: `-54 >> 1`
         // is -27. It was always unsigned (srl), which gave 2147483621. A
         // uint32_t anywhere in the left operand makes it unsigned, as C's
         // conversions do for (u + 1) >> 8; uint8_t and uint16_t values are
         // never negative, so only int changes.
-        bufferText->addAfter(string_format((l == __uint32_t__ || containsValueOfType(nd->getChildPtr(0), __uint32_t__)) ? srl : sra,
-                                           register_numl.get(), register_numl.get()));
-        break;
+        bool logical = right && (l == __uint32_t__ || containsValueOfType(nd->getChildPtr(0), __uint32_t__));
+        // A constant amount (`w >> 7`, `i << 5`): its movi just before is
+        // replaced by the shift's immediate form -- one instruction instead
+        // of movi, wsr/ssl and the shift (these are the inner loops of
+        // anything drawn pixel by pixel). srli only takes 0..15.
+        char *_last = bufferText->current();
+        char *tocmp = string_format("movi a%d,", register_numr.get());
+        int k = -1;
+        if (strncmp(_last, tocmp, strlen(tocmp)) == 0)
+        {
+            int a;
+            if (sscanf(_last, "movi a%d,%d", &a, &k) != 2 || k < 0 || k > 31 || (logical && k > 15))
+                k = -1;
+        }
+        free(tocmp);
+        if (k >= 0)
+        {
+            bufferText->blankCurrent();
+            if (k > 0)
+                bufferText->addAfter(string_format("%s a%d,a%d,%d", right ? (logical ? "srli" : "srai") : "slli",
+                                                   register_numl.get(), register_numl.get(), k));
+        }
+        else if (right)
+        {
+            bufferText->addAfter(string_format(wsr, register_numr.get(), 3));
+            bufferText->addAfter(string_format(logical ? srl : sra, register_numl.get(), register_numl.get()));
+        }
+        else
+        {
+            bufferText->addAfter(string_format(ssl, register_numr.get()));
+            bufferText->addAfter(string_format(sll, register_numl.get(), register_numl.get()));
+        }
+    }
+    break;
     case TokenSubstraction:
     {
         if (ff)
