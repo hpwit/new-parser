@@ -16,6 +16,8 @@ The games written with ESPLiveScript 2 to show what its compiler can do with who
 * [On the Guition ESP32-4848S040: the games on a touch screen](#on-the-guition-esp32-4848s040-the-games-on-a-touch-screen)
 * [Ironforge: a shooter with mid-90s technology](#ironforge-a-shooter-with-mid-90s-technology)
 * [Valmora: an adventure in the style of the early role-playing games](#valmora-an-adventure-in-the-style-of-the-early-role-playing-games)
+* [Lumenfall: a platform game with parallax scrolling](#lumenfall-a-platform-game-with-parallax-scrolling)
+* [Wickwire: a 3D platform game, rendered by the script](#wickwire-a-3d-platform-game-rendered-by-the-script)
 
 ## On the ESP32-S3-Touch-LCD-7
 
@@ -233,7 +235,7 @@ Writing it found and fixed two compiler issues: a parse error inside nested bloc
 
 - **Keys**: Z/S or the arrows to choose, Space or Enter to play, 1-9 to play a game at once; in a game, Escape comes back to the menu. The arrows arrive in the games as Z Q S D.
 - **Bindings**: the launcher binds the names the games use (`led16`, `width`, `height`, `hsv2`, `show16`, `setPixelsize`, `millis`, `rand`, `readKey`, XenoWing's art: `gfx`, `sky`, `farRidge`, `forest`, `nearRidge`, `frontPlants`, from a copy of `xenowing_assets.h` in the launcher, and ChromaQuest's: `chromaGfx`, `worldColor`, `worldLum`, from `chroma_assets.h`); Ironforge's: `touchHeld`, `sin`, `hypot`, `atan2`, `wad`, `wadLoaded`, `wadSprite`, `wadFind`; Valmora's, the names of SolarOS's script runtime, so that one `valmora.bin` runs in both: `display` (the same frame buffer as `led16`), `stride`, `updateDisplay` (`show16`), `enableGraphicMode`, `keyHeld`, `delay`; any other game compiled against the same names shows up in the menu too. The launcher sets `setScriptCodeMemory(SCRIPT_CODE_AUTO)`: a game's code goes to PSRAM when no internal block is big enough.
-- **Coming back**: each game runs on its own task (`executeAsTask()`). Every game calls `readKey()` once per frame; after Escape, `readKey()` never returns, so the game's task waits in a function of the sketch that holds nothing, and the launcher kills it and frees the game (built with placement `new`, since a `ScriptExecutable` can't be moved). Killing it anywhere else, inside the panel driver say, could leave the screen half way. Ironforge never calls `readKey()`: it reads the keys held in `touchHeld` (a bit per key, as in its own sketch), so after Escape its task waits at the start of `show16()` instead, before the panel is touched. The launcher reads `ironforge.wad` into PSRAM when Ironforge first starts, and draws it 13 pixels in, as its sketch does; Valmora gets `valmora.wad` the same way (one WAD is kept at a time).
+- **Coming back**: each game runs on its own task (`executeAsTask()`). Every game calls `readKey()` once per frame; after Escape, `readKey()` never returns, so the game's task waits in a function of the sketch that holds nothing, and the launcher kills it and frees the game (built with placement `new`, since a `ScriptExecutable` can't be moved). Killing it anywhere else, inside the panel driver say, could leave the screen half way. Ironforge never calls `readKey()`: it reads the keys held in `touchHeld` (a bit per key, as in its own sketch), so after Escape its task waits at the start of `show16()` instead, before the panel is touched. The launcher reads `ironforge.wad` into PSRAM when Ironforge first starts, and draws it 13 pixels in, as its sketch does; Valmora gets `valmora.wad`, Lumenfall `lumenfall.wad` and Wickwire `wickwire.wad` the same way (one WAD is kept at a time). The menu holds 10 games: 1-9 start the first nine at once, the arrows reach the tenth.
 
 **Putting the data folder on the partition.** The partition scheme is *16M Flash (3MB APP/9.9MB FATFS)*: the FFat partition starts at `0x610000` and is `0x9E0000` bytes. FFat keeps a wear-levelling layer around the FAT, so the image is made with ESP-IDF's `wl_fatfsgen.py`, with the core's settings (4096-byte sectors, long names), and written with esptool:
 
@@ -243,7 +245,7 @@ python $IDF_PATH/components/fatfs/wl_fatfsgen.py --output_file ffat.img \
 esptool.py --chip esp32s3 --port /dev/cu.wchusbserial... write_flash 0x610000 ffat.img
 ```
 
-For Ironforge's monsters, make the image from a folder holding the `.bin` files and `examples/matouch/Ironforge/data/ironforge.wad` (see [Ironforge](#ironforge-a-shooter-with-mid-90s-technology)); without the WAD it plays with drawings of its own. Valmora needs `examples/matouch/Valmora/data/valmora.wad` beside it (without it the game stops at once).
+For Ironforge's monsters, make the image from a folder holding the `.bin` files and `examples/matouch/Ironforge/data/ironforge.wad` (see [Ironforge](#ironforge-a-shooter-with-mid-90s-technology)); without the WAD it plays with drawings of its own. Valmora needs `examples/matouch/Valmora/data/valmora.wad` beside it (without it the game stops at once), Lumenfall `examples/matouch/Lumenfall/data/lumenfall.wad` and Wickwire `examples/matouch/Wickwire/data/wickwire.wad`.
 
 (esptool comes with the core: `~/Library/Arduino15/packages/esp32/tools/esptool_py/<version>/esptool` on a Mac.) The launcher mounts the partition with `FFat.begin(false)`: a partition that doesn't mount is never formatted; the menu then says there is no game.
 
@@ -427,3 +429,58 @@ then `wl_fatfsgen.py` and `esptool` as above (with the GameLauncher's games besi
 **Valmora Low, 400x240.** At 800x480 the picture can shake a little under SolarOS: its panel refresh copies every line from PSRAM through the cache, and a game redrawing the whole screen competes with it. `tools/make_wad.py --low valmoralow.wad valmoralow.sc` makes the same game at half the resolution: the WAD's tiles are 16x16 (the same art, made smaller; the tile size is in each tile's header) and its font is `tools/font6.py`, a font drawn pixel by pixel for 8 rows, so the letters keep their shape when shown 2x. The script is the same: it is laid out in 800x480 coordinates, and when the tiles are 16 pixels its few drawing functions halve them. `valmoralow.sc` takes the pixel size from its command line: `asm run valmoralow.bin` (2, the default) fills the panel, steady under SolarOS; `asm run valmoralow.bin 1` shows its 400x240 in the middle of the panel.
 
 Writing it found a compiler bug: a number above 65535 in the script was cut to 16 bits, so `uint16_t cache[378880]` reserved 6784 elements (the globals after it overlapped it, and the game crashed as soon as it decoded its tiles), and `x == 65537` compared with 1. Fixed: the literal is read as 32 bits.
+
+## Lumenfall: a platform game with parallax scrolling
+
+[matouch/Lumenfall](examples/matouch/Lumenfall) is a side-scrolling platform game at 400x240 (shown 2x on the panel), in RGB565. Wren, the last lamplighter, runs, jumps and shoots her lantern-caster through four darkened lands of two levels each, and lights their beacons again: Dawnmere Fields at sunrise, Mirewood at dusk, the crystal caves of Glimmerdeep, the Hollow Spire under the moon. Every second level ends with the land's guardian: the Bramble Boar, the Moth Matriarch, the Geode Golem and the Gloam King.
+
+| | |
+| --- | --- |
+| <img src="examples/matouch/Lumenfall/lumenfall_title.png" width="400" alt="The title over the scrolling sunrise"> | <img src="examples/matouch/Lumenfall/lumenfall_dawnmere.png" width="400" alt="Dawnmere Fields"> |
+| <img src="examples/matouch/Lumenfall/lumenfall_boar.png" width="400" alt="The Bramble Boar"> | <img src="examples/matouch/Lumenfall/lumenfall_mirewood.png" width="400" alt="Mirewood at dusk"> |
+| <img src="examples/matouch/Lumenfall/lumenfall_glimmerdeep.png" width="400" alt="The crystal caves of Glimmerdeep"> | <img src="examples/matouch/Lumenfall/lumenfall_spire.png" width="400" alt="The Hollow Spire under the moon"> |
+
+- **The picture**: three background layers 512 pixels wide that wrap, scrolled at an eighth, a quarter and half the speed of the level, then the 16x16 tiles, the creatures, Wren. Each layer is drawn only where the next one doesn't cover it (the tools record the first row of each layer that is fully opaque), and its opaque rows are copied without testing for transparency.
+- **Playing**: Wren runs with momentum, jumps higher the longer the key is held (with a little grace after leaving an edge and before landing), stomps or shoots creatures, breaks lumen boxes from below (glints, hearts, a prism that powers her shots, extra lives), and comes back at the last lantern post she touched. Three creatures per land (a walker, a flyer, a hopper or a turret); each guardian has its own pattern of attacks.
+- **The art**: every picture is drawn by the tools, pixel by pixel: the layers' skies dithered on the 565 steps, mountains and hills from periodic noise so they wrap without a seam, trees, crystals, castles; the tiles; Wren's 21 frames (her head drawn by hand, her legs, cloak and arm posed per frame); the creatures and guardians from shaded shapes. Each picture keeps up to 255 RGB565 colours of its own, a byte a pixel, compressed in the WAD (a small LZ the script unpacks when a land starts).
+- **The tools** ([tools](examples/matouch/Lumenfall/tools)): `art.py` (the layers), `tiles.py`, `sprites.py`, `levels.py` (the eight levels, built from pieces chosen within what Wren can jump), `make_wad.py` (packs `data/lumenfall.wad` and writes the `#define` block of `lumenfall.sc`), `make_sketch.py` (puts the script into `Lumenfall.ino`, with the compile's progress on the Serial Monitor) and `host.c` (plays it on a computer, from a file of keys, saving screenshots).
+
+Keys: left/right (or Q D) run, Space or up jumps, F shoots (held: keeps firing), down crouches (down and jump drops through a ledge), Enter pauses. The same `lumenfall.bin` runs in the GameLauncher and on SolarOS (`asm run lumenfall.bin`, the WAD beside it).
+
+| | |
+| --- | --- |
+| Script | 3,441 lines, 80 KB of text |
+| Saved binary | 48 KB (39 KB of code) |
+| Its arrays | about 700 KB in PSRAM: the land's three layers (410 KB), the sprites (180 KB), the unpacking buffer, the tiles, the level |
+| The WAD | 12 layers, 4 tile sets, 28 sprite sheets, 8 levels, the font, the story; 323 KB |
+
+Writing it found three pointer bugs in the compiler, worked around in the script: a `uint16_t *` set from byte data reads 0; adding to a `uint16_t *` counts bytes instead of elements; and a local pointer copied from a global pointer variable (`uint16_t *d = display;`) gets the wrong address, so its writes land elsewhere (here, in the panel driver's settings: a divide by zero in its interrupt). The script writes through `display[...]` directly.
+
+## Wickwire: a 3D platform game, rendered by the script
+
+[matouch/Wickwire](examples/matouch/Wickwire) is a 3D platform game at 400x240, every pixel computed by the script: textured polygons, a depth buffer, fog and lighting, with no graphics library under it. Wick, a small clockwork fox with a candle in his chest, climbs a haunted keep in six levels: the courtyard, the grand staircase, the ghost gallery, the rooftops, the moonlets (little round moons floating above the towers, gravity pulls him round each one and launch lanterns throw him between them) and the bell tower, where the Bell-Wraith waits.
+
+| | |
+| --- | --- |
+| <img src="examples/matouch/Wickwire/wickwire_title.png" width="400" alt="The title, the camera circling the courtyard"> | <img src="examples/matouch/Wickwire/wickwire_drawbridge.png" width="400" alt="The drawbridge over the moat"> |
+| <img src="examples/matouch/Wickwire/wickwire_courtyard.png" width="400" alt="The courtyard and its well"> | <img src="examples/matouch/Wickwire/wickwire_staircase.png" width="400" alt="The grand staircase"> |
+| <img src="examples/matouch/Wickwire/wickwire_moonlets.png" width="400" alt="The moonlets"> | <img src="examples/matouch/Wickwire/wickwire_belltower.png" width="400" alt="The bell tower and the Bell-Wraith"> |
+
+- **The renderer**: each level is a few thousand quads, sorted by the tools into a grid of 4x4-unit cells; the script draws the cells in front of the camera, nearest first, each quad that faces it: transformed in `ffloat`, clipped at the near plane, projected, and filled as triangles row by row. Per triangle, `float` gives the planes of the texture coordinates and of 1/z over the screen; each row then starts from those planes in integers, and its pixels are a loop of integer additions: the depth test, a texel, its colour at the quad's light and fog. One palette of 256 colours serves every texture; a table of 32768 RGB565 colours holds each at 16 light levels and 8 fog levels, so lighting a pixel is a look-up.
+- **The light**: baked into each quad by the tools: the moon, the sky, and the warm reach of every candle and sconce; Wick's own candle brightens what is near him as he moves. Windows and stained glass are always full bright.
+- **The characters**: built in the script from shaded boxes and spheres in their own space, each turned and placed by a basis (on a moonlet, his up is the moon's): Wick (round body and head, ears, paws, a fluffy tail, legs that run), ghosts drawn see-through (every other pixel), bombs that waddle after him and blow (he can spin to kick them), suits of armour, bats, spiders on their threads, the Bell-Wraith.
+- **The camera**: behind Wick; left and right turn him and it swings round after him; on a moonlet it stays behind and above him along the moon's up. Zones in the level give its distance and height.
+- **The tools** ([tools](examples/matouch/Wickwire/tools)): `textures.py` (29 textures of 32x32: stone, flagstones, planks, crates, slates, carpet, stained glass, portraits, moon rock...), `geometry.py` (boxes, walls, stairs, spiral stairs, towers, cones, spheres, battlements, baked lighting), `levels.py` (the six levels), `make_wad.py` (one palette for every texture, made more vivid; the levels and their grid of cells, compressed) and `host.c` (plays it on a computer).
+
+Keys: up/down (Z S) run forward and back, left/right (Q D) turn, Space jumps (again in the air: a second, smaller jump), F spins (crates, ghosts, bombs), Enter pauses, P shows where a picture's time goes. `wickwire.bin` runs in the GameLauncher and on SolarOS (`asm run wickwire.bin`, the WAD beside it); `Wickwire.ino` compiles the script on the board.
+
+| | |
+| --- | --- |
+| Script | 4,834 lines, 117 KB of text |
+| Saved binary | 97 KB (71 KB of code) |
+| Compiled on the board | 8 min 45 s (`Wickwire.ino`: the loop task needs a 32 KB stack for the compiler's recursion) |
+| A picture | 82 to 105 ms on the board (about 10 a second): the level's walls and floors take most of it |
+| The WAD | 29 textures and their palette, 6 levels (700 to 3300 quads each), the story; 256 KB |
+
+Writing it found two limits in the compiler, both fixed: past 64 KB of code the assembler's sizes, kept in 16 bits, wrapped round and it wrote past its buffer (a crash, or a label "not found"; a `.bin` of such code now keeps its sizes after an escape, and older ones load as before), and its lists of lines did the same at 32768 lines. Measuring the renderer on the board also made a shift by a constant one instruction (`srai`, `slli`) instead of three, which every pixel loop gains from.
+
