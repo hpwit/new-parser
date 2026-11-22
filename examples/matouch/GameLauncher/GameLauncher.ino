@@ -5,15 +5,15 @@
 //
 // The data folder next to this sketch holds the games of the matouch examples:
 // tetris.bin, mazechase.bin, neonracer.bin, prismbreak.bin, xenowing.bin,
-// chromaquest.bin, ironforge.bin, valmora.bin and lumenfall.bin (XenoWing's
-// and ChromaQuest's art are in this sketch too, xenowing_assets.h and
-// chroma_assets.h; Ironforge's monsters are in ironforge.wad, Valmora's
-// pictures and maps in valmora.wad and Lumenfall's in lumenfall.wad, on the
-// partition next to the games;
-// Ironforge's keys are held, a bit each in touchHeld, as in
-// examples/matouch/Ironforge). Valmora and Lumenfall are compiled against
-// the names of SolarOS's script runtime (display, updateDisplay, keyHeld...),
-// bound here too, so the same valmora.bin and lumenfall.bin run in both.
+// chromaquest.bin, ironforge.bin, valmora.bin, lumenfall.bin and
+// wickwire.bin. XenoWing's and ChromaQuest's art are in this sketch too
+// (xenowing_assets.h, chroma_assets.h); the others' are WADs on the
+// partition next to the games: ironforge.wad (Ironforge's monsters),
+// valmora.wad, lumenfall.wad and wickwire.wad (Wickwire's textures and
+// levels). Ironforge's keys are held, a bit each in touchHeld, as in
+// examples/matouch/Ironforge. Valmora, Lumenfall and Wickwire are compiled
+// against the names of SolarOS's script runtime (display, updateDisplay,
+// keyHeld...), bound here too, so the same .bin runs in both.
 // Any other .bin
 // compiled with the same bindings (below) shows in the menu too.
 // To put them on the board's FFat partition, see the README's "GameLauncher:
@@ -145,7 +145,7 @@ float scriptAtan2(float y, float x) {
   return atan2f(y, x);
 }
 
-// --- the game's WAD, /ironforge.wad, /valmora.wad or /lumenfall.wad: read into PSRAM when
+// --- the game's WAD (/ironforge.wad, /valmora.wad, /lumenfall.wad, /wickwire.wad): read into PSRAM when
 // the game starts, and kept until another game wants another one ---
 static uint8_t *wadData = NULL;
 static int wadLoaded = 0;
@@ -319,7 +319,7 @@ int readKey() {
 }
 
 // the games on the partition
-#define MAX_GAMES 9
+#define MAX_GAMES 10
 static char gameFile[MAX_GAMES][32];
 static uint32_t gameSize[MAX_GAMES];
 static int gameCount = 0;
@@ -494,6 +494,8 @@ static void startGame(int i) {
     loadWad("/valmora.wad");
   if (strncasecmp(gameFile[i], "lumenfall", 9) == 0)
     loadWad("/lumenfall.wad");
+  if (strncasecmp(gameFile[i], "wickwire", 8) == 0)
+    loadWad("/wickwire.wad");
   gameBuffer = frame_buffer + gameX;
   while (popKey() != 0)
     ;

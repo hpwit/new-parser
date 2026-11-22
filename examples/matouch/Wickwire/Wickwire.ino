@@ -1,0 +1,5039 @@
+// Wickwire and the Haunted Keep, on the ESP32-S3-Touch-LCD-7: a 3D platform
+// game, all software rendered by the script at 400x240 (shown 2x on the
+// 800x480 panel), played with a USB keyboard. Wick, a clockwork fox with a
+// candle in his chest, climbs a haunted keep: the courtyard, the grand
+// staircase, the ghost gallery, the rooftops, the moonlets (gravity pulls
+// him round each one) and the bell tower. See README_GAMES.md, "Wickwire".
+//
+// The textures, the levels and the story come from /wickwire.wad on the
+// FFat partition (data/wickwire.wad, made by tools/make_wad.py). The sketch
+// reads it into PSRAM and binds it for the script (wad, wadLoaded, wadFind).
+// The script is tools/wickwire.sc, put in here by tools/make_sketch.py; it
+// is compiled on the board (a few minutes: its progress goes to the Serial
+// Monitor). The GameLauncher and SolarOS run the same game precompiled
+// (wickwire.bin).
+//
+// Keys
+//   up / down (Z S, W)      run forward, step back
+//   left / right (Q D, A)   turn (the camera follows behind)
+//   Space (K)               jump; again in the air: a second jump
+//   F (J)                   spin: breaks crates, kicks bombs, beats ghosts
+//   Enter                   pause; Escape leaves; P shows the frame time
+//
+// Needs the modified LovyanGFX Bus_RGB driver (double frame buffer with
+// show(), _frame_buffer, pixel_size, offset) and the ESP32_USB_Host_HID
+// library with the key hooks (see the README's "A USB keyboard driving a
+// script"). Matouch7.h is the panel configuration.
+//
+// Board: ESP32S3 Dev Module, PSRAM "OPI PSRAM", Flash Size 16MB, Partition
+// Scheme "16M Flash (3MB APP/9.9MB FATFS)".
+#include <FS.h>
+#include <FFat.h>
+#include "Matouch7.h"
+#include "keyboard.h"
+#include "script_executable.h"
+#include "asm_execute.h"
+#include "binding.h"
+
+// The compiler recurses through the script's expressions and long
+// `else if` chains (Wickwire's has a 19-way one): on its own 8 KB stack,
+// the loop task (setup() runs on it) overflows while it compiles. 32 KB.
+SET_LOOP_TASK_STACK_SIZE(32 * 1024);
+
+LGFX lcd;
+// where the script draws: a pointer, not an array, since updateDisplay()
+// swaps the frame buffers
+uint16_t *frame_buffer;
+static uint32_t stride = 800;
+
+void updateDisplay() {
+  lcd._bus_instance.show();
+  frame_buffer = (uint16_t *)lcd._bus_instance._frame_buffer;
+  lcd._panel_instance.resetWriteBuffer();
+}
+
+void enableGraphicMode() {
+}
+
+void setPixelsize(int h) {
+  memset(frame_buffer, 0, 800 * 480 * 2);
+  updateDisplay();
+  memset(frame_buffer, 0, 800 * 480 * 2);
+  lcd._bus_instance.offset = 0;
+  lcd._bus_instance.pixel_size = h;
+}
+
+uint32_t scriptMillis() {
+  return millis();
+}
+
+// as SolarOS's delay(): the task sleeps, at least one tick, so the other
+// tasks (the idle task, the keyboard) run
+void scriptDelay(uint32_t ms) {
+  TickType_t t = pdMS_TO_TICKS(ms);
+  vTaskDelay(t > 0 ? t : 1);
+}
+
+float scriptSin(float a) {
+  return sinf(a);
+}
+
+float scriptHypot(float a, float b) {
+  return hypotf(a, b);
+}
+
+float scriptAtan2(float y, float x) {
+  return atan2f(y, x);
+}
+
+uint32_t scriptRand(uint32_t n) {
+  return n ? esp_random() % n : 0;
+}
+
+// --- the WAD: read from the FFat partition into PSRAM ---
+static uint8_t *wadData = NULL;
+static int wadLoaded = 0;
+
+static void loadWad(const char *path) {
+  if (!FFat.begin(false)) {
+    printf("FFat does not mount: put data/wickwire.wad on it (see the README)\n");
+    return;
+  }
+  File f = FFat.open(path, FILE_READ);
+  if (!f) {
+    printf("no %s on the FFat partition\n", path);
+    return;
+  }
+  size_t size = f.size();
+  wadData = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+  if (wadData && f.read(wadData, size) == size && memcmp(wadData + 1, "WAD", 3) == 0) {
+    wadLoaded = 1;
+    printf("%s: %u bytes\n", path, (unsigned)size);
+  } else {
+    printf("%s does not read\n", path);
+    free(wadData);
+    wadData = NULL;
+  }
+  f.close();
+}
+
+// where the entry of that name starts in the WAD, -1 when it is not there
+static int wadFind(char *name) {
+  if (!wadData)
+    return -1;
+  int32_t n, dir;
+  memcpy(&n, wadData + 4, 4);
+  memcpy(&dir, wadData + 8, 4);
+  for (int i = 0; i < n; i++) {
+    const uint8_t *e = wadData + dir + 16 * i;
+    if (strncmp((const char *)e + 8, name, 8) == 0) {
+      int32_t pos;
+      memcpy(&pos, e, 4);
+      return pos;
+    }
+  }
+  return -1;
+}
+
+// --- the keys: readKey() gives each press (the arrows as Z Q S D, a
+// released arrow as its letter + 128), keyHeld(c) whether one is down ---
+#define KEY_QUEUE 16
+static volatile uint8_t keyQueue[KEY_QUEUE];
+static volatile uint8_t keyHead = 0, keyTail = 0;
+static volatile uint8_t keyDown[128];
+
+static void pushKey(uint8_t c) {
+  uint8_t next = (keyHead + 1) % KEY_QUEUE;
+  if (next != keyTail) {
+    keyQueue[keyHead] = c;
+    keyHead = next;
+  }
+}
+
+int readKey() {
+  if (keyTail == keyHead)
+    return 0;
+  int c = keyQueue[keyTail];
+  keyTail = (keyTail + 1) % KEY_QUEUE;
+  return c;
+}
+
+int keyHeld(int c) {
+  return keyDown[c & 127];
+}
+
+static uint8_t keyLetter(key_return k) {
+  if (k.key_code == HID_KEY_UP)
+    return 'z';
+  if (k.key_code == HID_KEY_LEFT)
+    return 'q';
+  if (k.key_code == HID_KEY_DOWN)
+    return 's';
+  if (k.key_code == HID_KEY_RIGHT)
+    return 'd';
+  if (k.key_code == HID_KEY_ESC)
+    return 27;
+  if (k.key_code == HID_KEY_ENTER)
+    return 13;
+  return tolower(k.key_char) & 127;
+}
+
+void print_char(key_return k) {
+  uint8_t c = keyLetter(k);
+  if (c != 0) {
+    keyDown[c] = 1;
+    pushKey(c);
+  }
+}
+
+void release_char(key_return k) {
+  uint8_t c = keyLetter(k);
+  keyDown[c] = 0;
+  if (c == 'z' || c == 'q' || c == 's' || c == 'd')
+    pushKey(c | 0x80);
+}
+
+// --- the compile's progress, on the Serial Monitor: the script is compiled
+// here, on the board, and its 117 KB take a while. setCompileProgress()
+// calls showProgress() as the compiler works (at most once a percent);
+// it prints a line every 10% and whenever the stage changes. ---
+static void showProgress(int percent, const char *stage, void *ctx) {
+  static int shownTens = -1;
+  static const char *shownStage = NULL;
+  (void)ctx;
+  if (percent / 10 == shownTens && stage == shownStage)
+    return;
+  shownTens = percent / 10;
+  shownStage = stage;
+  char bar[21];
+  for (int i = 0; i < 20; i++)
+    bar[i] = i < percent / 5 ? '#' : '.';
+  bar[20] = 0;
+  printf("compiling wickwire [%s] %3d%%  %s\n", bar, percent, stage);
+}
+
+char wickwire[] = R"EOF(// WICKWIRE AND THE HAUNTED KEEP - a 3D platform game, all software
+// rendered by this script at 400x240 (shown 2x on the 800x480 panel).
+//
+// Wick, a small clockwork fox with a candle in his chest, climbs a haunted
+// keep: the courtyard, the grand staircase, the ghost gallery, the
+// rooftops, the little moons that float above the towers, and the bell
+// tower where the Bell-Wraith waits. The camera chases behind him down
+// corridors and up stairs, swings to the side on ledges, and orbits the
+// moonlets, where gravity pulls him round each one.
+//
+// The renderer: textured polygons with a depth buffer, one palette of 256
+// colours for every texture, 16 light levels and 8 fog levels of each
+// (a table of 32768 RGB565 colours), lighting baked into each quad by the
+// tools, the characters built from shaded boxes and spheres, ghosts drawn
+// see-through (every other pixel). Maths in ffloat (16.16 fixed point),
+// projection and triangle set-up in float, the pixels in int.
+//
+// wickwire.wad holds the textures, their palette, the levels (quads,
+// collision boxes, moonlets, what stands where, camera zones, a grid of
+// cells to draw only what is near) and the story: tools/make_wad.py
+// builds it from tools/textures.py, geometry.py and levels.py.
+//
+// Keys
+//   up / down (Z S, W)        run forward, step back
+//   left / right (Q D, A)     turn (the camera follows behind)
+//   Space or K                jump; again in the air: a second, smaller jump
+//   F or J                    spin: breaks crates, knocks ghosts and bombs away
+//   Enter                     pause
+//   Escape                    leave (asks)
+//   P                         show the time a picture takes (ms)
+
+// --- generated by tools/make_wad.py: do not edit by hand ---
+#define TX_STONE 0
+#define TX_STONE_DARK 1
+#define TX_FLAGS 2
+#define TX_WOOD 3
+#define TX_CRATE 4
+#define TX_CRATE_GEAR 5
+#define TX_ROOF 6
+#define TX_CARPET 7
+#define TX_GLASS_ROSE 8
+#define TX_GLASS_SEA 9
+#define TX_GOLD 10
+#define TX_IRON 11
+#define TX_GRASS 12
+#define TX_MOSS_STONE 13
+#define TX_MARBLE 14
+#define TX_BANNER 15
+#define TX_PORTRAIT1 16
+#define TX_PORTRAIT2 17
+#define TX_WINDOW 18
+#define TX_DOOR 19
+#define TX_BOOKS 20
+#define TX_WATER 21
+#define TX_MOON_ROCK 22
+#define TX_MOON_MOSS 23
+#define TX_STARSTONE 24
+#define TX_RED_BRICK 25
+#define TX_PILLAR 26
+#define TX_BRONZE 27
+#define TX_SCONCE 28
+#define NTEX 29
+#define C_FOX 232
+#define C_FOX_DARK 233
+#define C_CREAM 234
+#define C_BRASS 235
+#define C_BRASS_DARK 236
+#define C_EYE 237
+#define C_EYE_GLOW 238
+#define C_FLAME 239
+#define C_FLAME_HOT 240
+#define C_GHOST 241
+#define C_GHOST_DARK 242
+#define C_BOMB 243
+#define C_BOMB_HI 244
+#define C_FUSE_RED 245
+#define C_ARMOUR 246
+#define C_ARMOUR_DARK 247
+#define C_PLUME 248
+#define C_BAT 249
+#define C_SPIDER 250
+#define C_SPIDER_EYE 251
+#define C_HEART 252
+#define C_KEY 253
+#define C_WHITE 254
+#define C_SHADOW 255
+#define K_NONE 0
+#define K_START 1
+#define K_GEAR 2
+#define K_CRATE 3
+#define K_CRATE_GEAR 4
+#define K_CANDLE 5
+#define K_GHOST 6
+#define K_BOMB 7
+#define K_KNIGHT 8
+#define K_BAT 9
+#define K_SPIDER 10
+#define K_KEY 11
+#define K_DOOR 12
+#define K_MOVER 13
+#define K_FALLER 14
+#define K_HEART 15
+#define K_EXIT 16
+#define K_BOSS 17
+#define K_LAUNCH 18
+#define K_CHANDELIER 19
+#define K_ARMOUR_DECO 20
+#define NLEVELS 6
+#define STORY_INTRO 0
+#define STORY_END 443
+// --- end of the generated part ---
+
+// ------------------------------------------------------------------ sizes
+
+#define SW 400
+#define SH 240
+#define HALFW 200
+#define HALFH 120
+#define FOCAL 230.0
+#define NEAR 0.12
+#define FAR 30.0
+
+#define MAXQ 7000
+#define MAXB 900
+#define MAXS 8
+#define MAXZ 32
+#define MAXCELL 2400
+#define MAXLIST 7200
+
+// keys as readKey()/keyHeld() give them
+#define KEY_UP 122
+#define KEY_LEFT 113
+#define KEY_DOWN 115
+#define KEY_RIGHT 100
+#define KEY_W 119
+#define KEY_A 97
+#define KEY_K 107
+#define KEY_F 102
+#define KEY_J 106
+#define KEY_Y 121
+#define KEY_N 110
+#define KEY_P 112
+#define KEY_SPACE 32
+#define KEY_ENTER 13
+#define KEY_ESC 27
+
+// collision box kinds
+#define BOX_SOLID 0
+#define BOX_HAZARD 1
+#define BOX_WATER 2
+#define BOX_KILL 3
+
+// camera modes
+#define CAM_CHASE 0
+#define CAM_SIDE 1
+#define CAM_FIXED 2
+#define CAM_PLANET 3
+
+// ------------------------------------------------------------------ memory
+
+// one compressed lump unpacked at a time (a level is about 160 KB)
+uint8_t ubuf[340000];
+
+// the palette, and every colour at every light and fog level:
+// shade[(fog * 16 + light) * 256 + colour]
+uint8_t palR[256];
+uint8_t palG[256];
+uint8_t palB[256];
+uint16_t shade[32768];
+
+// the textures: 32x32 palette indices each
+uint8_t texPix[40960];
+
+// the depth buffer: 1/z, bigger is nearer, 0 nothing yet
+uint16_t zb[96000];
+
+// the level's quads: corners, texture coordinates, normal, texture, light, flags
+ffloat qx[28000];
+ffloat qy[28000];
+ffloat qz[28000];
+int qu[28000];
+int qv[28000];
+ffloat qnx[MAXQ];
+ffloat qny[MAXQ];
+ffloat qnz[MAXQ];
+uint8_t qtex[MAXQ];
+uint8_t qlight[MAXQ];
+uint8_t qflags[MAXQ];
+int nquads;
+
+// collision boxes
+ffloat bx0[MAXB];
+ffloat by0[MAXB];
+ffloat bz0[MAXB];
+ffloat bx1[MAXB];
+ffloat by1[MAXB];
+ffloat bz1[MAXB];
+uint8_t bkind[MAXB];
+uint8_t bon[MAXB];
+int nboxes;
+
+// moonlets: spheres that pull Wick toward their centre
+ffloat sx[MAXS];
+ffloat sy[MAXS];
+ffloat sz[MAXS];
+ffloat sr[MAXS];
+ffloat spull[MAXS];
+int nspheres;
+
+// camera zones
+ffloat zx0[MAXZ];
+ffloat zy0[MAXZ];
+ffloat zz0[MAXZ];
+ffloat zx1[MAXZ];
+ffloat zy1[MAXZ];
+ffloat zz1[MAXZ];
+int zmode[MAXZ];
+int zyaw[MAXZ];
+ffloat zdist[MAXZ];
+ffloat zheight[MAXZ];
+int zpitch[MAXZ];
+int nzones;
+
+// the grid of cells: which quads stand in each
+int cellFirst[MAXCELL];
+int cellCount[MAXCELL];
+uint16_t cellList[MAXLIST];
+int gridW;
+int gridH;
+int gridX0;
+int gridZ0;
+int cellSize;
+
+// the level's look
+int fogR;
+int fogG;
+int fogB;
+int skyTopR;
+int skyTopG;
+int skyTopB;
+int skyBotR;
+int skyBotG;
+int skyBotB;
+ffloat fogNear;
+ffloat fogFar;
+int starsOn;
+uint16_t skyRow[SH];
+
+// where the WAD's other lumps are
+int fontOff;
+int textOff;
+
+// the screen
+int orgOff;
+int frameNo;
+
+// ------------------------------------------------------------------ small helpers
+
+int iabs(int v)
+{
+   if (v < 0)
+      return -v;
+   return v;
+}
+
+int imin(int a, int b)
+{
+   if (a < b)
+      return a;
+   return b;
+}
+
+int imax(int a, int b)
+{
+   if (a > b)
+      return a;
+   return b;
+}
+
+int clampi(int v, int lo, int hi)
+{
+   if (v < lo)
+      return lo;
+   if (v > hi)
+      return hi;
+   return v;
+}
+
+ffloat fabsx(ffloat v)
+{
+   if (v < 0)
+      return -v;
+   return v;
+}
+
+ffloat fminx(ffloat a, ffloat b)
+{
+   if (a < b)
+      return a;
+   return b;
+}
+
+ffloat fmaxx(ffloat a, ffloat b)
+{
+   if (a > b)
+      return a;
+   return b;
+}
+
+ffloat fclamp(ffloat v, ffloat lo, ffloat hi)
+{
+   if (v < lo)
+      return lo;
+   if (v > hi)
+      return hi;
+   return v;
+}
+
+int rnd(int n)
+{
+   if (n <= 1)
+      return 0;
+   return rand(n);
+}
+
+// RGB565 with its two bytes swapped, as the panel wants it
+uint16_t col(int r, int g, int b)
+{
+   r = clampi(r, 0, 255);
+   g = clampi(g, 0, 255);
+   b = clampi(b, 0, 255);
+   int v = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+   return ((v & 255) << 8) | (v >> 8);
+}
+
+// ------------------------------------------------------------------ angles
+//
+// An angle is an int, 1024 a full turn. isin()/icos() give ffloat sines
+// from a table made at the start with the bound sin().
+
+ffloat sinT[1024];
+
+void makeSines()
+{
+   for (int i = 0; i < 1024; i++)
+   {
+      float a = i * 0.00613592315;
+      float s = sin(a);
+      sinT[i] = s;
+   }
+}
+
+ffloat isin(int a)
+{
+   return sinT[a & 1023];
+}
+
+ffloat icos(int a)
+{
+   return sinT[(a + 256) & 1023];
+}
+
+// the angle of (x, z), 0 along +z, 256 along +x
+int iangle(ffloat x, ffloat z)
+{
+   float fx = x;
+   float fz = z;
+   float a = atan2(fx, fz);
+   int r = (int)(a * 162.974661);
+   return r & 1023;
+}
+
+// the length of (x, y, z)
+ffloat len3(ffloat x, ffloat y, ffloat z)
+{
+   float fx = x;
+   float fy = y;
+   float fz = z;
+   float h = hypot(fx, fy);
+   float l = hypot(h, fz);
+   ffloat r = l;
+   return r;
+}
+
+ffloat len2(ffloat x, ffloat z)
+{
+   float fx = x;
+   float fz = z;
+   float l = hypot(fx, fz);
+   ffloat r = l;
+   return r;
+}
+
+// the shortest way from angle a to angle b (-512..511)
+int angleDiff(int a, int b)
+{
+   int d = (b - a) & 1023;
+   if (d >= 512)
+      d = d - 1024;
+   return d;
+}
+
+// ------------------------------------------------------------------ the WAD
+
+int rd16(int o)
+{
+   int v = ubuf[o] | (ubuf[o + 1] << 8);
+   if (v >= 32768)
+      v = v - 65536;
+   return v;
+}
+
+int rdu16(int o)
+{
+   return ubuf[o] | (ubuf[o + 1] << 8);
+}
+
+int rd8s(int o)
+{
+   int v = ubuf[o];
+   if (v >= 128)
+      v = v - 256;
+   return v;
+}
+
+// a position: int16 in 64ths of a unit
+ffloat rdpos(int o)
+{
+   int v = rd16(o);
+   ffloat f = v;
+   return f / 64;
+}
+
+// unpacks a compressed lump into ubuf; returns its size
+int unpack(char *name)
+{
+   int off = wadFind(name);
+   if (off < 0)
+      return 0;
+   int n = wad[off] | (wad[off + 1] << 8) | (wad[off + 2] << 16) | (wad[off + 3] << 24);
+   int i = off + 4;
+   int o = 0;
+   while (o < n)
+   {
+      int t = wad[i];
+      i++;
+      if (t < 128)
+      {
+         int cnt = t + 1;
+         for (int k = 0; k < cnt; k++)
+            ubuf[o + k] = wad[i + k];
+         i = i + cnt;
+         o = o + cnt;
+      }
+      else
+      {
+         int ln = (t & 127) + 3;
+         int d = wad[i] | (wad[i + 1] << 8);
+         i = i + 2;
+         for (int k = 0; k < ln; k++)
+            ubuf[o + k] = ubuf[o + k - d];
+         o = o + ln;
+      }
+   }
+   return n;
+}
+
+void loadPalette()
+{
+   int p = wadFind("PAL");
+   for (int i = 0; i < 256; i++)
+   {
+      palR[i] = wad[p + i * 3];
+      palG[i] = wad[p + i * 3 + 1];
+      palB[i] = wad[p + i * 3 + 2];
+   }
+}
+
+void loadTextures()
+{
+   int n = unpack("TEX");
+   for (int i = 0; i < n && i < 40960; i++)
+      texPix[i] = ubuf[i];
+}
+
+// every palette colour at 16 light levels (12 is the colour itself, 15 a
+// little brighter) and 8 fog levels (7: the fog's colour)
+void makeShades()
+{
+   for (int f = 0; f < 8; f++)
+   {
+      int fogK = f * 256 / 7;
+      for (int l = 0; l < 16; l++)
+      {
+         int lightK = l * 256 / 12;
+         int base = (f * 16 + l) * 256;
+         for (int c = 0; c < 256; c++)
+         {
+            int r = (palR[c] * lightK) >> 8;
+            int g = (palG[c] * lightK) >> 8;
+            int b = (palB[c] * lightK) >> 8;
+            r = r + (((fogR - r) * fogK) >> 8);
+            g = g + (((fogG - g) * fogK) >> 8);
+            b = b + (((fogB - b) * fogK) >> 8);
+            shade[base + c] = col(r, g, b);
+         }
+      }
+   }
+}
+
+// the sky: a colour a row, from the top colour down to the bottom one
+void makeSky()
+{
+   for (int y = 0; y < SH; y++)
+   {
+      int k = y * 256 / SH;
+      int r = skyTopR + (((skyBotR - skyTopR) * k) >> 8);
+      int g = skyTopG + (((skyBotG - skyTopG) * k) >> 8);
+      int b = skyTopB + (((skyBotB - skyTopB) * k) >> 8);
+      skyRow[y] = col(r, g, b);
+   }
+}
+
+// ------------------------------------------------------------------ text
+
+uint16_t inkCol;
+uint16_t shadowCol;
+int textScale;
+
+void setInk(uint16_t ink, uint16_t shadow, int scale)
+{
+   inkCol = ink;
+   shadowCol = shadow;
+   textScale = scale;
+}
+
+int glyphW(int c)
+{
+   if (c < 32 || c > 126)
+      return 0;
+   return wad[fontOff + c - 32] * textScale;
+}
+
+int textWidth(char *s)
+{
+   int w = 0;
+   int i = 0;
+   while (s[i] != 0)
+   {
+      int c = s[i];
+      w = w + glyphW(c);
+      i++;
+   }
+   return w;
+}
+
+void plotGlyph(int c, int x, int y, uint16_t ink)
+{
+   int g = fontOff + 95 + (c - 32) * 8;
+   int sc = textScale;
+   for (int r = 0; r < 8; r++)
+   {
+      int bits = wad[g + r];
+      if (bits == 0)
+         continue;
+      for (int i = 0; i < 8; i++)
+      {
+         if (((bits << i) & 128) == 0)
+            continue;
+         for (int sy2 = 0; sy2 < sc; sy2++)
+         {
+            int yy = y + r * sc + sy2;
+            if (yy < 0 || yy >= SH)
+               continue;
+            int o = orgOff + yy * stride;
+            for (int sx2 = 0; sx2 < sc; sx2++)
+            {
+               int xx = x + i * sc + sx2;
+               if (xx >= 0 && xx < SW)
+                  display[o + xx] = ink;
+            }
+         }
+      }
+   }
+}
+
+int drawChar(int c, int x, int y)
+{
+   if (c < 32 || c > 126)
+      return x;
+   plotGlyph(c, x + textScale, y + textScale, shadowCol);
+   plotGlyph(c, x, y, inkCol);
+   return x + glyphW(c);
+}
+
+int drawText(char *s, int x, int y)
+{
+   int i = 0;
+   while (s[i] != 0)
+   {
+      int c = s[i];
+      x = drawChar(c, x, y);
+      i++;
+   }
+   return x;
+}
+
+void centreText(char *s, int y)
+{
+   drawText(s, (SW - textWidth(s)) / 2, y);
+}
+
+char numBuf[16];
+char numTmp[16];
+
+char *numText(int v, int digits)
+{
+   int neg = 0;
+   if (v < 0)
+   {
+      neg = 1;
+      v = -v;
+   }
+   int n = 0;
+   while (v > 0 || n < digits || n == 0)
+   {
+      numTmp[n] = 48 + v % 10;
+      v = v / 10;
+      n++;
+      if (n >= 11)
+         break;
+   }
+   int i = 0;
+   if (neg == 1)
+   {
+      numBuf[0] = 45;
+      i = 1;
+   }
+   for (int k = n - 1; k >= 0; k--)
+   {
+      numBuf[i] = numTmp[k];
+      i++;
+   }
+   numBuf[i] = 0;
+   return numBuf;
+}
+
+int drawNum(int v, int digits, int x, int y)
+{
+   return drawText(numText(v, digits), x, y);
+}
+
+// the story's pages, read from the WAD: a page ends at '|' or at the end
+int drawStoryPage(int off, int x, int y, int maxw, int lineH)
+{
+   int cx = x;
+   int cy = y;
+   int i = off;
+   while (true)
+   {
+      int c = wad[textOff + i];
+      if (c == 0)
+         return -1;
+      if (c == 124)
+         return i + 1;
+      if (c == 32)
+      {
+         int w = glyphW(32);
+         int k = i + 1;
+         int c2 = wad[textOff + k];
+         while (c2 != 0 && c2 != 32 && c2 != 124)
+         {
+            w = w + glyphW(c2);
+            k++;
+            c2 = wad[textOff + k];
+         }
+         if (cx + w > x + maxw)
+         {
+            cx = x;
+            cy = cy + lineH;
+         }
+         else
+            cx = drawChar(32, cx, cy);
+         i++;
+         continue;
+      }
+      cx = drawChar(c, cx, cy);
+      i++;
+   }
+   return -1;
+}
+
+void fillRect(int x, int y, int w, int h, uint16_t c)
+{
+   int x0 = imax(0, x);
+   int y0 = imax(0, y);
+   int x1 = imin(SW, x + w);
+   int y1 = imin(SH, y + h);
+   for (int yy = y0; yy < y1; yy++)
+   {
+      int o = orgOff + yy * stride;
+      for (int xx = x0; xx < x1; xx++)
+         display[o + xx] = c;
+   }
+}
+
+// darkens a rectangle: every other pixel
+void dimRect(int x, int y, int w, int h, uint16_t c)
+{
+   int x0 = imax(0, x);
+   int y0 = imax(0, y);
+   int x1 = imin(SW, x + w);
+   int y1 = imin(SH, y + h);
+   for (int yy = y0; yy < y1; yy++)
+   {
+      int o = orgOff + yy * stride;
+      for (int xx = x0 + ((x0 + yy) & 1); xx < x1; xx = xx + 2)
+         display[o + xx] = c;
+   }
+}
+
+// ------------------------------------------------------------------ the camera
+//
+// Its place, and three unit vectors: right, up and forward. A point p
+// seen from it: x = (p - cam).right, y = (p - cam).up, z = (p - cam).fwd.
+
+ffloat camX;
+ffloat camY;
+ffloat camZ;
+ffloat rX;
+ffloat rY;
+ffloat rZ;
+ffloat uX;
+ffloat uY;
+ffloat uZ;
+ffloat fX;
+ffloat fY;
+ffloat fZ;
+int camYaw;
+
+// points the camera from (ex, ey, ez) at (tx, ty, tz), with `upx..` the
+// world's up there (0, 1, 0), or a moonlet's
+void lookAt(ffloat ex, ffloat ey, ffloat ez, ffloat tx, ffloat ty, ffloat tz, ffloat upx, ffloat upy, ffloat upz)
+{
+   camX = ex;
+   camY = ey;
+   camZ = ez;
+   ffloat dx = tx - ex;
+   ffloat dy = ty - ey;
+   ffloat dz = tz - ez;
+   ffloat l = len3(dx, dy, dz);
+   if (l < 0.001)
+      l = 0.001;
+   fX = dx / l;
+   fY = dy / l;
+   fZ = dz / l;
+   // right = up x forward
+   ffloat ax = upy * fZ - upz * fY;
+   ffloat ay = upz * fX - upx * fZ;
+   ffloat az = upx * fY - upy * fX;
+   l = len3(ax, ay, az);
+   if (l < 0.001)
+   {
+      ax = 1;
+      ay = 0;
+      az = 0;
+      l = 1;
+   }
+   rX = ax / l;
+   rY = ay / l;
+   rZ = az / l;
+   // up = forward x right
+   uX = fY * rZ - fZ * rY;
+   uY = fZ * rX - fX * rZ;
+   uZ = fX * rY - fY * rX;
+   camYaw = iangle(fX, fZ);
+}
+
+// ------------------------------------------------------------------ the rasterizer
+//
+// A polygon is up to 8 corners in view space (vx, vy, vz) with texture
+// coordinates (vu, vv in texels). It is clipped against the near plane,
+// projected, and drawn as a fan of triangles. A triangle is drawn row by
+// row: its texture coordinates and 1/z are interpolated across the screen
+// (affine: the tools keep polygons small), 1/z tested against the depth
+// buffer.
+
+float vx[8];
+float vy[8];
+float vz[8];
+float vu[8];
+float vv[8];
+float cx2[8];
+float cy2[8];
+float cz2[8];
+float cu2[8];
+float cv2[8];
+float px[8];
+float py[8];
+float pw[8];
+float pu[8];
+float pv[8];
+
+// what the current polygon is: a texture (texBase >= 0) or a flat colour,
+// its shade row (fog and light), and see-through (ghosts)
+int texBase;
+int flatCol;
+int shadeBase;
+int ghostly;
+int trisDrawn;
+int pixelsDrawn;
+
+void drawTri(int a, int b, int c)
+{
+   float x0 = px[a];
+   float y0 = py[a];
+   float x1 = px[b];
+   float y1 = py[b];
+   float x2 = px[c];
+   float y2 = py[c];
+   float area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+   if (area > -0.5 && area < 0.5)
+      return;
+   float inv = 1.0 / area;
+   // the gradients of u, v and w across the screen
+   float du1 = pu[b] - pu[a];
+   float du2 = pu[c] - pu[a];
+   float dv1 = pv[b] - pv[a];
+   float dv2 = pv[c] - pv[a];
+   float dw1 = pw[b] - pw[a];
+   float dw2 = pw[c] - pw[a];
+   float dudx = (du1 * (y2 - y0) - du2 * (y1 - y0)) * inv;
+   float dudy = (du2 * (x1 - x0) - du1 * (x2 - x0)) * inv;
+   float dvdx = (dv1 * (y2 - y0) - dv2 * (y1 - y0)) * inv;
+   float dvdy = (dv2 * (x1 - x0) - dv1 * (x2 - x0)) * inv;
+   float dwdx = (dw1 * (y2 - y0) - dw2 * (y1 - y0)) * inv;
+   float dwdy = (dw2 * (x1 - x0) - dw1 * (x2 - x0)) * inv;
+   float u0 = pu[a];
+   float v0 = pv[a];
+   float w0 = pw[a];
+   // top, middle, bottom
+   int t = a;
+   int m = b;
+   int btm = c;
+   if (py[m] < py[t])
+   {
+      int s = t;
+      t = m;
+      m = s;
+   }
+   if (py[btm] < py[t])
+   {
+      int s = t;
+      t = btm;
+      btm = s;
+   }
+   if (py[btm] < py[m])
+   {
+      int s = m;
+      m = btm;
+      btm = s;
+   }
+   float yt = py[t];
+   float ym = py[m];
+   float yb = py[btm];
+   if (yb - yt < 0.01)
+      return;
+   float xt = px[t];
+   float xm = px[m];
+   float xb = px[btm];
+   float sLong = (xb - xt) / (yb - yt);
+   float sTop = 0;
+   if (ym - yt > 0.001)
+      sTop = (xm - xt) / (ym - yt);
+   float sBot = 0;
+   if (yb - ym > 0.001)
+      sBot = (xb - xm) / (yb - ym);
+   int ys = (int)(yt + 0.9999);
+   int ye = (int)(yb + 0.9999);
+   if (yt < 0)
+      ys = 0;
+   if (ye > SH)
+      ye = SH;
+   float ru = 0.5;
+   if (dudx < 0)
+      ru = -0.5;
+   float rv = 0.5;
+   if (dvdx < 0)
+      rv = -0.5;
+   int du = (int)(dudx * 64.0 + ru);
+   int dv = (int)(dvdx * 64.0 + rv);
+   int dw = (int)(dwdx * 1048576.0);
+   int tb = texBase;
+   int sb = shadeBase;
+   uint16_t flat = shade[sb + flatCol];
+   trisDrawn++;
+   for (int y = ys; y < ye; y++)
+   {
+      float fy = y;
+      float xa = xt + (fy - yt) * sLong;
+      float xc;
+      if (fy < ym)
+         xc = xt + (fy - yt) * sTop;
+      else
+         xc = xm + (fy - ym) * sBot;
+      if (xc < xa)
+      {
+         float s = xa;
+         xa = xc;
+         xc = s;
+      }
+      int xs = (int)(xa + 0.9999);
+      int xe = (int)(xc + 0.9999);
+      if (xa < 0)
+         xs = 0;
+      if (xe > SW)
+         xe = SW;
+      if (xs >= xe)
+         continue;
+      float fx = xs;
+      float ex = fx - x0;
+      float ey = fy - y0;
+      int w = (int)((w0 + dwdx * ex + dwdy * ey) * 1048576.0);
+      // one index across the depth buffer; the frame's is `i + dOff`
+      int i = y * SW + xs;
+      int iEnd = y * SW + xe;
+      int dOff = orgOff + y * stride - y * SW;
+      pixelsDrawn = pixelsDrawn + xe - xs;
+      if (tb >= 0)
+      {
+         // u and v packed in one int, 10.6 fixed point each, v on top:
+         // a carry between them is a 64th of a texel, never seen
+         int u = (int)((u0 + dudx * ex + dudy * ey) * 64.0);
+         int v = (int)((v0 + dvdx * ex + dvdy * ey) * 64.0);
+         int uv = (v << 16) + (u & 65535);
+         int duv = (dv << 16) + (du & 65535);
+         if (ghostly == 0)
+         {
+            while (i < iEnd)
+            {
+               if ((w >> 7) > zb[i])
+               {
+                  zb[i] = w >> 7;
+                  display[i + dOff] = shade[sb + texPix[tb + ((uv >> 17) & 992) + ((uv >> 6) & 31)]];
+               }
+               uv = uv + duv;
+               w = w + dw;
+               i++;
+            }
+         }
+         else
+         {
+            int par = (i + y + frameNo) & 1;
+            while (i < iEnd)
+            {
+               if (par == 0 && (w >> 7) > zb[i])
+                  display[i + dOff] = shade[sb + texPix[tb + ((uv >> 17) & 992) + ((uv >> 6) & 31)]];
+               par = 1 - par;
+               uv = uv + duv;
+               w = w + dw;
+               i++;
+            }
+         }
+      }
+      else
+      {
+         if (ghostly == 0)
+         {
+            while (i < iEnd)
+            {
+               if ((w >> 7) > zb[i])
+               {
+                  zb[i] = w >> 7;
+                  display[i + dOff] = flat;
+               }
+               w = w + dw;
+               i++;
+            }
+         }
+         else
+         {
+            int par = (i + y + frameNo) & 1;
+            while (i < iEnd)
+            {
+               if (par == 0 && (w >> 7) > zb[i])
+                  display[i + dOff] = flat;
+               par = 1 - par;
+               w = w + dw;
+               i++;
+            }
+         }
+      }
+   }
+}
+
+// clips the polygon vx..vv (n corners) at the near plane, projects it and
+// draws it; returns 0 when nothing was left
+int drawPoly(int n)
+{
+   // clip: keep z >= NEAR
+   int m = 0;
+   for (int i = 0; i < n; i++)
+   {
+      int j = i + 1;
+      if (j == n)
+         j = 0;
+      float za = vz[i];
+      float zb2 = vz[j];
+      if (za >= NEAR)
+      {
+         cx2[m] = vx[i];
+         cy2[m] = vy[i];
+         cz2[m] = za;
+         cu2[m] = vu[i];
+         cv2[m] = vv[i];
+         m++;
+      }
+      int ina = 0;
+      int inb = 0;
+      if (za >= NEAR)
+         ina = 1;
+      if (zb2 >= NEAR)
+         inb = 1;
+      if (ina != inb)
+      {
+         float t = (NEAR - za) / (zb2 - za);
+         cx2[m] = vx[i] + (vx[j] - vx[i]) * t;
+         cy2[m] = vy[i] + (vy[j] - vy[i]) * t;
+         cz2[m] = NEAR;
+         cu2[m] = vu[i] + (vu[j] - vu[i]) * t;
+         cv2[m] = vv[i] + (vv[j] - vv[i]) * t;
+         m++;
+      }
+      if (m >= 8)
+         break;
+   }
+   if (m < 3)
+      return 0;
+   // project; a polygon wholly off one side of the screen is skipped
+   int left = 0;
+   int right = 0;
+   int above = 0;
+   int below = 0;
+   for (int i = 0; i < m; i++)
+   {
+      float iz = 1.0 / cz2[i];
+      px[i] = HALFW + cx2[i] * FOCAL * iz;
+      py[i] = HALFH - cy2[i] * FOCAL * iz;
+      pw[i] = iz;
+      pu[i] = cu2[i];
+      pv[i] = cv2[i];
+      if (px[i] < 0)
+         left++;
+      if (px[i] > SW)
+         right++;
+      if (py[i] < 0)
+         above++;
+      if (py[i] > SH)
+         below++;
+   }
+   if (left == m || right == m || above == m || below == m)
+      return 0;
+   for (int i = 1; i + 1 < m; i++)
+      drawTri(0, i, i + 1);
+   return 1;
+}
+
+// the shade row for a light level and a distance
+int shadeFor(int light, ffloat z)
+{
+   int fog = 0;
+   if (z > fogNear)
+   {
+      ffloat k = (z - fogNear) * 8 / (fogFar - fogNear);
+      fog = (int)(k);
+      if (fog > 7)
+         fog = 7;
+   }
+   if (light > 15)
+      light = 15;
+   if (light < 0)
+      light = 0;
+   return (fog * 16 + light) * 256;
+}
+
+// ------------------------------------------------------------------ the level
+
+int levelNo;
+int startThing;
+
+// the level's things, as the file has them (the game spawns from these)
+int thType[200];
+ffloat thX[200];
+ffloat thY[200];
+ffloat thZ[200];
+int thA[200];
+int thB[200];
+int nthings;
+
+char nameBuf[12];
+
+char *levelLump(int n)
+{
+   nameBuf[0] = 76;
+   nameBuf[1] = 69;
+   nameBuf[2] = 86;
+   nameBuf[3] = 69;
+   nameBuf[4] = 76;
+   nameBuf[5] = 49 + n;
+   nameBuf[6] = 0;
+   return nameBuf;
+}
+
+void loadLevel(int n)
+{
+   levelNo = n;
+   unpack(levelLump(n));
+   nquads = rd16(0);
+   nboxes = rd16(2);
+   nspheres = rd16(4);
+   nthings = rd16(6);
+   nzones = rd16(8);
+   gridW = rd16(10);
+   gridH = rd16(12);
+   gridX0 = rd16(14);
+   gridZ0 = rd16(16);
+   cellSize = rd16(18);
+   int listLen = rd16(20);
+   fogR = rd16(22);
+   fogG = rd16(24);
+   fogB = rd16(26);
+   skyTopR = rd16(28);
+   skyTopG = rd16(30);
+   skyTopB = rd16(32);
+   skyBotR = rd16(34);
+   skyBotG = rd16(36);
+   skyBotB = rd16(38);
+   fogNear = rd16(40);
+   fogFar = rd16(42);
+   starsOn = rd16(44);
+   if (nquads > MAXQ)
+      nquads = MAXQ;
+   int p = 64;
+   for (int i = 0; i < nquads; i++)
+   {
+      for (int k = 0; k < 4; k++)
+      {
+         qx[i * 4 + k] = rdpos(p);
+         qy[i * 4 + k] = rdpos(p + 2);
+         qz[i * 4 + k] = rdpos(p + 4);
+         p = p + 6;
+      }
+      for (int k = 0; k < 4; k++)
+      {
+         qu[i * 4 + k] = rd16(p);
+         qv[i * 4 + k] = rd16(p + 2);
+         p = p + 4;
+      }
+      ffloat nx = rd8s(p);
+      ffloat ny = rd8s(p + 1);
+      ffloat nz = rd8s(p + 2);
+      qnx[i] = nx / 127;
+      qny[i] = ny / 127;
+      qnz[i] = nz / 127;
+      qtex[i] = ubuf[p + 3];
+      qlight[i] = ubuf[p + 4];
+      qflags[i] = ubuf[p + 5];
+      p = p + 6;
+   }
+   if (nboxes > MAXB)
+      nboxes = MAXB;
+   for (int i = 0; i < nboxes; i++)
+   {
+      bx0[i] = rdpos(p);
+      by0[i] = rdpos(p + 2);
+      bz0[i] = rdpos(p + 4);
+      bx1[i] = rdpos(p + 6);
+      by1[i] = rdpos(p + 8);
+      bz1[i] = rdpos(p + 10);
+      bkind[i] = ubuf[p + 12];
+      bon[i] = 1;
+      p = p + 13;
+   }
+   for (int i = 0; i < nspheres; i++)
+   {
+      sx[i] = rdpos(p);
+      sy[i] = rdpos(p + 2);
+      sz[i] = rdpos(p + 4);
+      sr[i] = rdpos(p + 6);
+      spull[i] = rdpos(p + 8);
+      p = p + 10;
+   }
+   if (nthings > 200)
+      nthings = 200;
+   for (int i = 0; i < nthings; i++)
+   {
+      thType[i] = ubuf[p];
+      thX[i] = rdpos(p + 1);
+      thY[i] = rdpos(p + 3);
+      thZ[i] = rdpos(p + 5);
+      thA[i] = rd16(p + 7);
+      thB[i] = rd16(p + 9);
+      p = p + 11;
+   }
+   for (int i = 0; i < nzones; i++)
+   {
+      zx0[i] = rdpos(p);
+      zy0[i] = rdpos(p + 2);
+      zz0[i] = rdpos(p + 4);
+      zx1[i] = rdpos(p + 6);
+      zy1[i] = rdpos(p + 8);
+      zz1[i] = rdpos(p + 10);
+      zmode[i] = ubuf[p + 12];
+      zyaw[i] = rd16(p + 13);
+      zdist[i] = rdpos(p + 15);
+      zheight[i] = rdpos(p + 17);
+      zpitch[i] = rd16(p + 19);
+      p = p + 21;
+   }
+   int ncells = gridW * gridH;
+   if (ncells > MAXCELL)
+      ncells = MAXCELL;
+   for (int i = 0; i < ncells; i++)
+   {
+      cellFirst[i] = rdu16(p);
+      cellCount[i] = rdu16(p + 2);
+      p = p + 4;
+   }
+   if (listLen > MAXLIST)
+      listLen = MAXLIST;
+   for (int i = 0; i < listLen; i++)
+   {
+      cellList[i] = rdu16(p);
+      p = p + 2;
+   }
+   makeShades();
+   makeSky();
+}
+
+// ------------------------------------------------------------------ drawing the world
+
+// stars: directions on the sky, fixed; and the moon
+ffloat starX[90];
+ffloat starY[90];
+ffloat starZ[90];
+int starC[90];
+
+void makeStars()
+{
+   for (int i = 0; i < 90; i++)
+   {
+      int a = rnd(1024);
+      int e = 40 + rnd(200);
+      starX[i] = isin(a) * icos(e);
+      starZ[i] = icos(a) * icos(e);
+      starY[i] = isin(e);
+      starC[i] = rnd(3);
+   }
+}
+
+void drawSky()
+{
+   for (int y = 0; y < SH; y++)
+   {
+      uint16_t c = skyRow[y];
+      int o = orgOff + y * stride;
+      for (int x = 0; x < SW; x++)
+         display[o + x] = c;
+   }
+   if (starsOn == 0)
+      return;
+   uint16_t w0 = col(255, 255, 255);
+   uint16_t w1 = col(200, 210, 255);
+   uint16_t w2 = col(255, 230, 190);
+   for (int i = 0; i < 90; i++)
+   {
+      ffloat z = starX[i] * fX + starY[i] * fY + starZ[i] * fZ;
+      if (z < 0.2)
+         continue;
+      ffloat x = starX[i] * rX + starY[i] * rY + starZ[i] * rZ;
+      ffloat y = starX[i] * uX + starY[i] * uY + starZ[i] * uZ;
+      int sxp = HALFW + (int)(x * 230 / z);
+      int syp = HALFH - (int)(y * 230 / z);
+      if (sxp < 1 || sxp >= SW - 1 || syp < 1 || syp >= SH - 1)
+         continue;
+      uint16_t c = w0;
+      if (starC[i] == 1)
+         c = w1;
+      if (starC[i] == 2)
+         c = w2;
+      display[orgOff + syp * stride + sxp] = c;
+      if ((i & 7) == 0)
+      {
+         display[orgOff + syp * stride + sxp + 1] = c;
+         display[orgOff + (syp + 1) * stride + sxp] = c;
+      }
+   }
+   // the moon, far off toward -x +z, high
+   ffloat mx = -0.45;
+   ffloat my = 0.55;
+   ffloat mz = 0.7;
+   ffloat z = mx * fX + my * fY + mz * fZ;
+   if (z > 0.3)
+   {
+      ffloat x = mx * rX + my * rY + mz * rZ;
+      ffloat y = mx * uX + my * uY + mz * uZ;
+      int cxm = HALFW + (int)(x * 230 / z);
+      int cym = HALFH - (int)(y * 230 / z);
+      uint16_t mc = col(240, 240, 220);
+      uint16_t md = col(200, 200, 190);
+      for (int dy = -11; dy <= 11; dy++)
+         for (int dx = -11; dx <= 11; dx++)
+         {
+            int d = dx * dx + dy * dy;
+            int xx = cxm + dx;
+            int yy = cym + dy;
+            if (d <= 121 && xx >= 0 && xx < SW && yy >= 0 && yy < SH)
+            {
+               uint16_t c = mc;
+               if ((dx - 3) * (dx - 3) + (dy + 2) * (dy + 2) < 10 || (dx + 4) * (dx + 4) + (dy - 4) * (dy - 4) < 6)
+                  c = md;
+               display[orgOff + yy * stride + xx] = c;
+            }
+         }
+   }
+}
+
+void clearDepth()
+{
+   for (int i = 0; i < 96000; i++)
+      zb[i] = 0;
+}
+
+// Wick's candle lights what is near him a little
+ffloat heroX;
+ffloat heroY;
+ffloat heroZ;
+
+int candleBoost(int q)
+{
+   int b = q * 4;
+   ffloat dx = qx[b] - heroX;
+   ffloat dz = qz[b] - heroZ;
+   if (dx > 3 || dx < -3 || dz > 3 || dz < -3)
+      return 0;
+   ffloat dy = qy[b] - heroY;
+   if (dy > 3 || dy < -3)
+      return 0;
+   ffloat d = fabsx(dx) + fabsx(dz) + fabsx(dy);
+   if (d > 3.5)
+      return 0;
+   return (int)((3.5 - d) * 1.2);
+}
+
+int quadsDrawn;
+
+// one quad of the level, if it faces the camera and is near enough
+void drawQuad(int q)
+{
+   int b = q * 4;
+   ffloat ox = qx[b] - camX;
+   ffloat oy = qy[b] - camY;
+   ffloat oz = qz[b] - camZ;
+   // its back is toward the camera
+   if (ox * qnx[q] + oy * qny[q] + oz * qnz[q] >= 0)
+      return;
+   int n = 4;
+   if ((qflags[q] & 2) != 0)
+      n = 3;
+   ffloat zsum = 0;
+   int near = 0;
+   int far = 0;
+   for (int k = 0; k < n; k++)
+   {
+      ffloat dx = qx[b + k] - camX;
+      ffloat dy = qy[b + k] - camY;
+      ffloat dz = qz[b + k] - camZ;
+      ffloat x = dx * rX + dy * rY + dz * rZ;
+      ffloat y = dx * uX + dy * uY + dz * uZ;
+      ffloat z = dx * fX + dy * fY + dz * fZ;
+      vx[k] = x;
+      vy[k] = y;
+      vz[k] = z;
+      vu[k] = qu[b + k];
+      vv[k] = qv[b + k];
+      zsum = zsum + z;
+      if (z < NEAR)
+         near++;
+      if (z > FAR)
+         far++;
+   }
+   if (near == n || far == n)
+      return;
+   texBase = qtex[q] * 1024;
+   int light = qlight[q];
+   if ((qflags[q] & 1) != 0)
+      shadeBase = 15 * 256;
+   else
+      shadeBase = shadeFor(light + candleBoost(q), zsum / n);
+   ghostly = 0;
+   if (drawPoly(n) == 1)
+      quadsDrawn++;
+}
+
+void drawCell(int c, int ix, int iz, int cs, ffloat half)
+{
+   int cnt = cellCount[c];
+   if (cnt == 0)
+      return;
+   // the cell's middle, seen from the camera (flat on the ground)
+   ffloat mx = gridX0 + ix * cs + half - camX;
+   ffloat mz = gridZ0 + iz * cs + half - camZ;
+   ffloat fwd = mx * fX + mz * fZ;
+   ffloat side = mx * rX + mz * rZ;
+   if (fwd < -cs * 1.5 && (fY > -0.5 && fY < 0.5))
+      return;
+   if (fwd > FAR + cs)
+      return;
+   if (fabsx(side) > fwd * 1.1 + cs * 1.5 && (fY > -0.5 && fY < 0.5))
+      return;
+   int first = cellFirst[c];
+   for (int k = 0; k < cnt; k++)
+      drawQuad(cellList[first + k]);
+}
+
+// the cells in front of the camera, out to FAR, and their quads
+void drawWorld()
+{
+   quadsDrawn = 0;
+   int cs = cellSize;
+   int gx = (int)((camX - gridX0) / cs);
+   int gz = (int)((camZ - gridZ0) / cs);
+   int reach = (int)(FAR / cs) + 1;
+   ffloat half = cs * 0.5;
+   // nearest cells first: far pixels behind near walls then fail the
+   // depth test before their texture is read
+   for (int d = 0; d <= reach; d++)
+   {
+      for (int iz = gz - d; iz <= gz + d; iz++)
+      {
+         if (iz < 0 || iz >= gridH)
+            continue;
+         int step = 1;
+         if (iz != gz - d && iz != gz + d)
+            step = d * 2;
+         if (step == 0)
+            step = 1;
+         for (int ix = gx - d; ix <= gx + d; ix = ix + step)
+         {
+            if (ix < 0 || ix >= gridW)
+               continue;
+            drawCell(iz * gridW + ix, ix, iz, cs, half);
+         }
+      }
+   }
+}
+
+// ------------------------------------------------------------------ models
+//
+// A character is drawn from parts: boxes and spheres in its own space
+// (x right, y up, z forward), each with a flat colour, turned by a pitch
+// round its pivot, then put into the world by the model's basis: its
+// place (mx..) and its right (ax..), up (bx..) and forward (cx..).
+
+ffloat mX;
+ffloat mY;
+ffloat mZ;
+ffloat aX;
+ffloat aY;
+ffloat aZ;
+ffloat bX;
+ffloat bY;
+ffloat bZ;
+ffloat dX;
+ffloat dY;
+ffloat dZ;
+ffloat mScale;
+int modelGhost;
+int modelFlash;
+int modelLight;
+
+// the model's basis: standing at (x, y, z), facing yaw, its up the world's
+void modelAt(ffloat x, ffloat y, ffloat z, int yaw)
+{
+   mX = x;
+   mY = y;
+   mZ = z;
+   ffloat s = isin(yaw);
+   ffloat c = icos(yaw);
+   dX = s;
+   dY = 0;
+   dZ = c;
+   aX = c;
+   aY = 0;
+   aZ = -s;
+   bX = 0;
+   bY = 1;
+   bZ = 0;
+   mScale = 1;
+   modelGhost = 0;
+   modelFlash = 0;
+   modelLight = 0;
+}
+
+// the model's basis on a moonlet: up (ux..), forward (fx..) along the ground
+void modelOn(ffloat x, ffloat y, ffloat z, ffloat ux, ffloat uy, ffloat uz, ffloat fx, ffloat fy, ffloat fz)
+{
+   mX = x;
+   mY = y;
+   mZ = z;
+   bX = ux;
+   bY = uy;
+   bZ = uz;
+   dX = fx;
+   dY = fy;
+   dZ = fz;
+   // right = up x forward
+   aX = uy * fz - uz * fy;
+   aY = uz * fx - ux * fz;
+   aZ = ux * fy - uy * fx;
+   mScale = 1;
+   modelGhost = 0;
+   modelFlash = 0;
+   modelLight = 0;
+}
+
+// the corners of the part being drawn, in view space
+float bvx[8];
+float bvy[8];
+float bvz[8];
+ffloat bwx[8];
+ffloat bwy[8];
+ffloat bwz[8];
+
+// a point of the model's space into view space, as corner i
+void modelPoint(int i, ffloat lx, ffloat ly, ffloat lz)
+{
+   lx = lx * mScale;
+   ly = ly * mScale;
+   lz = lz * mScale;
+   ffloat wx = mX + aX * lx + bX * ly + dX * lz;
+   ffloat wy = mY + aY * lx + bY * ly + dY * lz;
+   ffloat wz = mZ + aZ * lx + bZ * ly + dZ * lz;
+   bwx[i] = wx;
+   bwy[i] = wy;
+   bwz[i] = wz;
+   ffloat ox = wx - camX;
+   ffloat oy = wy - camY;
+   ffloat oz = wz - camZ;
+   bvx[i] = ox * rX + oy * rY + oz * rZ;
+   bvy[i] = ox * uX + oy * uY + oz * uZ;
+   bvz[i] = ox * fX + oy * fY + oz * fZ;
+}
+
+// the light of a face of the model, from its world normal
+int faceLight(int a, int b, int c)
+{
+   ffloat e1x = bwx[b] - bwx[a];
+   ffloat e1y = bwy[b] - bwy[a];
+   ffloat e1z = bwz[b] - bwz[a];
+   ffloat e2x = bwx[c] - bwx[a];
+   ffloat e2y = bwy[c] - bwy[a];
+   ffloat e2z = bwz[c] - bwz[a];
+   ffloat nx = e1y * e2z - e1z * e2y;
+   ffloat ny = e1z * e2x - e1x * e2z;
+   ffloat nz = e1x * e2y - e1y * e2x;
+   ffloat l = fabsx(nx) + fabsx(ny) + fabsx(nz);
+   if (l < 0.00001)
+      return 8;
+   // the moon from above and the left, a little from the camera
+   ffloat d = (-nx * 0.4 + ny * 0.8 - nz * 0.3) / l;
+   int lv = 7 + (int)(d * 7) + modelLight;
+   return clampi(lv, 2, 14);
+}
+
+// draws face (a, b, c, d) of the corners, if it faces the camera
+void modelFace(int a, int b, int c, int d, int colour)
+{
+   // facing: the normal against the way from the camera
+   ffloat e1x = bwx[b] - bwx[a];
+   ffloat e1y = bwy[b] - bwy[a];
+   ffloat e1z = bwz[b] - bwz[a];
+   ffloat e2x = bwx[d] - bwx[a];
+   ffloat e2y = bwy[d] - bwy[a];
+   ffloat e2z = bwz[d] - bwz[a];
+   ffloat nx = e1y * e2z - e1z * e2y;
+   ffloat ny = e1z * e2x - e1x * e2z;
+   ffloat nz = e1x * e2y - e1y * e2x;
+   ffloat tx = bwx[a] - camX;
+   ffloat ty = bwy[a] - camY;
+   ffloat tz = bwz[a] - camZ;
+   if (nx * tx + ny * ty + nz * tz >= 0)
+      return;
+   vx[0] = bvx[a];
+   vy[0] = bvy[a];
+   vz[0] = bvz[a];
+   vx[1] = bvx[b];
+   vy[1] = bvy[b];
+   vz[1] = bvz[b];
+   vx[2] = bvx[c];
+   vy[2] = bvy[c];
+   vz[2] = bvz[c];
+   vx[3] = bvx[d];
+   vy[3] = bvy[d];
+   vz[3] = bvz[d];
+   for (int k = 0; k < 4; k++)
+   {
+      vu[k] = 0;
+      vv[k] = 0;
+   }
+   texBase = -1;
+   flatCol = colour;
+   if (modelFlash == 1)
+      flatCol = C_WHITE;
+   int lv = faceLight(a, b, d);
+   ffloat z = (bvz[a] + bvz[c]) * 0.5;
+   shadeBase = shadeFor(lv, z);
+   ghostly = modelGhost;
+   drawPoly(4);
+}
+
+// a box: centre (x, y, z), half sizes (hx, hy, hz), pitched by `pitch`
+// round the point (0, py, pz) of the model
+void part(ffloat x, ffloat y, ffloat z, ffloat hx, ffloat hy, ffloat hz, int pitch, ffloat py, ffloat pz, int colour)
+{
+   ffloat s = isin(pitch);
+   ffloat c = icos(pitch);
+   for (int i = 0; i < 8; i++)
+   {
+      ffloat lx = x - hx;
+      if ((i & 1) != 0)
+         lx = x + hx;
+      ffloat ly = y - hy;
+      if ((i & 2) != 0)
+         ly = y + hy;
+      ffloat lz = z - hz;
+      if ((i & 4) != 0)
+         lz = z + hz;
+      if (pitch != 0)
+      {
+         ffloat ry = ly - py;
+         ffloat rz = lz - pz;
+         ly = py + ry * c - rz * s;
+         lz = pz + ry * s + rz * c;
+      }
+      modelPoint(i, lx, ly, lz);
+   }
+   // corner i: bit 0 x+, bit 1 y+, bit 2 z+
+   modelFace(2, 6, 7, 3, colour);   // top
+   modelFace(0, 1, 5, 4, colour);   // bottom
+   modelFace(0, 2, 3, 1, colour);   // back (-z)
+   modelFace(4, 5, 7, 6, colour);   // front (+z)
+   modelFace(1, 3, 7, 5, colour);   // right (+x)
+   modelFace(0, 4, 6, 2, colour);   // left (-x)
+}
+
+// a low sphere: a top, three rings of 8 corners (at 45, 90 and 135
+// degrees from the top), a bottom; radii rx, ry, rz
+float sbx[26];
+float sby[26];
+float sbz[26];
+ffloat swx[26];
+ffloat swy[26];
+ffloat swz[26];
+
+void ballPoint(int i, ffloat lx, ffloat ly, ffloat lz)
+{
+   modelPoint(0, lx, ly, lz);
+   sbx[i] = bvx[0];
+   sby[i] = bvy[0];
+   sbz[i] = bvz[0];
+   swx[i] = bwx[0];
+   swy[i] = bwy[0];
+   swz[i] = bwz[0];
+}
+
+// face (a, b, c, d) of the sphere's corners, put in corners 0..3
+void ballFace(int a, int b, int c, int d, int colour)
+{
+   bvx[0] = sbx[a];
+   bvy[0] = sby[a];
+   bvz[0] = sbz[a];
+   bwx[0] = swx[a];
+   bwy[0] = swy[a];
+   bwz[0] = swz[a];
+   bvx[1] = sbx[b];
+   bvy[1] = sby[b];
+   bvz[1] = sbz[b];
+   bwx[1] = swx[b];
+   bwy[1] = swy[b];
+   bwz[1] = swz[b];
+   bvx[2] = sbx[c];
+   bvy[2] = sby[c];
+   bvz[2] = sbz[c];
+   bwx[2] = swx[c];
+   bwy[2] = swy[c];
+   bwz[2] = swz[c];
+   bvx[3] = sbx[d];
+   bvy[3] = sby[d];
+   bvz[3] = sbz[d];
+   bwx[3] = swx[d];
+   bwy[3] = swy[d];
+   bwz[3] = swz[d];
+   modelFace(0, 1, 2, 3, colour);
+}
+
+void ball(ffloat x, ffloat y, ffloat z, ffloat rx, ffloat ry, ffloat rz, int colour)
+{
+   ballPoint(0, x, y + ry, z);
+   for (int ring = 0; ring < 3; ring++)
+   {
+      int theta = 128 + ring * 128;
+      ffloat cy = icos(theta);
+      ffloat sr2 = isin(theta);
+      for (int k = 0; k < 8; k++)
+      {
+         int a = k * 128;
+         ballPoint(1 + ring * 8 + k, x + isin(a) * sr2 * rx, y + cy * ry, z + icos(a) * sr2 * rz);
+      }
+   }
+   ballPoint(25, x, y - ry, z);
+   for (int k = 0; k < 8; k++)
+   {
+      int k2 = (k + 1) & 7;
+      ballFace(0, 1 + k, 1 + k2, 1 + k2, colour);
+      ballFace(1 + k, 9 + k, 9 + k2, 1 + k2, colour);
+      ballFace(9 + k, 17 + k, 17 + k2, 9 + k2, colour);
+      ballFace(17 + k, 25, 25, 17 + k2, colour);
+   }
+}
+
+
+// ------------------------------------------------------------------ the game's state
+
+int score;
+int lives;
+int gears;
+int health;
+int quit;
+int paused;
+int levelDone;
+int showName;
+int levelTime;
+int startLevel = 0;
+int godMode = 0;
+int keys;
+
+// Wick: his feet (hx, hy, hz), his speed per step, his facing
+#define HRAD 0.28
+#define HHEIGHT 0.85
+#define GRAV 0.024
+#define JUMPV 0.34
+#define JUMP2 0.27
+#define RUNV 0.135
+#define ACCEL 0.03
+#define MAXFALL 0.55
+#define STEPUP 0.55
+
+ffloat hx;
+ffloat hy;
+ffloat hz;
+ffloat hvx;
+ffloat hvy;
+ffloat hvz;
+int hyaw;
+int hGround;
+int hCoyote;
+int hJumpBuf;
+int hJumps;
+int hJumping;
+int hSpin;
+int hSpinCool;
+int hHurt;
+int hDead;
+int hRun;
+int hIdle;
+int hOnMover;
+ffloat checkX;
+ffloat checkY;
+ffloat checkZ;
+
+// on a moonlet: his up, and the way he faces along the ground
+int hPlanet;
+ffloat gux;
+ffloat guy;
+ffloat guz;
+ffloat gfx;
+ffloat gfy;
+ffloat gfz;
+
+// flying from a launch lantern to its target
+int hFly;
+int hFlyT;
+int hFlyLen;
+ffloat flyX0;
+ffloat flyY0;
+ffloat flyZ0;
+ffloat flyX1;
+ffloat flyY1;
+ffloat flyZ1;
+
+// the keys this step
+int kUp;
+int kDown;
+int kLeft;
+int kRight;
+int kJump;
+int kSpin;
+int pressJump;
+int pressSpin;
+int menuKey;
+
+// the camera's smoothed place and aim
+ffloat ccX;
+ffloat ccY;
+ffloat ccZ;
+ffloat ctX;
+ffloat ctY;
+ffloat ctZ;
+ffloat cupX;
+ffloat cupY;
+ffloat cupZ;
+int camZone;
+int camShake;
+
+// ------------------------------------------------------------------ things in the level
+
+#define MAXE 160
+#define E_NONE 0
+#define E_GEAR 1
+#define E_CRATE 2
+#define E_CRATE_GEAR 3
+#define E_CANDLE 4
+#define E_GHOST 5
+#define E_BOMB 6
+#define E_KNIGHT 7
+#define E_BAT 8
+#define E_SPIDER 9
+#define E_KEY 10
+#define E_DOOR 11
+#define E_MOVER 12
+#define E_FALLER 13
+#define E_HEART 14
+#define E_EXIT 15
+#define E_BOSS 16
+#define E_LAUNCH 17
+#define E_CHANDELIER 18
+#define E_ARMOUR 19
+#define E_ORB 20
+#define E_POPGEAR 21
+
+int eType[MAXE];
+ffloat eX[MAXE];
+ffloat eY[MAXE];
+ffloat eZ[MAXE];
+ffloat eVX[MAXE];
+ffloat eVY[MAXE];
+ffloat eVZ[MAXE];
+ffloat eHX[MAXE];
+ffloat eHY[MAXE];
+ffloat eHZ[MAXE];
+int eState[MAXE];
+int eTimer[MAXE];
+int eHP[MAXE];
+int eYaw[MAXE];
+int eA[MAXE];
+int eB[MAXE];
+int eBox[MAXE];
+int eFlash[MAXE];
+int eCount;
+
+// sparks, smoke, debris
+#define MAXP 110
+#define P_SPARK 0
+#define P_SMOKE 1
+#define P_DEBRIS 2
+#define P_FLAME 3
+#define P_GLINT 4
+#define P_RING 5
+
+int pKind[MAXP];
+ffloat pX[MAXP];
+ffloat pY[MAXP];
+ffloat pZ[MAXP];
+ffloat pVX[MAXP];
+ffloat pVY[MAXP];
+ffloat pVZ[MAXP];
+int pLife[MAXP];
+int pCol[MAXP];
+
+char *levelName(int n)
+{
+   if (n == 0)
+      return "The Courtyard";
+   if (n == 1)
+      return "The Grand Staircase";
+   if (n == 2)
+      return "The Ghost Gallery";
+   if (n == 3)
+      return "The Rooftops";
+   if (n == 4)
+      return "The Moonlets";
+   return "The Bell Tower";
+}
+
+// ------------------------------------------------------------------ particles
+
+void particle(int kind, ffloat x, ffloat y, ffloat z, ffloat vx2, ffloat vy2, ffloat vz2, int life, int colour)
+{
+   for (int i = 0; i < MAXP; i++)
+      if (pLife[i] <= 0)
+      {
+         pKind[i] = kind;
+         pX[i] = x;
+         pY[i] = y;
+         pZ[i] = z;
+         pVX[i] = vx2;
+         pVY[i] = vy2;
+         pVZ[i] = vz2;
+         pLife[i] = life;
+         pCol[i] = colour;
+         return;
+      }
+}
+
+ffloat rndf(ffloat k)
+{
+   int r = rnd(2001) - 1000;
+   ffloat f = r;
+   return f * k / 1000;
+}
+
+void burst(ffloat x, ffloat y, ffloat z, int n, int colour, ffloat speed)
+{
+   for (int i = 0; i < n; i++)
+      particle(P_SPARK, x, y, z, rndf(speed), rndf(speed) + speed * 0.6, rndf(speed), 14 + rnd(10), colour);
+}
+
+void smokePuff(ffloat x, ffloat y, ffloat z, int n)
+{
+   for (int i = 0; i < n; i++)
+      particle(P_SMOKE, x + rndf(0.3), y + rndf(0.2), z + rndf(0.3), rndf(0.02), 0.03 + rndf(0.01), rndf(0.02),
+               20 + rnd(14), C_BOMB_HI);
+}
+
+void debris(ffloat x, ffloat y, ffloat z, int n, int colour)
+{
+   for (int i = 0; i < n; i++)
+      particle(P_DEBRIS, x + rndf(0.3), y + rndf(0.3), z + rndf(0.3), rndf(0.12), 0.1 + rndf(0.08), rndf(0.12),
+               26 + rnd(10), colour);
+}
+
+void updateParticles()
+{
+   for (int i = 0; i < MAXP; i++)
+   {
+      if (pLife[i] <= 0)
+         continue;
+      pLife[i] = pLife[i] - 1;
+      pX[i] = pX[i] + pVX[i];
+      pY[i] = pY[i] + pVY[i];
+      pZ[i] = pZ[i] + pVZ[i];
+      int k = pKind[i];
+      if (k == P_SPARK || k == P_DEBRIS)
+         pVY[i] = pVY[i] - 0.012;
+      if (k == P_SMOKE)
+      {
+         pVX[i] = pVX[i] * 0.94;
+         pVZ[i] = pVZ[i] * 0.94;
+      }
+      if (k == P_FLAME)
+         pVY[i] = pVY[i] + 0.002;
+   }
+}
+
+// a particle: a small square at its depth, bigger when near
+void drawParticles()
+{
+   for (int i = 0; i < MAXP; i++)
+   {
+      if (pLife[i] <= 0)
+         continue;
+      ffloat ox = pX[i] - camX;
+      ffloat oy = pY[i] - camY;
+      ffloat oz = pZ[i] - camZ;
+      ffloat z = ox * fX + oy * fY + oz * fZ;
+      if (z < 0.3 || z > FAR)
+         continue;
+      ffloat x = ox * rX + oy * rY + oz * rZ;
+      ffloat y = ox * uX + oy * uY + oz * uZ;
+      float fz2 = z;
+      float fx2 = x;
+      float fy2 = y;
+      int sxp = HALFW + (int)(fx2 * FOCAL / fz2);
+      int syp = HALFH - (int)(fy2 * FOCAL / fz2);
+      int size = (int)(0.09 * FOCAL / fz2);
+      int k = pKind[i];
+      if (k == P_SMOKE)
+         size = (int)((0.12 + (40 - pLife[i]) * 0.006) * FOCAL / fz2);
+      if (k == P_RING)
+         size = (int)((0.3 + (20 - pLife[i]) * 0.12) * FOCAL / fz2);
+      size = clampi(size, 1, 14);
+      int zz = (int)(1048576.0 / fz2) >> 7;
+      int light = 14;
+      if (k == P_SMOKE)
+         light = 6 + pLife[i] / 6;
+      if (k == P_DEBRIS)
+         light = 9;
+      uint16_t c = shade[shadeFor(light, z) + pCol[i]];
+      if (k == P_RING)
+      {
+         // a flat ring on the ground: its outline only
+         for (int a = 0; a < 32; a++)
+         {
+            int xx = sxp + (int)(isin(a * 32) * size);
+            int yy = syp + (int)(icos(a * 32) * size / 3);
+            if (xx >= 0 && xx < SW && yy >= 0 && yy < SH)
+               display[orgOff + yy * stride + xx] = c;
+         }
+         continue;
+      }
+      for (int dy = 0; dy < size; dy++)
+      {
+         int yy = syp - size / 2 + dy;
+         if (yy < 0 || yy >= SH)
+            continue;
+         for (int dx = 0; dx < size; dx++)
+         {
+            int xx = sxp - size / 2 + dx;
+            if (xx < 0 || xx >= SW)
+               continue;
+            if (k == P_SMOKE && ((xx + yy) & 1) == 1)
+               continue;
+            if (zz > zb[yy * SW + xx])
+               display[orgOff + yy * stride + xx] = c;
+         }
+      }
+   }
+}
+
+// ------------------------------------------------------------------ collision
+
+// 1 when Wick's box at (x, y, z) overlaps box i
+int overlapsBox(int i, ffloat x, ffloat y, ffloat z)
+{
+   if (x + HRAD <= bx0[i] || x - HRAD >= bx1[i])
+      return 0;
+   if (z + HRAD <= bz0[i] || z - HRAD >= bz1[i])
+      return 0;
+   if (y + HHEIGHT <= by0[i] || y >= by1[i])
+      return 0;
+   return 1;
+}
+
+// the solid box Wick's box overlaps at (x, y, z), -1 none
+int solidAt(ffloat x, ffloat y, ffloat z)
+{
+   for (int i = 0; i < nboxes; i++)
+   {
+      if (bon[i] == 0 || bkind[i] != BOX_SOLID)
+         continue;
+      if (overlapsBox(i, x, y, z) == 1)
+         return i;
+   }
+   return -1;
+}
+
+// the top of the ground under (x, z) at or below height y (-100: none)
+ffloat groundBelow(ffloat x, ffloat y, ffloat z)
+{
+   ffloat best = -100;
+   for (int i = 0; i < nboxes; i++)
+   {
+      if (bon[i] == 0 || bkind[i] != BOX_SOLID)
+         continue;
+      if (x + HRAD * 0.5 <= bx0[i] || x - HRAD * 0.5 >= bx1[i])
+         continue;
+      if (z + HRAD * 0.5 <= bz0[i] || z - HRAD * 0.5 >= bz1[i])
+         continue;
+      ffloat t = by1[i];
+      if (t <= y + 0.05 && t > best)
+         best = t;
+   }
+   return best;
+}
+
+// a move along x or z: blocked by a wall, or up a step
+void moveHoriz(ffloat dx, ffloat dz)
+{
+   ffloat nx = hx + dx;
+   ffloat nz = hz + dz;
+   int b = solidAt(nx, hy + 0.02, nz);
+   if (b < 0)
+   {
+      hx = nx;
+      hz = nz;
+      return;
+   }
+   // a step: climb onto it if it is low and nothing is above
+   ffloat top = by1[b];
+   if (top - hy <= STEPUP && top >= hy && (hGround == 1 || hCoyote > 0))
+   {
+      if (solidAt(nx, top + 0.01, nz) < 0)
+      {
+         hx = nx;
+         hz = nz;
+         hy = top;
+         return;
+      }
+   }
+   // blocked: slide against it
+   if (dx != 0)
+      hvx = 0;
+   if (dz != 0)
+      hvz = 0;
+}
+
+
+void heroDie()
+{
+   if (hDead > 0 || godMode == 1)
+      return;
+   hDead = 1;
+   hvx = 0;
+   hvz = 0;
+   hvy = 0.2;
+   burst(hx, hy + 0.5, hz, 16, C_FLAME, 0.08);
+   debris(hx, hy + 0.4, hz, 8, C_BRASS);
+}
+
+void hurtHero(ffloat fromX, ffloat fromZ)
+{
+   if (hHurt > 0 || hDead > 0 || levelDone > 0 || godMode == 1)
+      return;
+   health = health - 1;
+   hHurt = 60;
+   ffloat dx = hx - fromX;
+   ffloat dz = hz - fromZ;
+   ffloat l = len2(dx, dz);
+   if (l < 0.01)
+   {
+      dx = 0;
+      dz = -1;
+      l = 1;
+   }
+   hvx = dx / l * 0.18;
+   hvz = dz / l * 0.18;
+   if (hPlanet < 0)
+   {
+      hvy = 0.2;
+      hGround = 0;
+   }
+   burst(hx, hy + 0.5, hz, 8, C_FLAME_HOT, 0.06);
+   if (health <= 0)
+      heroDie();
+}
+
+
+// ------------------------------------------------------------------ spawning
+
+int addBox(ffloat x0, ffloat y0, ffloat z0, ffloat x1, ffloat y1, ffloat z1)
+{
+   if (nboxes >= MAXB)
+      return -1;
+   int i = nboxes;
+   bx0[i] = x0;
+   by0[i] = y0;
+   bz0[i] = z0;
+   bx1[i] = x1;
+   by1[i] = y1;
+   bz1[i] = z1;
+   bkind[i] = BOX_SOLID;
+   bon[i] = 1;
+   nboxes++;
+   return i;
+}
+
+int spawn(int type, ffloat x, ffloat y, ffloat z)
+{
+   int i = -1;
+   for (int k = 0; k < MAXE; k++)
+      if (eType[k] == E_NONE)
+      {
+         i = k;
+         break;
+      }
+   if (i < 0)
+      return -1;
+   if (i >= eCount)
+      eCount = i + 1;
+   eType[i] = type;
+   eX[i] = x;
+   eY[i] = y;
+   eZ[i] = z;
+   eHX[i] = x;
+   eHY[i] = y;
+   eHZ[i] = z;
+   eVX[i] = 0;
+   eVY[i] = 0;
+   eVZ[i] = 0;
+   eState[i] = 0;
+   eTimer[i] = rnd(100);
+   eHP[i] = 1;
+   eYaw[i] = rnd(1024);
+   eA[i] = 0;
+   eB[i] = 0;
+   eBox[i] = -1;
+   eFlash[i] = 0;
+   return i;
+}
+
+void removeThing(int i)
+{
+   if (eBox[i] >= 0)
+      bon[eBox[i]] = 0;
+   eType[i] = E_NONE;
+}
+
+// the level's things into the game
+void spawnAll()
+{
+   for (int i = 0; i < MAXE; i++)
+      eType[i] = E_NONE;
+   eCount = 0;
+   for (int i = 0; i < MAXP; i++)
+      pLife[i] = 0;
+   for (int t = 0; t < nthings; t++)
+   {
+      int k = thType[t];
+      ffloat x = thX[t];
+      ffloat y = thY[t];
+      ffloat z = thZ[t];
+      int e = -1;
+      if (k == K_START)
+      {
+         checkX = x;
+         checkY = y;
+         checkZ = z;
+      }
+      else if (k == K_GEAR)
+         e = spawn(E_GEAR, x, y, z);
+      else if (k == K_CRATE || k == K_CRATE_GEAR)
+      {
+         e = spawn(k == K_CRATE ? E_CRATE : E_CRATE_GEAR, x, y, z);
+         if (e >= 0)
+         {
+            eYaw[e] = 0;
+            eBox[e] = addBox(x - 0.4, y, z - 0.4, x + 0.4, y + 0.8, z + 0.4);
+         }
+      }
+      else if (k == K_CANDLE)
+         e = spawn(E_CANDLE, x, y, z);
+      else if (k == K_GHOST)
+      {
+         e = spawn(E_GHOST, x, y, z);
+         if (e >= 0)
+            eHP[e] = 1;
+      }
+      else if (k == K_BOMB)
+         e = spawn(E_BOMB, x, y, z);
+      else if (k == K_KNIGHT)
+      {
+         e = spawn(E_KNIGHT, x, y, z);
+         if (e >= 0)
+         {
+            eHP[e] = 2;
+            eA[e] = thA[t];
+         }
+      }
+      else if (k == K_BAT)
+         e = spawn(E_BAT, x, y, z);
+      else if (k == K_SPIDER)
+         e = spawn(E_SPIDER, x, y, z);
+      else if (k == K_KEY)
+         e = spawn(E_KEY, x, y, z);
+      else if (k == K_DOOR)
+      {
+         e = spawn(E_DOOR, x, y, z);
+         if (e >= 0)
+         {
+            eYaw[e] = thA[t];
+            if (thA[t] == 0)
+               eBox[e] = addBox(x - 1.5, y, z - 0.25, x + 1.5, y + 3, z + 0.25);
+            else
+               eBox[e] = addBox(x - 0.25, y, z - 1.5, x + 0.25, y + 3, z + 1.5);
+         }
+      }
+      else if (k == K_MOVER || k == K_FALLER)
+      {
+         e = spawn(k == K_MOVER ? E_MOVER : E_FALLER, x, y, z);
+         if (e >= 0)
+         {
+            eA[e] = thA[t];
+            eB[e] = thB[t];
+            eBox[e] = addBox(x - 1, y - 0.3, z - 1, x + 1, y, z + 1);
+            eTimer[e] = 0;
+         }
+      }
+      else if (k == K_HEART)
+         e = spawn(E_HEART, x, y, z);
+      else if (k == K_EXIT)
+         e = spawn(E_EXIT, x, y, z);
+      else if (k == K_BOSS)
+      {
+         e = spawn(E_BOSS, x, y, z);
+         if (e >= 0)
+            eHP[e] = 6;
+      }
+      else if (k == K_LAUNCH)
+      {
+         e = spawn(E_LAUNCH, x, y, z);
+         if (e >= 0)
+            eA[e] = thA[t];
+      }
+      else if (k == K_CHANDELIER)
+         e = spawn(E_CHANDELIER, x, y, z);
+      else if (k == K_ARMOUR_DECO)
+      {
+         e = spawn(E_ARMOUR, x, y, z);
+         if (e >= 0)
+            eYaw[e] = thA[t];
+      }
+   }
+}
+
+// ------------------------------------------------------------------ what Wick does to things
+
+void gainGear(ffloat x, ffloat y, ffloat z)
+{
+   gears++;
+   score = score + 10;
+   particle(P_GLINT, x, y, z, 0, 0.04, 0, 10, C_BRASS);
+   if (gears >= 100)
+   {
+      gears = gears - 100;
+      lives++;
+      burst(x, y, z, 20, C_FLAME_HOT, 0.08);
+   }
+}
+
+void popGears(ffloat x, ffloat y, ffloat z, int n)
+{
+   for (int i = 0; i < n; i++)
+   {
+      int g = spawn(E_POPGEAR, x, y + 0.5, z);
+      if (g >= 0)
+      {
+         eVX[g] = rndf(0.06);
+         eVZ[g] = rndf(0.06);
+         eVY[g] = 0.18 + rndf(0.05);
+         eTimer[g] = 0;
+      }
+   }
+}
+
+void breakCrate(int i)
+{
+   ffloat x = eX[i];
+   ffloat y = eY[i];
+   ffloat z = eZ[i];
+   debris(x, y + 0.4, z, 10, C_FOX_DARK);
+   smokePuff(x, y + 0.3, z, 3);
+   if (eType[i] == E_CRATE_GEAR)
+      popGears(x, y, z, 5);
+   else
+      popGears(x, y, z, 1);
+   score = score + 50;
+   removeThing(i);
+}
+
+// Wick's head hit a box from below
+void bumpFromBelow(int b)
+{
+   for (int i = 0; i < eCount; i++)
+      if (eBox[i] == b && (eType[i] == E_CRATE || eType[i] == E_CRATE_GEAR))
+      {
+         breakCrate(i);
+         return;
+      }
+}
+
+// Wick came down on something: a crate breaks, a platform carries him
+void landedOn()
+{
+   hOnMover = -1;
+   for (int i = 0; i < eCount; i++)
+   {
+      int b = eBox[i];
+      if (b < 0 || bon[b] == 0)
+         continue;
+      if (hy < by1[b] - 0.02 || hy > by1[b] + 0.05)
+         continue;
+      if (hx + HRAD <= bx0[b] || hx - HRAD >= bx1[b] || hz + HRAD <= bz0[b] || hz - HRAD >= bz1[b])
+         continue;
+      int t = eType[i];
+      if (t == E_CRATE || t == E_CRATE_GEAR)
+      {
+         breakCrate(i);
+         hvy = 0.24;
+         hGround = 0;
+         hJumping = 0;
+         return;
+      }
+      if (t == E_MOVER)
+         hOnMover = i;
+      if (t == E_FALLER && eState[i] == 0)
+      {
+         eState[i] = 1;
+         eTimer[i] = 0;
+         hOnMover = i;
+      }
+   }
+}
+
+// how far (flat) and how high a thing is from Wick
+ffloat distTo(int i)
+{
+   ffloat dx = eX[i] - hx;
+   ffloat dz = eZ[i] - hz;
+   if (dx > 20 || dx < -20 || dz > 20 || dz < -20)
+      return 40;
+   return len2(dx, dz);
+}
+
+ffloat dyTo(int i)
+{
+   return eY[i] - hy;
+}
+
+// a creature beaten: a burst, a gear sometimes, points
+void defeat(int i, int pts)
+{
+   burst(eX[i], eY[i] + 0.5, eZ[i], 14, C_GHOST, 0.07);
+   smokePuff(eX[i], eY[i] + 0.4, eZ[i], 4);
+   score = score + pts;
+   if (rnd(2) == 0)
+      popGears(eX[i], eY[i], eZ[i], 1);
+   removeThing(i);
+}
+
+// the guardian: the Bell-Wraith
+void hitBoss(int i, int n)
+{
+   if (eFlash[i] > 0 || eState[i] == 9)
+      return;
+   eHP[i] = eHP[i] - n;
+   eFlash[i] = 30;
+   camShake = 8;
+   burst(eX[i], eY[i] + 2, eZ[i], 20, C_GHOST, 0.1);
+   if (eHP[i] <= 0)
+   {
+      eState[i] = 9;
+      eTimer[i] = 0;
+      score = score + 5000;
+   }
+}
+
+void explode(int i)
+{
+   ffloat x = eX[i];
+   ffloat y = eY[i];
+   ffloat z = eZ[i];
+   burst(x, y + 0.4, z, 24, C_FLAME, 0.12);
+   burst(x, y + 0.4, z, 12, C_FUSE_RED, 0.09);
+   smokePuff(x, y + 0.4, z, 8);
+   debris(x, y + 0.4, z, 8, C_BOMB);
+   particle(P_RING, x, y + 0.05, z, 0, 0, 0, 20, C_FLAME_HOT);
+   camShake = 10;
+   if (len3(hx - x, hy - y, hz - z) < 1.9)
+      hurtHero(x, z);
+   // what the blast reaches: crates, ghosts, other bombs, the boss
+   for (int k = 0; k < eCount; k++)
+   {
+      if (k == i || eType[k] == E_NONE)
+         continue;
+      ffloat dx = eX[k] - x;
+      ffloat dz = eZ[k] - z;
+      ffloat dy = eY[k] - y;
+      if (dx > 2.2 || dx < -2.2 || dz > 2.2 || dz < -2.2 || dy > 2.5 || dy < -2.5)
+         continue;
+      int t = eType[k];
+      if (t == E_CRATE || t == E_CRATE_GEAR)
+         breakCrate(k);
+      else if (t == E_GHOST || t == E_BAT || t == E_SPIDER || t == E_KNIGHT)
+         defeat(k, 200);
+      else if (t == E_BOMB && eState[k] < 2)
+      {
+         eState[k] = 2;
+         eTimer[k] = 8;
+      }
+      else if (t == E_BOSS && eState[k] != 9)
+         hitBoss(k, 2);
+   }
+   removeThing(i);
+}
+
+void sparkAt(int i)
+{
+   burst(eX[i], eY[i] + 0.7, eZ[i], 5, C_FLAME_HOT, 0.04);
+}
+
+// the spin: everything near Wick is hit once
+void spinHits()
+{
+   if (hSpin == 0)
+      return;
+   for (int i = 0; i < eCount; i++)
+   {
+      int t = eType[i];
+      if (t == E_NONE)
+         continue;
+      ffloat d = distTo(i);
+      if (d > 1.15)
+         continue;
+      ffloat dy = dyTo(i);
+      if (dy > 1.4 || dy < -1.0)
+         continue;
+      if (t == E_CRATE || t == E_CRATE_GEAR)
+         breakCrate(i);
+      else if (t == E_GHOST && eState[i] == 0)
+         defeat(i, 100);
+      else if (t == E_BAT || t == E_SPIDER)
+         defeat(i, 100);
+      else if (t == E_BOMB && eState[i] < 2)
+      {
+         // kicked away, its fuse lit
+         ffloat dx = eX[i] - hx;
+         ffloat dz = eZ[i] - hz;
+         ffloat l = len2(dx, dz);
+         if (l < 0.01)
+            l = 0.01;
+         eVX[i] = dx / l * 0.3;
+         eVZ[i] = dz / l * 0.3;
+         eVY[i] = 0.15;
+         eState[i] = 3;
+         eTimer[i] = 40;
+         sparkAt(i);
+      }
+      else if (t == E_KNIGHT)
+      {
+         // the shield turns the spin unless it is from behind
+         int toHero = iangle(hx - eX[i], hz - eZ[i]);
+         int d2 = angleDiff(eYaw[i], toHero);
+         if (d2 > 200 || d2 < -200)
+         {
+            eHP[i] = eHP[i] - 1;
+            eFlash[i] = 8;
+            if (eHP[i] <= 0)
+               defeat(i, 300);
+         }
+         else
+         {
+            burst(eX[i], eY[i] + 0.6, eZ[i], 6, C_WHITE, 0.05);
+            hvx = (hx - eX[i]) * 0.25;
+            hvz = (hz - eZ[i]) * 0.25;
+         }
+      }
+   }
+}
+
+
+// ------------------------------------------------------------------ Wick
+
+
+
+// the keys: left and right turn Wick (the camera follows behind him),
+// up runs the way he faces, down steps back
+#define TURN 20
+ffloat wantX;
+ffloat wantZ;
+int camFollow;
+
+void keysToWorld()
+{
+   if (kLeft == 1)
+      hyaw = (hyaw - TURN) & 1023;
+   if (kRight == 1)
+      hyaw = (hyaw + TURN) & 1023;
+   ffloat go = 0;
+   if (kUp == 1)
+      go = 1;
+   if (kDown == 1)
+      go = -0.6;
+   wantX = isin(hyaw) * go;
+   wantZ = icos(hyaw) * go;
+}
+
+// on the level's boxes: run, jump, fall, climb steps
+void heroOnGround()
+{
+   keysToWorld();
+   ffloat tx = wantX * RUNV;
+   ffloat tz = wantZ * RUNV;
+   if (hSpin > 0)
+   {
+      tx = tx * 1.15;
+      tz = tz * 1.15;
+   }
+   ffloat acc = ACCEL;
+   if (hGround == 0)
+      acc = ACCEL * 0.7;
+   if (hHurt > 48)
+   {
+      tx = hvx;
+      tz = hvz;
+   }
+   hvx = hvx + fclamp(tx - hvx, -acc, acc);
+   hvz = hvz + fclamp(tz - hvz, -acc, acc);
+
+   // jumping: a press waits a few steps, an edge forgives a few
+   if (pressJump == 1)
+      hJumpBuf = 6;
+   else if (hJumpBuf > 0)
+      hJumpBuf--;
+   if (hGround == 1)
+   {
+      hCoyote = 5;
+      hJumps = 0;
+   }
+   else if (hCoyote > 0)
+      hCoyote--;
+   if (hJumpBuf > 0)
+   {
+      if (hCoyote > 0)
+      {
+         hvy = JUMPV;
+         hGround = 0;
+         hCoyote = 0;
+         hJumping = 1;
+         hJumps = 1;
+         hJumpBuf = 0;
+         hOnMover = -1;
+         smokePuff(hx, hy, hz, 3);
+      }
+      else if (hJumps == 1)
+      {
+         // the second jump, in the air: a little burst of the candle
+         hvy = JUMP2;
+         hJumps = 2;
+         hJumpBuf = 0;
+         hJumping = 1;
+         burst(hx, hy + 0.3, hz, 6, C_FLAME, 0.05);
+      }
+   }
+   if (hJumping == 1 && kJump == 0 && hvy > 0.12)
+   {
+      hvy = 0.12;
+      hJumping = 0;
+   }
+   if (hvy <= 0)
+      hJumping = 0;
+
+   // riding a moving platform
+   if (hOnMover >= 0)
+   {
+      int m = hOnMover;
+      hx = hx + eVX[m];
+      hz = hz + eVZ[m];
+      hy = hy + eVY[m];
+   }
+
+   moveHoriz(hvx, 0);
+   moveHoriz(0, hvz);
+
+   // falling and landing
+   if (hGround == 0)
+   {
+      hvy = hvy - GRAV;
+      if (hvy < -MAXFALL)
+         hvy = -MAXFALL;
+   }
+   ffloat ny = hy + hvy;
+   if (hvy > 0)
+   {
+      int b = solidAt(hx, ny, hz);
+      if (b >= 0)
+      {
+         ny = by0[b] - HHEIGHT - 0.01;
+         hvy = 0;
+         hJumping = 0;
+         bumpFromBelow(b);
+      }
+      hy = ny;
+   }
+   else
+   {
+      ffloat g = groundBelow(hx, hy, hz);
+      if (ny <= g && g > -99)
+      {
+         if (hGround == 0 && hvy < -0.25)
+            smokePuff(hx, g, hz, 4);
+         hy = g;
+         hvy = 0;
+         hGround = 1;
+         landedOn();
+      }
+      else
+      {
+         hy = ny;
+         if (hy > g + 0.02)
+            hGround = 0;
+      }
+   }
+   if (hGround == 1 && hvx == 0 && hvz == 0)
+      hIdle++;
+   else
+      hIdle = 0;
+   ffloat sp = fabsx(hvx) + fabsx(hvz);
+   if (hGround == 1)
+      hRun = hRun + (int)(sp * 400);
+}
+
+// a moonlet: gravity toward its centre, running round it
+void heroOnPlanet()
+{
+   int p = hPlanet;
+   ffloat dx = hx - sx[p];
+   ffloat dy = hy - sy[p];
+   ffloat dz = hz - sz[p];
+   ffloat d = len3(dx, dy, dz);
+   if (d < 0.01)
+      d = 0.01;
+   gux = dx / d;
+   guy = dy / d;
+   guz = dz / d;
+   // left and right turn the facing round up; up runs along it
+   int turn = 0;
+   if (kLeft == 1)
+      turn = -TURN;
+   if (kRight == 1)
+      turn = TURN;
+   if (turn != 0)
+   {
+      ffloat s2 = isin(turn);
+      ffloat c2 = icos(turn);
+      // up x forward is Wick's right
+      ffloat rx2 = guy * gfz - guz * gfy;
+      ffloat ry2 = guz * gfx - gux * gfz;
+      ffloat rz2 = gux * gfy - guy * gfx;
+      gfx = gfx * c2 + rx2 * s2;
+      gfy = gfy * c2 + ry2 * s2;
+      gfz = gfz * c2 + rz2 * s2;
+   }
+   // keep the facing flat against up, and of length 1
+   ffloat k = gfx * gux + gfy * guy + gfz * guz;
+   gfx = gfx - gux * k;
+   gfy = gfy - guy * k;
+   gfz = gfz - guz * k;
+   ffloat l = len3(gfx, gfy, gfz);
+   if (l < 0.05)
+   {
+      // facing straight along up (just arrived): any way along the ground
+      gfx = guy;
+      gfy = -gux;
+      gfz = 0;
+      l = len3(gfx, gfy, gfz);
+      if (l < 0.05)
+      {
+         gfx = 0;
+         gfy = guz;
+         gfz = -guy;
+         l = len3(gfx, gfy, gfz);
+      }
+   }
+   gfx = gfx / l;
+   gfy = gfy / l;
+   gfz = gfz / l;
+   ffloat go = 0;
+   if (kUp == 1)
+      go = 1;
+   if (kDown == 1)
+      go = -0.6;
+   ffloat ax = gfx * go;
+   ffloat ay = gfy * go;
+   ffloat az = gfz * go;
+   // speed along the ground; the part along up is gravity's
+   ffloat vu = hvx * gux + hvy * guy + hvz * guz;
+   ffloat tvx = hvx - gux * vu;
+   ffloat tvy = hvy - guy * vu;
+   ffloat tvz = hvz - guz * vu;
+   tvx = tvx + (ax * RUNV - tvx) * 0.25;
+   tvy = tvy + (ay * RUNV - tvy) * 0.25;
+   tvz = tvz + (az * RUNV - tvz) * 0.25;
+   if (pressJump == 1)
+      hJumpBuf = 6;
+   else if (hJumpBuf > 0)
+      hJumpBuf--;
+   if (hGround == 1)
+      hJumps = 0;
+   if (hJumpBuf > 0 && (hGround == 1 || hJumps == 1))
+   {
+      vu = JUMPV;
+      if (hGround == 0)
+         vu = JUMP2;
+      hJumps = hJumps + 1;
+      hGround = 0;
+      hJumpBuf = 0;
+      burst(hx, hy, hz, 4, C_FLAME, 0.04);
+   }
+   vu = vu - GRAV * 0.9;
+   hvx = tvx + gux * vu;
+   hvy = tvy + guy * vu;
+   hvz = tvz + guz * vu;
+   hx = hx + hvx;
+   hy = hy + hvy;
+   hz = hz + hvz;
+   // the ground: the moonlet's surface
+   dx = hx - sx[p];
+   dy = hy - sy[p];
+   dz = hz - sz[p];
+   d = len3(dx, dy, dz);
+   if (d <= sr[p] + 0.01)
+   {
+      hx = sx[p] + dx / d * sr[p];
+      hy = sy[p] + dy / d * sr[p];
+      hz = sz[p] + dz / d * sr[p];
+      if (vu < 0)
+      {
+         hvx = tvx;
+         hvy = tvy;
+         hvz = tvz;
+      }
+      hGround = 1;
+   }
+   else
+      hGround = 0;
+   ffloat sp = fabsx(tvx) + fabsx(tvy) + fabsx(tvz);
+   if (hGround == 1)
+      hRun = hRun + (int)(sp * 400);
+}
+
+// which moonlet pulls Wick, -1 none
+int planetFor(ffloat x, ffloat y, ffloat z)
+{
+   for (int i = 0; i < nspheres; i++)
+   {
+      ffloat dx = x - sx[i];
+      ffloat dy = y - sy[i];
+      ffloat dz = z - sz[i];
+      ffloat pr = spull[i];
+      if (dx > pr || dx < -pr || dy > pr || dy < -pr || dz > pr || dz < -pr)
+         continue;
+      if (len3(dx, dy, dz) < pr)
+         return i;
+   }
+   return -1;
+}
+
+// a flight from a launch lantern: a high arc to its target
+void heroFlying()
+{
+   hFlyT++;
+   ffloat t = hFlyT;
+   t = t / hFlyLen;
+   if (t >= 1)
+   {
+      hFly = 0;
+      hx = flyX1;
+      hy = flyY1;
+      hz = flyZ1;
+      hvx = 0;
+      hvy = 0;
+      hvz = 0;
+      hGround = 0;
+      return;
+   }
+   ffloat arc = t * (1 - t) * 4 * 6;
+   hx = flyX0 + (flyX1 - flyX0) * t;
+   hy = flyY0 + (flyY1 - flyY0) * t + arc;
+   hz = flyZ0 + (flyZ1 - flyZ0) * t;
+   hyaw = iangle(flyX1 - flyX0, flyZ1 - flyZ0);
+   hRun = hRun + 40;
+   if ((hFlyT & 1) == 0)
+      particle(P_GLINT, hx, hy + 0.4, hz, 0, 0, 0, 16, C_FLAME);
+}
+
+// the boxes Wick is in: deadly ones, water
+void heroTouches()
+{
+   for (int i = 0; i < nboxes; i++)
+   {
+      if (bon[i] == 0 || bkind[i] == BOX_SOLID)
+         continue;
+      if (overlapsBox(i, hx, hy, hz) == 1)
+      {
+         if (bkind[i] == BOX_KILL || bkind[i] == BOX_WATER)
+         {
+            if (bkind[i] == BOX_WATER)
+               burst(hx, hy + 0.3, hz, 14, C_GHOST, 0.07);
+            heroDie();
+         }
+         else if (bkind[i] == BOX_HAZARD)
+            hurtHero(hx - isin(hyaw), hz - icos(hyaw));
+      }
+   }
+}
+
+void updateHero()
+{
+   if (hDead > 0)
+   {
+      hDead++;
+      hvy = hvy - GRAV;
+      hy = hy + hvy;
+      return;
+   }
+   if (hHurt > 0)
+      hHurt--;
+   if (hSpinCool > 0)
+      hSpinCool--;
+   if (hSpin > 0)
+   {
+      hSpin--;
+      if ((hSpin & 1) == 0)
+         particle(P_GLINT, hx + isin(hSpin * 90) * 0.5, hy + 0.4, hz + icos(hSpin * 90) * 0.5, 0, 0.01, 0, 8,
+                  C_BRASS);
+   }
+   if (pressSpin == 1 && hSpinCool == 0 && levelDone == 0)
+   {
+      hSpin = 16;
+      hSpinCool = 24;
+   }
+   if (levelDone > 0)
+   {
+      kUp = 0;
+      kDown = 0;
+      kLeft = 0;
+      kRight = 0;
+      pressJump = 0;
+   }
+   if (hFly == 1)
+   {
+      heroFlying();
+      return;
+   }
+   int p = planetFor(hx, hy, hz);
+   if (p != hPlanet)
+   {
+      hPlanet = p;
+      hGround = 0;
+      if (p < 0)
+      {
+         gux = 0;
+         guy = 1;
+         guz = 0;
+      }
+      else
+      {
+         // facing: keep the way he runs
+         gfx = isin(hyaw);
+         gfy = 0;
+         gfz = icos(hyaw);
+      }
+   }
+   if (hPlanet >= 0)
+      heroOnPlanet();
+   else
+      heroOnGround();
+   heroTouches();
+   if (hy < -30)
+      heroDie();
+}
+
+
+// ------------------------------------------------------------------ the things, each step
+
+// a thing standing on the boxes: gravity and the ground under it
+void thingFalls(int i)
+{
+   eVY[i] = eVY[i] - GRAV;
+   if (eVY[i] < -MAXFALL)
+      eVY[i] = -MAXFALL;
+   ffloat ny = eY[i] + eVY[i];
+   ffloat g = groundBelow(eX[i], eY[i] + 0.1, eZ[i]);
+   if (ny <= g && g > -99)
+   {
+      eY[i] = g;
+      eVY[i] = 0;
+   }
+   else
+      eY[i] = ny;
+}
+
+// a thing walking toward (tx, tz) at `speed`, turning to face it
+void walkToward(int i, ffloat tx, ffloat tz, ffloat speed)
+{
+   ffloat dx = tx - eX[i];
+   ffloat dz = tz - eZ[i];
+   ffloat l = len2(dx, dz);
+   if (l < 0.05)
+      return;
+   int want = iangle(dx, dz);
+   int d = angleDiff(eYaw[i], want);
+   eYaw[i] = (eYaw[i] + clampi(d, -24, 24)) & 1023;
+   ffloat nx = eX[i] + isin(eYaw[i]) * speed;
+   ffloat nz = eZ[i] + icos(eYaw[i]) * speed;
+   // walls stop it; it doesn't walk off an edge
+   ffloat g = groundBelow(nx, eY[i] + 0.3, nz);
+   if (g < eY[i] - 0.6 || g > eY[i] + 0.4)
+      return;
+   for (int b = 0; b < nboxes; b++)
+   {
+      if (bon[b] == 0 || bkind[b] != BOX_SOLID)
+         continue;
+      if (nx > bx0[b] - 0.25 && nx < bx1[b] + 0.25 && nz > bz0[b] - 0.25 && nz < bz1[b] + 0.25 &&
+          eY[i] + 0.3 < by1[b] && eY[i] + 0.8 > by0[b])
+         return;
+   }
+   eX[i] = nx;
+   eZ[i] = nz;
+}
+
+void updateGear(int i)
+{
+   eYaw[i] = (eYaw[i] + 20) & 1023;
+   if (distTo(i) < 0.6 && dyTo(i) > -0.3 && dyTo(i) < 1.2)
+   {
+      gainGear(eX[i], eY[i], eZ[i]);
+      removeThing(i);
+   }
+}
+
+void updatePopGear(int i)
+{
+   eTimer[i] = eTimer[i] + 1;
+   eX[i] = eX[i] + eVX[i];
+   eZ[i] = eZ[i] + eVZ[i];
+   eVY[i] = eVY[i] - GRAV;
+   eY[i] = eY[i] + eVY[i];
+   eYaw[i] = (eYaw[i] + 40) & 1023;
+   // after a moment it flies to Wick
+   if (eTimer[i] > 18)
+   {
+      ffloat dx = hx - eX[i];
+      ffloat dy = hy + 0.5 - eY[i];
+      ffloat dz = hz - eZ[i];
+      eX[i] = eX[i] + dx * 0.25;
+      eY[i] = eY[i] + dy * 0.25;
+      eZ[i] = eZ[i] + dz * 0.25;
+      eVY[i] = 0;
+      if (fabsx(dx) + fabsx(dy) + fabsx(dz) < 0.4 || eTimer[i] > 40)
+      {
+         gainGear(eX[i], eY[i], eZ[i]);
+         removeThing(i);
+      }
+   }
+}
+
+void updateCandle(int i)
+{
+   if (eState[i] == 0 && distTo(i) < 0.9 && dyTo(i) > -1 && dyTo(i) < 1)
+   {
+      eState[i] = 1;
+      checkX = eX[i];
+      checkY = eY[i];
+      checkZ = eZ[i];
+      burst(eX[i], eY[i] + 1.0, eZ[i], 18, C_FLAME, 0.06);
+      score = score + 100;
+   }
+   if (eState[i] == 1 && rnd(3) == 0)
+      particle(P_FLAME, eX[i] + rndf(0.05), eY[i] + 1.05, eZ[i] + rndf(0.05), 0, 0.01, 0, 10, C_FLAME);
+}
+
+// a ghost: drifts toward Wick when near, bobs; fades out and back
+void updateGhost(int i)
+{
+   eTimer[i] = eTimer[i] + 1;
+   int cyc = eTimer[i] % 240;
+   if (cyc < 170)
+      eState[i] = 0;
+   else
+      eState[i] = 1;
+   ffloat d = distTo(i);
+   ffloat bob = isin(eTimer[i] * 12) * 0.25;
+   if (d < 9)
+   {
+      ffloat dx = hx - eX[i];
+      ffloat dz = hz - eZ[i];
+      eX[i] = eX[i] + dx * 0.012;
+      eZ[i] = eZ[i] + dz * 0.012;
+      eYaw[i] = iangle(dx, dz);
+      ffloat ty = hy + 0.6 + bob;
+      eY[i] = eY[i] + (ty - eY[i]) * 0.03;
+   }
+   else
+   {
+      eX[i] = eX[i] + (eHX[i] - eX[i]) * 0.01;
+      eZ[i] = eZ[i] + (eHZ[i] - eZ[i]) * 0.01;
+      eY[i] = eY[i] + (eHY[i] + bob - eY[i]) * 0.05;
+      eYaw[i] = (eYaw[i] + 4) & 1023;
+   }
+   if (eState[i] == 0 && d < 0.7 && dyTo(i) > -0.6 && dyTo(i) < 1.0)
+   {
+      // falling on its head beats it
+      if (hvy < 0 && hy > eY[i] + 0.2)
+      {
+         defeat(i, 100);
+         hvy = 0.25;
+         hJumps = 1;
+         return;
+      }
+      hurtHero(eX[i], eZ[i]);
+   }
+}
+
+// the solid box at a point (for kicked bombs), -1 none
+int solidBoxAt(ffloat x, ffloat y, ffloat z)
+{
+   for (int b = 0; b < nboxes; b++)
+   {
+      if (bon[b] == 0 || bkind[b] != BOX_SOLID)
+         continue;
+      if (x > bx0[b] && x < bx1[b] && z > bz0[b] && z < bz1[b] && y > by0[b] && y < by1[b])
+         return b;
+   }
+   return -1;
+}
+
+// a bomb: waddles toward Wick, lights its fuse near him, blows
+void updateBomb(int i)
+{
+   int st = eState[i];
+   if (st == 3)
+   {
+      // kicked: flies and bounces
+      eX[i] = eX[i] + eVX[i];
+      eZ[i] = eZ[i] + eVZ[i];
+      eVX[i] = eVX[i] * 0.96;
+      eVZ[i] = eVZ[i] * 0.96;
+      thingFalls(i);
+      if (solidBoxAt(eX[i], eY[i] + 0.3, eZ[i]) >= 0)
+      {
+         eVX[i] = -eVX[i] * 0.5;
+         eVZ[i] = -eVZ[i] * 0.5;
+      }
+      // it hits whatever it meets
+      for (int k = 0; k < eCount; k++)
+      {
+         int t = eType[k];
+         if (k == i || (t != E_GHOST && t != E_KNIGHT && t != E_BAT && t != E_BOSS && t != E_CRATE &&
+                        t != E_CRATE_GEAR && t != E_BOMB))
+            continue;
+         ffloat dx = eX[k] - eX[i];
+         ffloat dz = eZ[k] - eZ[i];
+         ffloat r = 0.8;
+         if (t == E_BOSS)
+            r = 1.8;
+         if (dx < r && dx > -r && dz < r && dz > -r && eY[k] - eY[i] < 2.5 && eY[k] - eY[i] > -1)
+         {
+            explode(i);
+            return;
+         }
+      }
+      eTimer[i] = eTimer[i] - 1;
+      if ((eTimer[i] & 1) == 0)
+         particle(P_SPARK, eX[i], eY[i] + 0.75, eZ[i], rndf(0.02), 0.03, rndf(0.02), 6, C_FUSE_RED);
+      if (eTimer[i] <= 0)
+         explode(i);
+      return;
+   }
+   if (st == 2)
+   {
+      // lit: flashing, about to blow
+      eTimer[i] = eTimer[i] - 1;
+      eFlash[i] = (eTimer[i] >> 2) & 1;
+      if ((eTimer[i] & 1) == 0)
+         particle(P_SPARK, eX[i], eY[i] + 0.75, eZ[i], rndf(0.02), 0.03, rndf(0.02), 6, C_FUSE_RED);
+      thingFalls(i);
+      if (eTimer[i] <= 0)
+         explode(i);
+      return;
+   }
+   ffloat d = distTo(i);
+   thingFalls(i);
+   if (d < 8 && fabsx(dyTo(i)) < 2)
+   {
+      walkToward(i, hx, hz, 0.045);
+      eB[i] = eB[i] + 1;
+      if (d < 1.5)
+      {
+         eState[i] = 2;
+         eTimer[i] = 45;
+      }
+   }
+   else
+      eB[i] = 0;
+}
+
+
+// an empty suit of armour that walks its beat; a jump on its helmet
+// or a spin from behind
+void updateKnight(int i)
+{
+   thingFalls(i);
+   if (eFlash[i] > 0)
+      eFlash[i] = eFlash[i] - 1;
+   ffloat d = distTo(i);
+   if (d < 6 && fabsx(dyTo(i)) < 1.5)
+      walkToward(i, hx, hz, 0.035);
+   else
+   {
+      // its beat: back and forth along x (a = 0) or z
+      eTimer[i] = eTimer[i] + 1;
+      ffloat off = isin(eTimer[i] * 3) * 3;
+      if (eA[i] == 0)
+         walkToward(i, eHX[i] + off, eHZ[i], 0.03);
+      else
+         walkToward(i, eHX[i], eHZ[i] + off, 0.03);
+   }
+   eB[i] = eB[i] + 1;
+   if (d < 0.75 && dyTo(i) > -1.3 && dyTo(i) < 0.6)
+   {
+      if (hvy < 0 && hy > eY[i] + 1.0)
+      {
+         eHP[i] = eHP[i] - 1;
+         eFlash[i] = 8;
+         hvy = 0.3;
+         hJumps = 1;
+         burst(eX[i], eY[i] + 1.4, eZ[i], 8, C_WHITE, 0.05);
+         if (eHP[i] <= 0)
+            defeat(i, 300);
+         return;
+      }
+      hurtHero(eX[i], eZ[i]);
+   }
+}
+
+// a bat: hangs; when Wick comes near, swoops at him and back
+void updateBat(int i)
+{
+   eTimer[i] = eTimer[i] + 1;
+   ffloat d = distTo(i);
+   if (eState[i] == 0)
+   {
+      if (d < 6)
+      {
+         eState[i] = 1;
+         eTimer[i] = 0;
+      }
+      return;
+   }
+   ffloat t = eTimer[i];
+   ffloat tx = hx + isin(eTimer[i] * 10) * 1.5;
+   ffloat tz = hz + icos(eTimer[i] * 10) * 1.5;
+   ffloat ty = hy + 1.2 + isin(eTimer[i] * 23) * 0.6;
+   eX[i] = eX[i] + (tx - eX[i]) * 0.04;
+   eY[i] = eY[i] + (ty - eY[i]) * 0.05;
+   eZ[i] = eZ[i] + (tz - eZ[i]) * 0.04;
+   eYaw[i] = iangle(hx - eX[i], hz - eZ[i]);
+   if (d > 14)
+   {
+      eState[i] = 0;
+      eX[i] = eHX[i];
+      eY[i] = eHY[i];
+      eZ[i] = eHZ[i];
+   }
+   if (d < 0.6 && dyTo(i) > -0.5 && dyTo(i) < 1.2)
+   {
+      if (hvy < 0 && hy > eY[i] - 0.1)
+      {
+         defeat(i, 100);
+         hvy = 0.25;
+         return;
+      }
+      hurtHero(eX[i], eZ[i]);
+   }
+}
+
+// a spider on its thread: drops when Wick is under it, climbs back
+void updateSpider(int i)
+{
+   ffloat d = distTo(i);
+   ffloat bottom = eHY[i] - 3.2;
+   if (eState[i] == 0)
+   {
+      if (d < 1.6)
+         eState[i] = 1;
+   }
+   else if (eState[i] == 1)
+   {
+      eY[i] = eY[i] - 0.15;
+      if (eY[i] <= bottom)
+      {
+         eY[i] = bottom;
+         eState[i] = 2;
+         eTimer[i] = 50;
+      }
+   }
+   else
+   {
+      eTimer[i] = eTimer[i] - 1;
+      if (eTimer[i] <= 0)
+      {
+         eY[i] = eY[i] + 0.04;
+         if (eY[i] >= eHY[i])
+         {
+            eY[i] = eHY[i];
+            eState[i] = 0;
+         }
+      }
+   }
+   eYaw[i] = (eYaw[i] + 6) & 1023;
+   if (d < 0.6 && dyTo(i) > -0.4 && dyTo(i) < 1.0)
+      hurtHero(eX[i], eZ[i]);
+}
+
+void updateKey(int i)
+{
+   eYaw[i] = (eYaw[i] + 16) & 1023;
+   if (distTo(i) < 0.7 && dyTo(i) > -0.5 && dyTo(i) < 1.3)
+   {
+      keys++;
+      burst(eX[i], eY[i] + 0.4, eZ[i], 14, C_KEY, 0.06);
+      score = score + 200;
+      removeThing(i);
+   }
+}
+
+// a door: a key opens it (it sinks into the floor)
+void updateDoor(int i)
+{
+   if (eState[i] == 0)
+   {
+      if (keys > 0 && distTo(i) < 2.2)
+      {
+         keys--;
+         eState[i] = 1;
+         burst(eX[i], eY[i] + 1.5, eZ[i], 16, C_KEY, 0.06);
+      }
+      return;
+   }
+   if (eState[i] == 1)
+   {
+      eY[i] = eY[i] - 0.05;
+      if (eY[i] < eHY[i] - 3.1)
+      {
+         eState[i] = 2;
+         if (eBox[i] >= 0)
+            bon[eBox[i]] = 0;
+      }
+   }
+}
+
+// a platform going back and forth: a along x, b along z (units)
+void updateMover(int i)
+{
+   eTimer[i] = eTimer[i] + 1;
+   ffloat ox = eX[i];
+   ffloat oy = eY[i];
+   ffloat oz = eZ[i];
+   ffloat k = isin(eTimer[i] * 4);
+   ffloat ax = eA[i];
+   ffloat bz = eB[i];
+   eX[i] = eHX[i] + ax * k;
+   eZ[i] = eHZ[i] + bz * k;
+   eVX[i] = eX[i] - ox;
+   eVY[i] = eY[i] - oy;
+   eVZ[i] = eZ[i] - oz;
+   int b = eBox[i];
+   if (b >= 0)
+   {
+      bx0[b] = eX[i] - 1;
+      bx1[b] = eX[i] + 1;
+      bz0[b] = eZ[i] - 1;
+      bz1[b] = eZ[i] + 1;
+      by0[b] = eY[i] - 0.3;
+      by1[b] = eY[i];
+   }
+}
+
+// a platform that shakes, then falls once stood on; back after a while
+void updateFaller(int i)
+{
+   ffloat oy = eY[i];
+   if (eState[i] == 1)
+   {
+      eTimer[i] = eTimer[i] + 1;
+      if (eTimer[i] > 24)
+      {
+         eState[i] = 2;
+         eVY[i] = 0;
+      }
+   }
+   else if (eState[i] == 2)
+   {
+      eVY[i] = eVY[i] - GRAV * 0.6;
+      eY[i] = eY[i] + eVY[i];
+      eTimer[i] = eTimer[i] + 1;
+      if (eTimer[i] > 160)
+      {
+         eState[i] = 0;
+         eY[i] = eHY[i];
+         eTimer[i] = 0;
+      }
+   }
+   eVX[i] = 0;
+   eVZ[i] = 0;
+   eVY[i] = eY[i] - oy;
+   if (eState[i] != 2)
+      eVY[i] = 0;
+   int b = eBox[i];
+   if (b >= 0)
+   {
+      by0[b] = eY[i] - 0.3;
+      by1[b] = eY[i];
+      if (eState[i] == 2 && eY[i] < eHY[i] - 6)
+         bon[b] = 0;
+      else
+         bon[b] = 1;
+   }
+   if (hOnMover == i && eState[i] == 2)
+      hOnMover = -1;
+}
+
+void updateHeart(int i)
+{
+   eYaw[i] = (eYaw[i] + 12) & 1023;
+   if (distTo(i) < 0.6 && dyTo(i) > -0.5 && dyTo(i) < 1.2)
+   {
+      if (health < 3)
+         health++;
+      else
+         score = score + 500;
+      burst(eX[i], eY[i] + 0.3, eZ[i], 12, C_HEART, 0.05);
+      removeThing(i);
+   }
+}
+
+void updateExit(int i)
+{
+   eYaw[i] = (eYaw[i] + 6) & 1023;
+   if (rnd(2) == 0)
+      particle(P_GLINT, eX[i] + rndf(0.8), eY[i] + 0.5 + rndf(1.0), eZ[i] + rndf(0.8), 0, 0.02, 0, 16, C_FLAME);
+   if (levelDone == 0 && distTo(i) < 1.0 && dyTo(i) > -1 && dyTo(i) < 2)
+   {
+      levelDone = 1;
+      burst(eX[i], eY[i] + 1, eZ[i], 30, C_FLAME_HOT, 0.1);
+   }
+}
+
+// a launch lantern: touched, it throws Wick to the thing it points at
+void updateLaunch(int i)
+{
+   eYaw[i] = (eYaw[i] + 10) & 1023;
+   if (hFly == 0 && distTo(i) < 0.8 && dyTo(i) > -0.6 && dyTo(i) < 1.2)
+   {
+      int target = eA[i];
+      if (target >= 0 && target < nthings)
+      {
+         hFly = 1;
+         hFlyT = 0;
+         hFlyLen = 60;
+         flyX0 = hx;
+         flyY0 = hy;
+         flyZ0 = hz;
+         flyX1 = thX[target];
+         flyY1 = thY[target] + 0.3;
+         flyZ1 = thZ[target];
+         hPlanet = -1;
+         burst(eX[i], eY[i] + 0.5, eZ[i], 20, C_FLAME_HOT, 0.08);
+      }
+   }
+}
+
+
+void updateBoss(int i)
+{
+   eTimer[i] = eTimer[i] + 1;
+   if (eFlash[i] > 0)
+      eFlash[i] = eFlash[i] - 1;
+   ffloat d = distTo(i);
+   int st = eState[i];
+   if (st == 9)
+   {
+      // undone: it shakes apart and fades
+      if (eTimer[i] % 5 == 0)
+         burst(eX[i] + rndf(1.2), eY[i] + 1.5 + rndf(1.2), eZ[i] + rndf(1.2), 10, C_GHOST, 0.08);
+      camShake = 4;
+      if (eTimer[i] > 100)
+      {
+         removeThing(i);
+         levelDone = 1;
+      }
+      return;
+   }
+   if (st == 0)
+   {
+      // asleep in the bell until Wick climbs near
+      if (d < 9)
+      {
+         eState[i] = 1;
+         eTimer[i] = 0;
+         camShake = 12;
+      }
+      return;
+   }
+   // circling the bell, facing Wick
+   int a = eTimer[i] * 3;
+   ffloat r = 5.5;
+   eX[i] = eHX[i] + isin(a) * r;
+   eZ[i] = eHZ[i] + icos(a) * r;
+   eY[i] = eHY[i] + 1.0 + isin(eTimer[i] * 9) * 0.5;
+   eYaw[i] = iangle(hx - eX[i], hz - eZ[i]);
+   int phase = eTimer[i] % 300;
+   if (st == 1)
+   {
+      // orbs of cold fire, three at a time
+      if (phase == 60 || phase == 90 || phase == 120)
+         for (int k = -1; k <= 1; k++)
+         {
+            int o = spawn(E_ORB, eX[i], eY[i] + 1.5, eZ[i]);
+            if (o >= 0)
+            {
+               ffloat dx = hx - eX[i];
+               ffloat dz = hz - eZ[i];
+               ffloat l = len2(dx, dz);
+               if (l < 0.1)
+                  l = 0.1;
+               int ang = iangle(dx, dz) + k * 60;
+               eVX[o] = isin(ang) * 0.11;
+               eVZ[o] = icos(ang) * 0.11;
+               eVY[o] = (hy + 0.5 - eY[o]) / l * 0.11;
+               eTimer[o] = 120;
+            }
+         }
+      // a bomb now and then, for Wick to kick back at it
+      if (phase == 200)
+      {
+         int b = spawn(E_BOMB, eHX[i] + isin(a + 512) * 4, eHY[i] + 3, eHZ[i] + icos(a + 512) * 4);
+         if (b >= 0)
+            smokePuff(eX[b], eY[b], eZ[b], 6);
+      }
+      // swooping low: the moment to jump on its head
+      if (phase > 230)
+         eY[i] = eHY[i] + 0.2;
+   }
+   // touching it hurts, unless Wick comes down on it
+   if (d < 1.6 && dyTo(i) > -0.5 && dyTo(i) < 3.2)
+   {
+      if (hvy < 0 && hy > eY[i] + 1.6)
+      {
+         hitBoss(i, 1);
+         hvy = 0.36;
+         hJumps = 1;
+      }
+      else
+         hurtHero(eX[i], eZ[i]);
+   }
+}
+
+void updateOrb(int i)
+{
+   eX[i] = eX[i] + eVX[i];
+   eY[i] = eY[i] + eVY[i];
+   eZ[i] = eZ[i] + eVZ[i];
+   eTimer[i] = eTimer[i] - 1;
+   if ((eTimer[i] & 1) == 0)
+      particle(P_GLINT, eX[i], eY[i], eZ[i], 0, 0, 0, 8, C_EYE_GLOW);
+   if (len3(eX[i] - hx, eY[i] - (hy + 0.45), eZ[i] - hz) < 0.5)
+   {
+      hurtHero(eX[i], eZ[i]);
+      removeThing(i);
+      return;
+   }
+   if (eTimer[i] <= 0 || solidBoxAt(eX[i], eY[i], eZ[i]) >= 0)
+   {
+      burst(eX[i], eY[i], eZ[i], 6, C_EYE_GLOW, 0.04);
+      removeThing(i);
+   }
+}
+
+void updateThings()
+{
+   for (int i = 0; i < eCount; i++)
+   {
+      int t = eType[i];
+      if (t == E_NONE)
+         continue;
+      // far things sleep (movers and the boss keep going)
+      if (t != E_MOVER && t != E_FALLER && t != E_BOSS && t != E_ORB && t != E_POPGEAR)
+      {
+         ffloat dx = eX[i] - hx;
+         ffloat dz = eZ[i] - hz;
+         if (dx > 24 || dx < -24 || dz > 24 || dz < -24)
+            continue;
+      }
+      if (t == E_GEAR)
+         updateGear(i);
+      else if (t == E_POPGEAR)
+         updatePopGear(i);
+      else if (t == E_CANDLE)
+         updateCandle(i);
+      else if (t == E_GHOST)
+         updateGhost(i);
+      else if (t == E_BOMB)
+         updateBomb(i);
+      else if (t == E_KNIGHT)
+         updateKnight(i);
+      else if (t == E_BAT)
+         updateBat(i);
+      else if (t == E_SPIDER)
+         updateSpider(i);
+      else if (t == E_KEY)
+         updateKey(i);
+      else if (t == E_DOOR)
+         updateDoor(i);
+      else if (t == E_MOVER)
+         updateMover(i);
+      else if (t == E_FALLER)
+         updateFaller(i);
+      else if (t == E_HEART)
+         updateHeart(i);
+      else if (t == E_EXIT)
+         updateExit(i);
+      else if (t == E_BOSS)
+         updateBoss(i);
+      else if (t == E_LAUNCH)
+         updateLaunch(i);
+      else if (t == E_ORB)
+         updateOrb(i);
+   }
+   spinHits();
+}
+
+// ------------------------------------------------------------------ the camera
+
+// the zone Wick is in, -1 none
+int zoneAt(ffloat x, ffloat y, ffloat z)
+{
+   for (int i = nzones - 1; i >= 0; i--)
+      if (x >= zx0[i] && x <= zx1[i] && y >= zy0[i] && y <= zy1[i] && z >= zz0[i] && z <= zz1[i])
+         return i;
+   return -1;
+}
+
+void updateCamera(int snap)
+{
+   ffloat ex;
+   ffloat ey;
+   ffloat ez;
+   ffloat tx;
+   ffloat ty;
+   ffloat tz;
+   ffloat upx = 0;
+   ffloat upy = 1;
+   ffloat upz = 0;
+   int zi = zoneAt(hx, hy, hz);
+   if (hPlanet >= 0)
+   {
+      // on a moonlet: behind Wick along the ground, above him along up
+      ffloat dist = 4.6;
+      ffloat high = 3.2;
+      ex = hx + gux * high - gfx * dist;
+      ey = hy + guy * high - gfy * dist;
+      ez = hz + guz * high - gfz * dist;
+      tx = hx + gux * 0.8;
+      ty = hy + guy * 0.8;
+      tz = hz + guz * 0.8;
+      upx = gux;
+      upy = guy;
+      upz = guz;
+   }
+   else
+   {
+      int mode = CAM_CHASE;
+      int yaw = 0;
+      ffloat dist = 5.0;
+      ffloat high = 2.6;
+      if (zi >= 0)
+      {
+         mode = zmode[zi];
+         yaw = (zyaw[zi] * 1024 / 360) & 1023;
+         dist = zdist[zi];
+         high = zheight[zi];
+      }
+      // the chase camera swings round behind Wick as he turns
+      if (mode == CAM_CHASE)
+      {
+         if (snap == 1)
+            camFollow = hyaw;
+         else
+            camFollow = (camFollow + angleDiff(camFollow, hyaw) / 6) & 1023;
+         yaw = camFollow;
+      }
+      if (mode == CAM_FIXED)
+      {
+         // a fixed place (the zone's own numbers: its middle, high up)
+         ex = (zx0[zi] + zx1[zi]) / 2 + isin(yaw) * dist;
+         ey = zy0[zi] + high;
+         ez = (zz0[zi] + zz1[zi]) / 2 + icos(yaw) * dist;
+      }
+      else
+      {
+         // behind Wick along the zone's way (chase), or across it (side)
+         ex = hx - isin(yaw) * dist;
+         ey = hy + high;
+         ez = hz - icos(yaw) * dist;
+      }
+      tx = hx + isin(yaw) * 1.2;
+      ty = hy + 0.9;
+      tz = hz + icos(yaw) * 1.2;
+      if (mode == CAM_FIXED)
+      {
+         tx = hx;
+         tz = hz;
+      }
+   }
+   if (hFly == 1)
+   {
+      ex = hx - isin(hyaw) * 6;
+      ey = hy + 3;
+      ez = hz - icos(hyaw) * 6;
+   }
+   if (snap == 1)
+   {
+      ccX = ex;
+      ccY = ey;
+      ccZ = ez;
+      ctX = tx;
+      ctY = ty;
+      ctZ = tz;
+      cupX = upx;
+      cupY = upy;
+      cupZ = upz;
+   }
+   else
+   {
+      ccX = ccX + (ex - ccX) * 0.12;
+      ccY = ccY + (ey - ccY) * 0.12;
+      ccZ = ccZ + (ez - ccZ) * 0.12;
+      ctX = ctX + (tx - ctX) * 0.25;
+      ctY = ctY + (ty - ctY) * 0.25;
+      ctZ = ctZ + (tz - ctZ) * 0.25;
+      cupX = cupX + (upx - cupX) * 0.1;
+      cupY = cupY + (upy - cupY) * 0.1;
+      cupZ = cupZ + (upz - cupZ) * 0.1;
+   }
+   ffloat sx2 = 0;
+   ffloat sy2 = 0;
+   if (camShake > 0)
+   {
+      sx2 = rndf(0.08) * camShake / 6;
+      sy2 = rndf(0.08) * camShake / 6;
+      camShake--;
+   }
+   lookAt(ccX + sx2, ccY + sy2, ccZ, ctX, ctY, ctZ, cupX, cupY, cupZ);
+   heroX = hx;
+   heroY = hy;
+   heroZ = hz;
+}
+
+// ------------------------------------------------------------------ the models
+
+// Wick: a round copper body with a candle in a glass window on his chest,
+// a fox's head with tall ears and a cream muzzle, short legs, a brass
+// tail of three rings that whirls in the spin
+void drawWick()
+{
+   if (hHurt > 0 && (hHurt & 4) != 0 && hDead == 0)
+      return;
+   int yaw = hyaw;
+   if (hSpin > 0)
+      yaw = yaw + hSpin * 64;
+   if (hPlanet >= 0)
+      modelOn(hx, hy, hz, gux, guy, guz, gfx, gfy, gfz);
+   else
+      modelAt(hx, hy, hz, yaw);
+   if (hPlanet >= 0 && hSpin > 0)
+   {
+      // spin on a moonlet: turn the forward round up
+      ffloat s = isin(hSpin * 64);
+      ffloat c = icos(hSpin * 64);
+      ffloat nfx = dX * c + aX * s;
+      ffloat nfy = dY * c + aY * s;
+      ffloat nfz = dZ * c + aZ * s;
+      modelOn(hx, hy, hz, gux, guy, guz, nfx, nfy, nfz);
+   }
+   modelLight = 2;
+   int stride2 = 0;
+   if (hGround == 1)
+      stride2 = isin(hRun) * 300;
+   int legA = (int)(stride2);
+   int legB = -legA;
+   if (hGround == 0)
+   {
+      legA = 120;
+      legB = -60;
+   }
+   // legs, pivoting at the hips
+   part(-0.12, 0.13, 0, 0.065, 0.13, 0.07, legA, 0.26, 0, C_FOX_DARK);
+   part(0.12, 0.13, 0, 0.065, 0.13, 0.07, legB, 0.26, 0, C_FOX_DARK);
+   part(-0.12, 0.02, 0.05, 0.07, 0.03, 0.1, legA, 0.26, 0, C_BRASS_DARK);
+   part(0.12, 0.02, 0.05, 0.07, 0.03, 0.1, legB, 0.26, 0, C_BRASS_DARK);
+   // the body, and the candle's window on the chest
+   int bob = 0;
+   if (hGround == 1)
+      bob = (hRun >> 7) & 1;
+   ffloat by = 0.45;
+   if (bob == 1)
+      by = 0.47;
+   ball(0, by, 0, 0.24, 0.24, 0.22, C_FOX);
+   part(0, by + 0.02, 0.2, 0.09, 0.11, 0.03, 0, 0, 0, C_BRASS);
+   part(0, by + 0.02, 0.225, 0.06, 0.08, 0.01, 0, 0, 0, C_FLAME);
+   // arms
+   int arm = -legA / 2;
+   part(-0.27, by + 0.02, 0, 0.05, 0.12, 0.05, arm, by + 0.1, 0, C_FOX_DARK);
+   part(0.27, by + 0.02, 0, 0.05, 0.12, 0.05, -arm, by + 0.1, 0, C_FOX_DARK);
+   // the head: cream muzzle, black nose, eyes, ears
+   ffloat hyh = by + 0.38;
+   ball(0, hyh, 0.02, 0.2, 0.18, 0.19, C_FOX);
+   ball(0, hyh - 0.05, 0.17, 0.1, 0.08, 0.1, C_CREAM);
+   part(0, hyh - 0.02, 0.27, 0.03, 0.025, 0.02, 0, 0, 0, C_EYE);
+   part(-0.08, hyh + 0.04, 0.165, 0.025, 0.035, 0.01, 0, 0, 0, C_EYE);
+   part(0.08, hyh + 0.04, 0.165, 0.025, 0.035, 0.01, 0, 0, 0, C_EYE);
+   part(-0.11, hyh + 0.2, -0.02, 0.05, 0.09, 0.03, 0, 0, 0, C_FOX_DARK);
+   part(0.11, hyh + 0.2, -0.02, 0.05, 0.09, 0.03, 0, 0, 0, C_FOX_DARK);
+   part(-0.11, hyh + 0.19, 0.005, 0.03, 0.06, 0.01, 0, 0, 0, C_CREAM);
+   part(0.11, hyh + 0.19, 0.005, 0.03, 0.06, 0.01, 0, 0, 0, C_CREAM);
+   // the tail: three brass rings curling up behind
+   int wag = isin(frameNo * 20) * 60;
+   if (hSpin > 0)
+      wag = 0;
+   part(0, by - 0.05, -0.28, 0.05, 0.05, 0.08, 80 + wag, by - 0.05, -0.2, C_BRASS);
+   part(0, by + 0.05, -0.38, 0.06, 0.06, 0.07, 160 + wag, by - 0.05, -0.2, C_BRASS_DARK);
+   part(0, by + 0.18, -0.42, 0.07, 0.07, 0.06, 230 + wag, by - 0.05, -0.2, C_BRASS);
+   part(0, by + 0.3, -0.42, 0.05, 0.05, 0.05, 0, 0, 0, C_CREAM);
+}
+
+// a dark blob on the ground under Wick, so a jump can be judged
+void drawShadow()
+{
+   if (hPlanet >= 0 || hDead > 0)
+      return;
+   ffloat g = groundBelow(hx, hy + 0.05, hz);
+   if (g < -99 || hy - g > 6)
+      return;
+   ffloat s = 0.32 - (hy - g) * 0.03;
+   if (s < 0.1)
+      s = 0.1;
+   for (int k = 0; k < 8; k++)
+   {
+      int a = k * 128;
+      ffloat ox = hx + isin(a) * s - camX;
+      ffloat oy = g + 0.03 - camY;
+      ffloat oz = hz + icos(a) * s - camZ;
+      vx[k] = ox * rX + oy * rY + oz * rZ;
+      vy[k] = ox * uX + oy * uY + oz * uZ;
+      vz[k] = ox * fX + oy * fY + oz * fZ;
+      vu[k] = 0;
+      vv[k] = 0;
+   }
+   texBase = -1;
+   flatCol = C_SHADOW;
+   shadeBase = shadeFor(12, 0);
+   ghostly = 1;
+   drawPoly(8);
+}
+
+// a gear: a spinning brass wheel with teeth
+void drawGear(int i, ffloat y)
+{
+   modelAt(eX[i], y, eZ[i], eYaw[i]);
+   modelLight = 3;
+   part(0, 0.4, 0, 0.17, 0.17, 0.035, 0, 0, 0, C_BRASS);
+   part(0, 0.4, 0, 0.23, 0.05, 0.03, 0, 0, 0, C_BRASS_DARK);
+   part(0, 0.4, 0, 0.05, 0.23, 0.03, 0, 0, 0, C_BRASS_DARK);
+   part(0, 0.4, 0, 0.06, 0.06, 0.045, 0, 0, 0, C_FOX_DARK);
+}
+
+int candleNear(ffloat x, ffloat y, ffloat z)
+{
+   ffloat d = fabsx(x - hx) + fabsx(y - hy) + fabsx(z - hz);
+   if (d > 3.5)
+      return 0;
+   return (int)((3.5 - d) * 1.2);
+}
+
+void crateFace(int a, int b, int c, int d, int tex)
+{
+   ffloat e1x = bwx[b] - bwx[a];
+   ffloat e1y = bwy[b] - bwy[a];
+   ffloat e1z = bwz[b] - bwz[a];
+   ffloat e2x = bwx[d] - bwx[a];
+   ffloat e2y = bwy[d] - bwy[a];
+   ffloat e2z = bwz[d] - bwz[a];
+   ffloat nx = e1y * e2z - e1z * e2y;
+   ffloat ny = e1z * e2x - e1x * e2z;
+   ffloat nz = e1x * e2y - e1y * e2x;
+   if (nx * (bwx[a] - camX) + ny * (bwy[a] - camY) + nz * (bwz[a] - camZ) >= 0)
+      return;
+   vx[0] = bvx[a];
+   vy[0] = bvy[a];
+   vz[0] = bvz[a];
+   vx[1] = bvx[b];
+   vy[1] = bvy[b];
+   vz[1] = bvz[b];
+   vx[2] = bvx[c];
+   vy[2] = bvy[c];
+   vz[2] = bvz[c];
+   vx[3] = bvx[d];
+   vy[3] = bvy[d];
+   vz[3] = bvz[d];
+   vu[0] = 0;
+   vv[0] = 0;
+   vu[1] = 31;
+   vv[1] = 0;
+   vu[2] = 31;
+   vv[2] = 31;
+   vu[3] = 0;
+   vv[3] = 31;
+   texBase = tex * 1024;
+   int lv = faceLight(a, b, d) + candleNear(bwx[a], bwy[a], bwz[a]);
+   shadeBase = shadeFor(lv, (bvz[a] + bvz[c]) * 0.5);
+   ghostly = 0;
+   drawPoly(4);
+}
+
+// a crate: a textured box (the crate textures of the level)
+void drawCrate(int i)
+{
+   ffloat x = eX[i];
+   ffloat y = eY[i];
+   ffloat z = eZ[i];
+   int tex = TX_CRATE;
+   if (eType[i] == E_CRATE_GEAR)
+      tex = TX_CRATE_GEAR;
+   modelAt(x, y, z, 0);
+   for (int c = 0; c < 8; c++)
+   {
+      ffloat lx = -0.4;
+      if ((c & 1) != 0)
+         lx = 0.4;
+      ffloat ly = 0;
+      if ((c & 2) != 0)
+         ly = 0.8;
+      ffloat lz = -0.4;
+      if ((c & 4) != 0)
+         lz = 0.4;
+      modelPoint(c, lx, ly, lz);
+   }
+   crateFace(2, 6, 7, 3, tex);
+   crateFace(0, 2, 3, 1, tex);
+   crateFace(4, 5, 7, 6, tex);
+   crateFace(1, 3, 7, 5, tex);
+   crateFace(0, 4, 6, 2, tex);
+}
+
+
+
+// a candle on a stand: dark until Wick lights it
+void drawCandle(int i)
+{
+   modelAt(eX[i], eY[i], eZ[i], 0);
+   part(0, 0.04, 0, 0.22, 0.04, 0.22, 0, 0, 0, C_BRASS_DARK);
+   part(0, 0.45, 0, 0.04, 0.4, 0.04, 0, 0, 0, C_BRASS);
+   part(0, 0.86, 0, 0.12, 0.03, 0.12, 0, 0, 0, C_BRASS);
+   part(0, 0.97, 0, 0.05, 0.09, 0.05, 0, 0, 0, C_CREAM);
+   if (eState[i] == 1)
+   {
+      modelLight = 6;
+      ball(0, 1.13, 0, 0.05, 0.08 + isin(frameNo * 40) * 0.01, 0.05, C_FLAME_HOT);
+   }
+}
+
+// a ghost: a pale round head and body tapering to a wisp, dark eyes;
+// see-through, and fading when it is about to vanish
+void drawGhost(int i)
+{
+   if (eState[i] == 1 && (eTimer[i] & 2) == 0)
+      return;
+   modelAt(eX[i], eY[i], eZ[i], eYaw[i]);
+   modelGhost = 1;
+   modelLight = 3;
+   int sway = isin(eTimer[i] * 14) * 60;
+   ball(0, 0.55, 0, 0.32, 0.34, 0.3, C_GHOST);
+   part(0, 0.22, -0.05, 0.22, 0.12, 0.2, sway, 0.35, 0, C_GHOST);
+   part(0, 0.05, -0.12, 0.12, 0.1, 0.12, sway * 2, 0.35, 0, C_GHOST_DARK);
+   modelGhost = 0;
+   part(-0.11, 0.62, 0.27, 0.05, 0.07, 0.02, 0, 0, 0, C_EYE);
+   part(0.11, 0.62, 0.27, 0.05, 0.07, 0.02, 0, 0, 0, C_EYE);
+   part(0, 0.45, 0.28, 0.06, 0.04, 0.02, 0, 0, 0, C_EYE);
+   modelGhost = 1;
+   part(-0.3, 0.45, 0.05, 0.12, 0.05, 0.05, -sway, 0.45, 0.05, C_GHOST);
+   part(0.3, 0.45, 0.05, 0.12, 0.05, 0.05, sway, 0.45, 0.05, C_GHOST);
+   modelGhost = 0;
+}
+
+// a bomb: black and round, a brass cap, a fuse, little feet
+void drawBomb(int i)
+{
+   modelAt(eX[i], eY[i], eZ[i], eYaw[i]);
+   modelFlash = eFlash[i] & 1;
+   int step = isin(eB[i] * 60) * 200;
+   part(-0.12, 0.05, 0.02, 0.07, 0.05, 0.1, step, 0.1, 0, C_BRASS_DARK);
+   part(0.12, 0.05, 0.02, 0.07, 0.05, 0.1, -step, 0.1, 0, C_BRASS_DARK);
+   ball(0, 0.38, 0, 0.3, 0.3, 0.3, C_BOMB);
+   part(0, 0.7, 0, 0.09, 0.04, 0.09, 0, 0, 0, C_BRASS);
+   part(0, 0.78, 0, 0.02, 0.06, 0.02, 0, 0, 0, C_CREAM);
+   part(-0.1, 0.45, 0.27, 0.04, 0.06, 0.02, 0, 0, 0, C_WHITE);
+   part(0.1, 0.45, 0.27, 0.04, 0.06, 0.02, 0, 0, 0, C_WHITE);
+   part(-0.1, 0.44, 0.285, 0.02, 0.03, 0.01, 0, 0, 0, C_EYE);
+   part(0.1, 0.44, 0.285, 0.02, 0.03, 0.01, 0, 0, 0, C_EYE);
+   modelFlash = 0;
+}
+
+// a suit of armour: boxes of steel, a red plume, a round shield
+void drawKnight(int i)
+{
+   modelAt(eX[i], eY[i], eZ[i], eYaw[i]);
+   modelFlash = (eFlash[i] >> 1) & 1;
+   int step = isin(eB[i] * 30) * 220;
+   part(-0.15, 0.3, 0, 0.09, 0.3, 0.1, step, 0.6, 0, C_ARMOUR_DARK);
+   part(0.15, 0.3, 0, 0.09, 0.3, 0.1, -step, 0.6, 0, C_ARMOUR_DARK);
+   part(0, 0.95, 0, 0.27, 0.32, 0.18, 0, 0, 0, C_ARMOUR);
+   part(0, 1.42, 0, 0.17, 0.17, 0.17, 0, 0, 0, C_ARMOUR);
+   part(0, 1.43, 0.17, 0.12, 0.02, 0.01, 0, 0, 0, C_EYE_GLOW);
+   part(0, 1.68, -0.05, 0.04, 0.1, 0.14, 0, 0, 0, C_PLUME);
+   part(-0.36, 0.95, 0.05, 0.07, 0.28, 0.08, -step / 2, 1.2, 0, C_ARMOUR_DARK);
+   part(0.36, 0.95, 0.22, 0.2, 0.28, 0.03, 0, 0, 0, C_ARMOUR);
+   modelFlash = 0;
+}
+
+// a bat: a small body, two wings that beat
+void drawBat(int i)
+{
+   modelAt(eX[i], eY[i], eZ[i], eYaw[i]);
+   int flap = isin(eTimer[i] * 90) * 300;
+   if (eState[i] == 0)
+      flap = 300;
+   ball(0, 0, 0, 0.13, 0.13, 0.15, C_BAT);
+   part(-0.25, 0, 0, 0.2, 0.02, 0.12, 0, 0, 0, C_BAT);
+   part(0.25, 0, 0, 0.2, 0.02, 0.12, 0, 0, 0, C_BAT);
+   part(-0.45, 0, 0, 0.12, 0.015, 0.1, flap, 0, 0, C_BAT);
+   part(0.45, 0, 0, 0.12, 0.015, 0.1, -flap, 0, 0, C_BAT);
+   part(-0.05, 0.03, 0.13, 0.02, 0.02, 0.01, 0, 0, 0, C_SPIDER_EYE);
+   part(0.05, 0.03, 0.13, 0.02, 0.02, 0.01, 0, 0, 0, C_SPIDER_EYE);
+}
+
+// a spider on its thread
+void drawSpider(int i)
+{
+   // the thread, up to where it hangs from
+   modelAt(eX[i], eY[i], eZ[i], eYaw[i]);
+   ffloat len = eHY[i] - eY[i] + 0.4;
+   part(0, 0.3 + len / 2, 0, 0.01, len / 2, 0.01, 0, 0, 0, C_WHITE);
+   ball(0, 0.2, 0, 0.18, 0.15, 0.22, C_SPIDER);
+   int wig = isin(frameNo * 50) * 80;
+   for (int k = 0; k < 4; k++)
+   {
+      ffloat z = -0.12 + k * 0.08;
+      part(-0.25, 0.18, z, 0.14, 0.015, 0.015, wig, 0.18, z, C_SPIDER);
+      part(0.25, 0.18, z, 0.14, 0.015, 0.015, -wig, 0.18, z, C_SPIDER);
+   }
+   part(-0.06, 0.25, 0.2, 0.025, 0.025, 0.01, 0, 0, 0, C_SPIDER_EYE);
+   part(0.06, 0.25, 0.2, 0.025, 0.025, 0.01, 0, 0, 0, C_SPIDER_EYE);
+}
+
+void drawKey(int i)
+{
+   modelAt(eX[i], eY[i] + isin(frameNo * 16) * 0.08, eZ[i], eYaw[i]);
+   modelLight = 3;
+   part(0, 0.7, 0, 0.12, 0.12, 0.03, 0, 0, 0, C_KEY);
+   part(0, 0.45, 0, 0.03, 0.18, 0.03, 0, 0, 0, C_KEY);
+   part(0.06, 0.32, 0, 0.05, 0.03, 0.03, 0, 0, 0, C_KEY);
+   part(0.06, 0.4, 0, 0.04, 0.025, 0.03, 0, 0, 0, C_KEY);
+}
+
+// a door: iron-bound oak, as a textured slab
+void drawDoor(int i)
+{
+   if (eState[i] == 2)
+      return;
+   modelAt(eX[i], eY[i], eZ[i], eYaw[i] == 0 ? 0 : 256);
+   for (int c = 0; c < 8; c++)
+   {
+      ffloat lx = -1.5;
+      if ((c & 1) != 0)
+         lx = 1.5;
+      ffloat ly = 0;
+      if ((c & 2) != 0)
+         ly = 3;
+      ffloat lz = -0.2;
+      if ((c & 4) != 0)
+         lz = 0.2;
+      modelPoint(c, lx, ly, lz);
+   }
+   crateFace(0, 2, 3, 1, TX_DOOR);
+   crateFace(4, 5, 7, 6, TX_DOOR);
+   crateFace(2, 6, 7, 3, TX_IRON);
+   crateFace(1, 3, 7, 5, TX_IRON);
+   crateFace(0, 4, 6, 2, TX_IRON);
+}
+
+// a platform: a slab of stone banded with iron
+void drawPlatform(int i)
+{
+   modelAt(eX[i], eY[i], eZ[i], 0);
+   ffloat shake = 0;
+   if (eType[i] == E_FALLER && eState[i] == 1)
+      shake = isin(frameNo * 200) * 0.04;
+   for (int c = 0; c < 8; c++)
+   {
+      ffloat lx = -1;
+      if ((c & 1) != 0)
+         lx = 1;
+      ffloat ly = -0.3;
+      if ((c & 2) != 0)
+         ly = 0;
+      ffloat lz = -1;
+      if ((c & 4) != 0)
+         lz = 1;
+      modelPoint(c, lx + shake, ly, lz);
+   }
+   int top = TX_FLAGS;
+   if (eType[i] == E_FALLER)
+      top = TX_WOOD;
+   crateFace(2, 6, 7, 3, top);
+   crateFace(0, 2, 3, 1, TX_IRON);
+   crateFace(4, 5, 7, 6, TX_IRON);
+   crateFace(1, 3, 7, 5, TX_IRON);
+   crateFace(0, 4, 6, 2, TX_IRON);
+   crateFace(0, 1, 5, 4, TX_IRON);
+}
+
+void drawHeart(int i)
+{
+   modelAt(eX[i], eY[i] + 0.3 + isin(frameNo * 16) * 0.08, eZ[i], eYaw[i]);
+   modelLight = 3;
+   ball(-0.09, 0.12, 0, 0.11, 0.11, 0.08, C_HEART);
+   ball(0.09, 0.12, 0, 0.11, 0.11, 0.08, C_HEART);
+   part(0, 0.0, 0, 0.1, 0.1, 0.07, 128, 0.0, 0, C_HEART);
+}
+
+// the exit: a great lantern on a post, its light spilling out
+void drawExit(int i)
+{
+   modelAt(eX[i], eY[i], eZ[i], eYaw[i]);
+   part(0, 0.8, 0, 0.08, 0.8, 0.08, 0, 0, 0, C_BRASS_DARK);
+   part(0, 1.65, 0, 0.35, 0.05, 0.35, 0, 0, 0, C_BRASS);
+   modelLight = 6;
+   ball(0, 2.05, 0, 0.3, 0.35, 0.3, C_FLAME_HOT);
+   modelLight = 0;
+   part(0, 2.5, 0, 0.35, 0.05, 0.35, 0, 0, 0, C_BRASS);
+   part(0, 2.62, 0, 0.12, 0.08, 0.12, 0, 0, 0, C_BRASS_DARK);
+}
+
+// a launch lantern: a star of brass with a flame, turning
+void drawLaunch(int i)
+{
+   modelAt(eX[i], eY[i], eZ[i], eYaw[i]);
+   part(0, 0.08, 0, 0.5, 0.08, 0.5, 0, 0, 0, C_BRASS_DARK);
+   part(0, 0.08, 0, 0.7, 0.05, 0.15, 0, 0, 0, C_BRASS);
+   part(0, 0.08, 0, 0.15, 0.05, 0.7, 0, 0, 0, C_BRASS);
+   modelLight = 6;
+   ball(0, 0.4, 0, 0.18, 0.22 + isin(frameNo * 30) * 0.03, 0.18, C_FLAME);
+}
+
+// a chandelier: a ring of brass, candles burning, on a chain
+void drawChandelier(int i)
+{
+   int swing = isin(frameNo * 3 + i * 50) * 30;
+   modelAt(eX[i], eY[i], eZ[i], frameNo);
+   part(0, 1.5, 0, 0.02, 1.5, 0.02, swing, 3.0, 0, C_BRASS_DARK);
+   for (int k = 0; k < 6; k++)
+   {
+      int a = k * 170;
+      ffloat x = isin(a) * 1.1;
+      ffloat z = icos(a) * 1.1;
+      part(x, 0, z, 0.2, 0.04, 0.2, swing, 3.0, 0, C_BRASS);
+      part(x, 0.14, z, 0.04, 0.1, 0.04, swing, 3.0, 0, C_CREAM);
+      modelLight = 6;
+      part(x, 0.3, z, 0.035, 0.06, 0.035, swing, 3.0, 0, C_FLAME_HOT);
+      modelLight = 0;
+   }
+   part(0, 0, 0, 1.0, 0.04, 0.08, swing, 3.0, 0, C_BRASS_DARK);
+   part(0, 0, 0, 0.08, 0.04, 1.0, swing, 3.0, 0, C_BRASS_DARK);
+}
+
+// a standing suit of armour (it doesn't move)
+void drawArmourDeco(int i)
+{
+   modelAt(eX[i], eY[i], eZ[i], eYaw[i]);
+   part(0, 0.05, 0, 0.4, 0.05, 0.3, 0, 0, 0, C_ARMOUR_DARK);
+   part(-0.15, 0.4, 0, 0.09, 0.3, 0.1, 0, 0, 0, C_ARMOUR_DARK);
+   part(0.15, 0.4, 0, 0.09, 0.3, 0.1, 0, 0, 0, C_ARMOUR_DARK);
+   part(0, 1.05, 0, 0.27, 0.32, 0.18, 0, 0, 0, C_ARMOUR);
+   part(0, 1.52, 0, 0.17, 0.17, 0.17, 0, 0, 0, C_ARMOUR);
+   part(0, 1.53, 0.17, 0.12, 0.02, 0.01, 0, 0, 0, C_EYE);
+   part(0.38, 1.1, 0.12, 0.02, 0.9, 0.02, 0, 0, 0, C_ARMOUR);
+   part(0.38, 2.05, 0.12, 0.06, 0.12, 0.02, 0, 0, 0, C_ARMOUR);
+}
+
+// the Bell-Wraith: a huge ghost, a cowl of shadow, burning eyes,
+// long arms; it swings round the bell
+void drawBoss(int i)
+{
+   if (eState[i] == 0)
+      return;
+   modelAt(eX[i], eY[i], eZ[i], eYaw[i]);
+   mScale = 1;
+   if (eState[i] == 9)
+      mScale = 1 - eTimer[i] * 0.008;
+   modelFlash = (eFlash[i] >> 2) & 1;
+   modelGhost = 1;
+   modelLight = 2;
+   int sway = isin(eTimer[i] * 10) * 80;
+   ball(0, 2.1, 0, 0.9, 1.0, 0.85, C_GHOST);
+   part(0, 1.1, -0.1, 0.75, 0.5, 0.65, sway, 1.6, 0, C_GHOST);
+   part(0, 0.45, -0.25, 0.45, 0.35, 0.4, sway * 2, 1.6, 0, C_GHOST_DARK);
+   part(-0.95, 1.7, 0.2, 0.4, 0.14, 0.14, -sway, 1.8, 0.2, C_GHOST);
+   part(0.95, 1.7, 0.2, 0.4, 0.14, 0.14, sway, 1.8, 0.2, C_GHOST);
+   modelGhost = 0;
+   ball(0, 2.35, 0.25, 0.65, 0.55, 0.45, C_BAT);
+   modelLight = 6;
+   part(-0.22, 2.35, 0.68, 0.1, 0.07, 0.02, 0, 0, 0, C_EYE_GLOW);
+   part(0.22, 2.35, 0.68, 0.1, 0.07, 0.02, 0, 0, 0, C_EYE_GLOW);
+   modelLight = 0;
+   modelFlash = 0;
+   mScale = 1;
+}
+
+void drawOrb(int i)
+{
+   modelAt(eX[i], eY[i], eZ[i], frameNo * 30);
+   modelLight = 6;
+   ball(0, 0, 0, 0.17, 0.17, 0.17, C_EYE_GLOW);
+}
+
+void drawThings()
+{
+   for (int i = 0; i < eCount; i++)
+   {
+      int t = eType[i];
+      if (t == E_NONE)
+         continue;
+      // only what is in front of the camera, and near
+      ffloat ox = eX[i] - camX;
+      ffloat oy = eY[i] - camY;
+      ffloat oz = eZ[i] - camZ;
+      ffloat z = ox * fX + oy * fY + oz * fZ;
+      if (z < -2 || z > FAR)
+         continue;
+      ffloat x = ox * rX + oy * rY + oz * rZ;
+      if (x > z * 2 + 3 || x < -z * 2 - 3)
+         continue;
+      if (t == E_GEAR)
+         drawGear(i, eY[i]);
+      else if (t == E_POPGEAR)
+         drawGear(i, eY[i] - 0.4);
+      else if (t == E_CRATE || t == E_CRATE_GEAR)
+         drawCrate(i);
+      else if (t == E_CANDLE)
+         drawCandle(i);
+      else if (t == E_GHOST)
+         drawGhost(i);
+      else if (t == E_BOMB)
+         drawBomb(i);
+      else if (t == E_KNIGHT)
+         drawKnight(i);
+      else if (t == E_BAT)
+         drawBat(i);
+      else if (t == E_SPIDER)
+         drawSpider(i);
+      else if (t == E_KEY)
+         drawKey(i);
+      else if (t == E_DOOR)
+         drawDoor(i);
+      else if (t == E_MOVER || t == E_FALLER)
+         drawPlatform(i);
+      else if (t == E_HEART)
+         drawHeart(i);
+      else if (t == E_EXIT)
+         drawExit(i);
+      else if (t == E_LAUNCH)
+         drawLaunch(i);
+      else if (t == E_CHANDELIER)
+         drawChandelier(i);
+      else if (t == E_ARMOUR)
+         drawArmourDeco(i);
+      else if (t == E_BOSS)
+         drawBoss(i);
+      else if (t == E_ORB)
+         drawOrb(i);
+   }
+}
+
+// ------------------------------------------------------------------ the screen's frame
+
+int msFrame;
+int showMs;
+int msSky;
+int msClear;
+int msWorld;
+int msThings;
+int msLogic;
+int lastTris;
+int lastPixels;
+
+void drawHud()
+{
+   dimRect(0, 0, SW, 14, col(6, 4, 14));
+   // the candle's health: three flames
+   for (int k = 0; k < 3; k++)
+   {
+      uint16_t c = col(60, 40, 50);
+      uint16_t c2 = col(60, 40, 50);
+      if (k < health)
+      {
+         c = col(255, 200, 60);
+         c2 = col(255, 250, 220);
+      }
+      int x = 6 + k * 12;
+      fillRect(x + 2, 4, 4, 7, c);
+      fillRect(x + 3, 2, 2, 3, c2);
+      fillRect(x + 1, 10, 6, 2, col(180, 140, 70));
+   }
+   // gears
+   uint16_t gc = col(240, 190, 70);
+   fillRect(48, 4, 7, 7, gc);
+   fillRect(50, 2, 3, 11, gc);
+   fillRect(46, 6, 11, 3, gc);
+   fillRect(50, 6, 3, 3, col(60, 40, 20));
+   setInk(col(255, 236, 160), col(20, 12, 24), 1);
+   int x = drawNum(gears, 2, 60, 3);
+   // lives
+   setInk(col(255, 160, 90), col(20, 12, 24), 1);
+   x = drawText("WICK x", x + 12, 3);
+   x = drawNum(imax(0, lives), 1, x, 3);
+   if (keys > 0)
+   {
+      setInk(col(255, 220, 80), col(20, 12, 24), 1);
+      x = drawText("  KEY", x, 3);
+   }
+   if (showMs == 1)
+   {
+      // where the time goes: the whole picture, then sky, depth clear,
+      // the level, the characters, the game's steps; triangles, pixels
+      dimRect(0, 14, SW, 12, col(6, 4, 14));
+      setInk(col(160, 255, 160), col(20, 12, 24), 1);
+      int y2 = 16;
+      int x2 = drawNum(msFrame, 1, 4, y2);
+      x2 = drawText("ms  sky ", x2, y2);
+      x2 = drawNum(msSky, 1, x2, y2);
+      x2 = drawText(" z ", x2, y2);
+      x2 = drawNum(msClear, 1, x2, y2);
+      x2 = drawText(" lvl ", x2, y2);
+      x2 = drawNum(msWorld, 1, x2, y2);
+      x2 = drawText(" obj ", x2, y2);
+      x2 = drawNum(msThings, 1, x2, y2);
+      x2 = drawText(" step ", x2, y2);
+      x2 = drawNum(msLogic, 1, x2, y2);
+      x2 = drawText("  tri ", x2, y2);
+      x2 = drawNum(lastTris, 1, x2, y2);
+      x2 = drawText(" px ", x2, y2);
+      drawNum(lastPixels / 1000, 1, x2, y2);
+      drawText("k", x2 + 20, y2);
+   }
+   setInk(col(255, 255, 255), col(20, 12, 24), 1);
+   char *sc = numText(score, 7);
+   drawText(sc, SW - 4 - textWidth(sc), 3);
+   if (showName > 0)
+   {
+      setInk(col(255, 230, 180), col(30, 10, 30), 2);
+      centreText(levelName(levelNo), 40);
+   }
+   if (paused == 1)
+   {
+      dimRect(0, 0, SW, SH, col(0, 0, 0));
+      setInk(col(255, 255, 255), col(0, 0, 0), 3);
+      centreText("PAUSED", 90);
+      setInk(col(200, 210, 240), col(0, 0, 0), 1);
+      centreText("Enter: go on    Escape: leave", 130);
+   }
+}
+
+void renderFrame()
+{
+   frameNo++;
+   trisDrawn = 0;
+   pixelsDrawn = 0;
+   uint32_t t0 = millis();
+   drawSky();
+   uint32_t t1 = millis();
+   clearDepth();
+   uint32_t t2 = millis();
+   drawWorld();
+   uint32_t t3 = millis();
+   drawShadow();
+   drawThings();
+   if (hDead == 0 || hDead < 40)
+      drawWick();
+   drawParticles();
+   uint32_t t4 = millis();
+   msSky = t1 - t0;
+   msClear = t2 - t1;
+   msWorld = t3 - t2;
+   msThings = t4 - t3;
+   lastTris = trisDrawn;
+   lastPixels = pixelsDrawn;
+   drawHud();
+}
+
+// ------------------------------------------------------------------ the keys
+
+int getKey()
+{
+   int k = readKey();
+   if (k == 10)
+      k = 13;
+   return k;
+}
+
+int held(int a, int b)
+{
+   if (keyHeld(a) == 1)
+      return 1;
+   if (b != 0 && keyHeld(b) == 1)
+      return 1;
+   return 0;
+}
+
+void readKeys()
+{
+   pressJump = 0;
+   pressSpin = 0;
+   menuKey = 0;
+   int k = getKey();
+   while (k != 0)
+   {
+      if (k == KEY_SPACE || k == KEY_K)
+         pressJump = 1;
+      else if (k == KEY_F || k == KEY_J)
+         pressSpin = 1;
+      else if (k == KEY_ENTER || k == KEY_ESC)
+         menuKey = k;
+      else if (k == KEY_P)
+         showMs = 1 - showMs;
+      k = getKey();
+   }
+   kUp = held(KEY_UP, KEY_W);
+   kDown = held(KEY_DOWN, 0);
+   kLeft = held(KEY_LEFT, KEY_A);
+   kRight = held(KEY_RIGHT, 0);
+   kJump = held(KEY_SPACE, KEY_K);
+   kSpin = held(KEY_F, KEY_J);
+}
+
+int waitKey()
+{
+   while (true)
+   {
+      int k = getKey();
+      if (k == KEY_ENTER || k == KEY_SPACE)
+         return 1;
+      if (k == KEY_ESC)
+         return 0;
+      delay(15);
+   }
+   return 0;
+}
+
+void clearScreen(uint16_t c)
+{
+   fillRect(0, 0, SW, SH, c);
+}
+
+// ------------------------------------------------------------------ screens
+
+// the title: the courtyard, the camera slowly round the well
+int title()
+{
+   loadLevel(0);
+   spawnAll();
+   uint32_t t0 = millis();
+   while (true)
+   {
+      uint32_t now = millis();
+      int a = ((now - t0) / 30) & 1023;
+      ffloat cx = isin(a) * 9;
+      ffloat cz = 34 + icos(a) * 9;
+      hx = 0;
+      hy = 0;
+      hz = 34;
+      hDead = 0;
+      hHurt = 0;
+      lookAt(cx, 4.5, cz, 0, 1.5, 34, 0, 1, 0);
+      heroX = 0;
+      heroY = -50;
+      heroZ = 0;
+      frameNo++;
+      drawSky();
+      clearDepth();
+      drawWorld();
+      drawThings();
+      hyaw = (a + 512) & 1023;
+      hGround = 1;
+      hRun = (now - t0);
+      hPlanet = -1;
+      hSpin = 0;
+      drawWick();
+      dimRect(40, 22, 320, 62, col(10, 6, 20));
+      setInk(col(255, 200, 90), col(60, 20, 10), 4);
+      centreText("WICKWIRE", 28);
+      setInk(col(240, 230, 255), col(20, 10, 30), 1);
+      centreText("and the Haunted Keep", 68);
+      if (((now - t0) / 500) % 2 == 0)
+      {
+         setInk(col(255, 255, 255), col(20, 10, 30), 2);
+         centreText("PRESS ENTER", 176);
+      }
+      setInk(col(210, 220, 255), col(10, 5, 20), 1);
+      centreText("arrows run  Space jump  F spin  Escape leave", 206);
+      updateDisplay();
+      int k = getKey();
+      if (k == KEY_ENTER || k == KEY_SPACE)
+         return 1;
+      if (k == KEY_ESC)
+         return 0;
+   }
+   return 1;
+}
+
+void story(int off)
+{
+   int page = off;
+   while (page >= 0)
+   {
+      clearScreen(col(8, 6, 20));
+      fillRect(30, 30, SW - 60, 1, col(140, 100, 50));
+      fillRect(30, SH - 40, SW - 60, 1, col(140, 100, 50));
+      setInk(col(250, 240, 220), col(30, 20, 40), 1);
+      int next = drawStoryPage(page, 44, 56, SW - 88, 14);
+      setInk(col(170, 160, 200), col(0, 0, 0), 1);
+      centreText("Enter", SH - 28);
+      updateDisplay();
+      if (waitKey() == 0)
+         return;
+      page = next;
+   }
+}
+
+void levelCard()
+{
+   clearScreen(col(6, 4, 14));
+   setInk(col(255, 200, 90), col(40, 16, 10), 2);
+   int x = (SW - textWidth("LEVEL 1")) / 2;
+   x = drawText("LEVEL ", x, 70);
+   drawNum(levelNo + 1, 1, x, 70);
+   setInk(col(240, 240, 255), col(20, 10, 40), 2);
+   centreText(levelName(levelNo), 100);
+   setInk(col(255, 255, 255), col(0, 0, 0), 2);
+   x = drawText("WICK x ", 150, 150);
+   drawNum(lives, 1, x, 150);
+   updateDisplay();
+   delay(1600);
+}
+
+void gameOver()
+{
+   clearScreen(col(4, 2, 10));
+   setInk(col(220, 140, 90), col(40, 10, 0), 3);
+   centreText("THE CANDLE", 70);
+   centreText("GOES OUT", 100);
+   setInk(col(220, 220, 240), col(0, 0, 0), 1);
+   int x = drawText("score ", 150, 150);
+   drawNum(score, 7, x, 150);
+   centreText("Enter", 190);
+   updateDisplay();
+   waitKey();
+}
+
+void ending()
+{
+   story(STORY_END);
+   clearScreen(col(6, 6, 20));
+   setInk(col(255, 200, 90), col(40, 16, 10), 3);
+   centreText("WICKWIRE", 60);
+   setInk(col(240, 240, 255), col(0, 0, 0), 1);
+   int x = drawText("final score ", 130, 120);
+   drawNum(score, 7, x, 120);
+   centreText("made with ESPLiveScript on the ESP32-S3", 170);
+   updateDisplay();
+   waitKey();
+}
+
+// ------------------------------------------------------------------ a level
+
+void respawn()
+{
+   hx = checkX;
+   hy = checkY + 0.05;
+   hz = checkZ;
+   hvx = 0;
+   hvy = 0;
+   hvz = 0;
+   hyaw = 0;
+   hGround = 0;
+   hDead = 0;
+   hHurt = 50;
+   hSpin = 0;
+   hFly = 0;
+   hPlanet = -1;
+   hOnMover = -1;
+   gux = 0;
+   guy = 1;
+   guz = 0;
+   health = 3;
+   int zi = zoneAt(hx, hy, hz);
+   if (zi >= 0)
+      hyaw = (zyaw[zi] * 1024 / 360) & 1023;
+   updateCamera(1);
+}
+
+// plays level n: 1 done, 0 out of lives, -1 left
+int playLevel(int n)
+{
+   loadLevel(n);
+   spawnAll();
+   levelCard();
+   levelDone = 0;
+   paused = 0;
+   showName = 80;
+   keys = 0;
+   respawn();
+   hHurt = 0;
+   uint32_t last = millis();
+   int doneSteps = 0;
+   while (true)
+   {
+      readKeys();
+      if (menuKey == KEY_ENTER)
+         paused = 1 - paused;
+      if (menuKey == KEY_ESC)
+      {
+         paused = 1;
+         renderFrame();
+         dimRect(60, 84, 280, 56, col(0, 0, 0));
+         setInk(col(255, 255, 255), col(0, 0, 0), 1);
+         centreText("Leave this run? Y / N", 106);
+         updateDisplay();
+         while (true)
+         {
+            int k = getKey();
+            if (k == KEY_Y)
+               return -1;
+            if (k == KEY_N || k == KEY_ESC || k == KEY_ENTER)
+               break;
+            delay(15);
+         }
+         paused = 0;
+         last = millis();
+      }
+      uint32_t now = millis();
+      if (paused == 1)
+      {
+         renderFrame();
+         updateDisplay();
+         delay(30);
+         last = now;
+         continue;
+      }
+      int steps = (now - last) / 33;
+      if (steps < 1)
+      {
+         delay(33 - (now - last));
+         continue;
+      }
+      if (steps > 3)
+      {
+         steps = 3;
+         last = now;
+      }
+      else
+         last = last + steps * 33;
+      uint32_t tl = millis();
+      for (int s = 0; s < steps; s++)
+      {
+         updateHero();
+         updateThings();
+         updateParticles();
+         if (showName > 0)
+            showName--;
+         pressJump = 0;
+         pressSpin = 0;
+         if (levelDone > 0)
+            doneSteps++;
+      }
+      msLogic = millis() - tl;
+      updateCamera(0);
+      uint32_t t1 = millis();
+      renderFrame();
+      updateDisplay();
+      msFrame = millis() - t1;
+      if (hDead > 50)
+      {
+         lives--;
+         if (lives < 0)
+            return 0;
+         levelCard();
+         respawn();
+         last = millis();
+      }
+      if (levelDone > 0 && doneSteps > 50)
+      {
+         score = score + 1000;
+         return 1;
+      }
+   }
+   return -1;
+}
+
+// ------------------------------------------------------------------ starting
+
+void newGame()
+{
+   score = 0;
+   lives = 4;
+   gears = 0;
+   health = 3;
+}
+
+int main()
+{
+   if (wadLoaded == 0)
+   {
+      printfln("wickwire.wad must be next to the script");
+      return 1;
+   }
+   enableGraphicMode();
+   setPixelsize(2);
+   orgOff = 0;
+   fontOff = wadFind("FONT");
+   textOff = wadFind("TEXT");
+   clearScreen(col(0, 0, 0));
+   setInk(col(255, 200, 90), col(0, 0, 0), 1);
+   centreText("winding up...", 116);
+   updateDisplay();
+   makeSines();
+   loadPalette();
+   loadTextures();
+   makeStars();
+   while (true)
+   {
+      if (title() == 0)
+         return 0;
+      story(STORY_INTRO);
+      newGame();
+      int n = startLevel;
+      startLevel = 0;
+      while (n < NLEVELS)
+      {
+         int r = playLevel(n);
+         if (r == 1)
+            n++;
+         else
+         {
+            if (r == 0)
+               gameOver();
+            break;
+         }
+      }
+      if (n >= NLEVELS)
+         ending();
+   }
+   return 0;
+}
+)EOF";
+
+// lcd.init() on core 0 so Bus_RGB's line copy interrupts stay off core 1, where the script draws
+static void lcdInitTask(void *done) {
+  lcd.init();
+  xTaskNotifyGive((TaskHandle_t)done);
+  vTaskDelete(NULL);
+}
+
+void setup() {
+  Serial.begin(115200);
+  xTaskCreatePinnedToCore(lcdInitTask, "lcdInit", 4096, xTaskGetCurrentTaskHandle(), 5, NULL, 0);
+  ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+  frame_buffer = (uint16_t *)lcd._bus_instance._frame_buffer;
+
+  // the names of SolarOS's script runtime, so that one wickwire.bin runs
+  // here, in the GameLauncher and on SolarOS
+  bindVariable((char *)"uint16_t *", (char *)"display", NULL, (void *)&frame_buffer);
+  bindVariable((char *)"uint32_t", (char *)"stride", NULL, (void *)&stride);
+  bindFunction((char *)"void", (char *)"updateDisplay", NULL, (void *)updateDisplay);
+  bindFunction((char *)"void", (char *)"enableGraphicMode", NULL, (void *)enableGraphicMode);
+  bindFunction((char *)"void", (char *)"setPixelsize", (char *)"int", (void *)setPixelsize);
+  bindFunction((char *)"uint32_t", (char *)"millis", NULL, (void *)scriptMillis);
+  bindFunction((char *)"void", (char *)"delay", (char *)"uint32_t", (void *)scriptDelay);
+  bindFunction((char *)"uint32_t", (char *)"rand", (char *)"uint32_t", (void *)scriptRand);
+  bindFunction((char *)"int", (char *)"readKey", NULL, (void *)readKey);
+  bindFunction((char *)"int", (char *)"keyHeld", (char *)"int", (void *)keyHeld);
+  loadWad("/wickwire.wad");
+  bindVariable((char *)"uint8_t *", (char *)"wad", NULL, (void *)&wadData);
+  bindVariable((char *)"int", (char *)"wadLoaded", NULL, (void *)&wadLoaded);
+  bindFunction((char *)"int", (char *)"wadFind", (char *)"char*", (void *)wadFind);
+  // the 3D maths
+  bindFunction((char *)"float", (char *)"sin", (char *)"float", (void *)scriptSin);
+  bindFunction((char *)"float", (char *)"hypot", (char *)"float,float", (void *)scriptHypot);
+  bindFunction((char *)"float", (char *)"atan2", (char *)"float,float", (void *)scriptAtan2);
+
+  // about 70 KB of code: in internal RAM when a block that big is free, else PSRAM
+  setScriptCodeMemory(SCRIPT_CODE_AUTO);
+  uint32_t t0 = millis();
+  setCompileProgress(showProgress, NULL);
+  static ScriptExecutable exec = parseScript(wickwire);
+  setCompileProgress(NULL, NULL);
+  if (!exec.isExeExists()) {
+    showCompileError();
+    return;
+  }
+  printf("wickwire: %u bytes of code, compiled in %u ms\n", (unsigned)exec.exe.binary_size, (unsigned)(millis() - t0));
+
+  hid_keyboard_print_char = print_char;
+  hid_keyboard_release_char = release_char;
+  app_main_keyboard();
+
+  exec.execute("main");
+  printf("wickwire: the game has ended\n");
+}
+
+void loop() {
+  delay(1000);
+}
