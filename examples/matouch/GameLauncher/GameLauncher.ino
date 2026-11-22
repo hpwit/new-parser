@@ -5,12 +5,13 @@
 //
 // The data folder next to this sketch holds the games of the matouch examples:
 // tetris.bin, mazechase.bin, neonracer.bin, prismbreak.bin, xenowing.bin,
-// chromaquest.bin, ironforge.bin, valmora.bin, lumenfall.bin and
-// wickwire.bin. XenoWing's and ChromaQuest's art are in this sketch too
+// chromaquest.bin, ironforge.bin, valmora.bin, lumenfall.bin,
+// wickwire.bin and wickwirelow.bin (the lighter version, before the trees
+// and the sky's scenery). XenoWing's and ChromaQuest's art are in this sketch too
 // (xenowing_assets.h, chroma_assets.h); the others' are WADs on the
 // partition next to the games: ironforge.wad (Ironforge's monsters),
-// valmora.wad, lumenfall.wad and wickwire.wad (Wickwire's textures and
-// levels). Ironforge's keys are held, a bit each in touchHeld, as in
+// valmora.wad, lumenfall.wad, wickwire.wad and wickwirelow.wad
+// (Wickwire's textures and levels). Ironforge's keys are held, a bit each in touchHeld, as in
 // examples/matouch/Ironforge. Valmora, Lumenfall and Wickwire are compiled
 // against the names of SolarOS's script runtime (display, updateDisplay,
 // keyHeld...), bound here too, so the same .bin runs in both.
@@ -518,7 +519,10 @@ static void startGame(int i) {
     loadWad("/valmora.wad");
   if (strncasecmp(gameFile[i], "lumenfall", 9) == 0)
     loadWad("/lumenfall.wad");
-  if (strncasecmp(gameFile[i], "wickwire", 8) == 0)
+  // wickwirelow.bin (the lighter, older Wickwire) has a WAD of its own
+  if (strncasecmp(gameFile[i], "wickwirelow", 11) == 0)
+    loadWad("/wickwirelow.wad");
+  else if (strncasecmp(gameFile[i], "wickwire", 8) == 0)
     loadWad("/wickwire.wad");
   gameBuffer = frame_buffer + gameX;
   while (popKey() != 0)

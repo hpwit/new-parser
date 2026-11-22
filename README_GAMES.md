@@ -482,5 +482,7 @@ Keys: up/down (Z S) run forward and back, left/right (Q D) turn, Space jumps (ag
 | A picture | 82 to 105 ms on the board (about 10 a second): the level's walls and floors take most of it |
 | The WAD | 29 textures and their palette, 6 levels (700 to 3300 quads each), the story; 256 KB |
 
+**Wickwire Low.** `data/wickwirelow.sc`, `wickwirelow.bin` and `wickwirelow.wad` are the version before the trees and the sky's scenery (clouds, birds, the far mountains): the same game, a little lighter to draw. The GameLauncher lists it beside Wickwire and gives it its own WAD; on SolarOS, `asm run wickwirelow.bin`.
+
 Writing it found two limits in the compiler, both fixed: past 64 KB of code the assembler's sizes, kept in 16 bits, wrapped round and it wrote past its buffer (a crash, or a label "not found"; a `.bin` of such code now keeps its sizes after an escape, and older ones load as before), and its lists of lines did the same at 32768 lines. Measuring the renderer on the board also made a shift by a constant one instruction (`srai`, `slli`) instead of three, which every pixel loop gains from.
 
