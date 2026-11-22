@@ -5,14 +5,15 @@
 //
 // The data folder next to this sketch holds the games of the matouch examples:
 // tetris.bin, mazechase.bin, neonracer.bin, prismbreak.bin, xenowing.bin,
-// chromaquest.bin, ironforge.bin and valmora.bin (XenoWing's and
-// ChromaQuest's art are in this sketch too, xenowing_assets.h and
-// chroma_assets.h; Ironforge's monsters are in ironforge.wad and Valmora's
-// pictures and maps in valmora.wad, on the partition next to the games;
+// chromaquest.bin, ironforge.bin, valmora.bin and lumenfall.bin (XenoWing's
+// and ChromaQuest's art are in this sketch too, xenowing_assets.h and
+// chroma_assets.h; Ironforge's monsters are in ironforge.wad, Valmora's
+// pictures and maps in valmora.wad and Lumenfall's in lumenfall.wad, on the
+// partition next to the games;
 // Ironforge's keys are held, a bit each in touchHeld, as in
-// examples/matouch/Ironforge). Valmora is compiled against the names of
-// SolarOS's script runtime (display, updateDisplay, keyHeld...), bound here
-// too, so the same valmora.bin runs in both.
+// examples/matouch/Ironforge). Valmora and Lumenfall are compiled against
+// the names of SolarOS's script runtime (display, updateDisplay, keyHeld...),
+// bound here too, so the same valmora.bin and lumenfall.bin run in both.
 // Any other .bin
 // compiled with the same bindings (below) shows in the menu too.
 // To put them on the board's FFat partition, see the README's "GameLauncher:
@@ -144,7 +145,7 @@ float scriptAtan2(float y, float x) {
   return atan2f(y, x);
 }
 
-// --- the game's WAD, /ironforge.wad or /valmora.wad: read into PSRAM when
+// --- the game's WAD, /ironforge.wad, /valmora.wad or /lumenfall.wad: read into PSRAM when
 // the game starts, and kept until another game wants another one ---
 static uint8_t *wadData = NULL;
 static int wadLoaded = 0;
@@ -491,6 +492,8 @@ static void startGame(int i) {
   }
   if (strncasecmp(gameFile[i], "valmora", 7) == 0)
     loadWad("/valmora.wad");
+  if (strncasecmp(gameFile[i], "lumenfall", 9) == 0)
+    loadWad("/lumenfall.wad");
   gameBuffer = frame_buffer + gameX;
   while (popKey() != 0)
     ;
@@ -546,7 +549,7 @@ void setup() {
   bindVariable((char *)"int", (char *)"wadLoaded", NULL, (void *)&wadLoaded);
   bindFunction((char *)"int", (char *)"wadSprite", (char *)"char*,int,int", (void *)wadSprite);
   bindFunction((char *)"int", (char *)"wadFind", (char *)"char*", (void *)wadFind);
-  // Valmora: SolarOS's names for the same things
+  // Valmora and Lumenfall: SolarOS's names for the same things
   bindVariable((char *)"uint16_t *", (char *)"display", NULL, (void *)&gameBuffer);
   bindVariable((char *)"uint32_t", (char *)"stride", NULL, (void *)&stride);
   bindFunction((char *)"void", (char *)"updateDisplay", NULL, (void *)show16);
