@@ -326,7 +326,10 @@ int readKey() {
 }
 
 // the games on the partition
-#define MAX_GAMES 10
+#define MAX_GAMES 16
+// the menu shows this many at a time and scrolls
+#define MENU_ROWS 7
+static int menuTop = 0;
 static char gameFile[MAX_GAMES][32];
 static uint32_t gameSize[MAX_GAMES];
 static int gameCount = 0;
@@ -447,8 +450,14 @@ static void drawMenu(uint32_t t) {
     centred(100, "NO BIN FILE ON THE FFAT PARTITION", 1, hsv16(0, 200, 255));
     centred(120, "SEE THE README GAMELAUNCHER", 1, hsv16(0, 0, 200));
   }
-  for (int i = 0; i < gameCount; i++) {
-    int y = 60 + i * 18;
+  // a window of MENU_ROWS games that scrolls to keep the chosen one in
+  // view, above the message and the keys' line
+  if (selected < menuTop)
+    menuTop = selected;
+  if (selected >= menuTop + MENU_ROWS)
+    menuTop = selected - MENU_ROWS + 1;
+  for (int i = menuTop; i < gameCount && i < menuTop + MENU_ROWS; i++) {
+    int y = 60 + (i - menuTop) * 18;
     bool on = i == selected;
     if (on)
       fill(40, y - 3, 320, 16, hsv16(200 + (t / 10) % 20, 230, 160));
@@ -458,6 +467,14 @@ static void drawMenu(uint32_t t) {
     snprintf(line, sizeof(line), "%u", (unsigned)gameSize[i]);
     text(300, y + 1, line, 1, hsv16(45, 150, 220));
   }
+  // more above or below: a small arrow at the window's edge
+  uint16_t arrow = hsv16(45, 150, 255);
+  if (menuTop > 0)
+    for (int k = 0; k < 5; k++)
+      fill(200 - k, 52 + k, 1 + 2 * k, 1, arrow);
+  if (menuTop + MENU_ROWS < gameCount)
+    for (int k = 0; k < 5; k++)
+      fill(200 - k, 60 + MENU_ROWS * 18 + 4 - k, 1 + 2 * k, 1, arrow);
   centred(214, "Z S CHOOSE   SPACE PLAY   ESC BACK", 1, hsv16(150, 40, 180));
   if (message[0])
     centred(198, message, 1, hsv16(0, 220, 255));
@@ -609,7 +626,7 @@ void loop() {
       selected--;
     if ((k == 's' || k == 'S') && selected < gameCount - 1)
       selected++;
-    if (k >= '1' && k < '1' + gameCount)
+    if (k >= '1' && k <= '9' && k < '1' + gameCount)
       selected = k - '1';
     if ((k == ' ' || k == '\n' || (k >= '1' && k <= '9')) && gameCount > 0) {
       startGame(selected);
