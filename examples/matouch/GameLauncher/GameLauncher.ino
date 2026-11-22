@@ -129,6 +129,13 @@ void scriptDelay(uint32_t ms) {
   vTaskDelay(t > 0 ? t : 1);
 }
 
+static int scriptArgc = 0;
+
+int scriptArg(int i) {
+  (void)i;
+  return 0;
+}
+
 uint32_t scriptRand(uint32_t n) {
   return esp_random() % n;
 }
@@ -558,6 +565,9 @@ void setup() {
   bindFunction((char *)"void", (char *)"enableGraphicMode", NULL, (void *)enableGraphicMode);
   bindFunction((char *)"int", (char *)"keyHeld", (char *)"int", (void *)keyHeld);
   bindFunction((char *)"void", (char *)"delay", (char *)"uint32_t", (void *)scriptDelay);
+  // SolarOS's command line: none here (Wickwire then starts full screen)
+  bindVariable((char *)"int", (char *)"argc", NULL, (void *)&scriptArgc);
+  bindFunction((char *)"int", (char *)"arg", (char *)"int", (void *)scriptArg);
   // a large game's code goes to PSRAM when no internal block is big enough
   setScriptCodeMemory(SCRIPT_CODE_AUTO);
   // XenoWing's sprites and the five layers of its alien world (in flash)

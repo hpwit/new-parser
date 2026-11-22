@@ -27,6 +27,7 @@ HEAD = r'''// Wickwire and the Haunted Keep, on the ESP32-S3-Touch-LCD-7: a 3D p
 //   Space (K)               jump; again in the air: a second jump
 //   F (J)                   spin: breaks crates, kicks bombs, beats ghosts
 //   Enter                   pause; Escape leaves; P shows the frame time
+//   M                       full screen or a window in the middle (pixel size 2 or 1)
 //
 // Needs the modified LovyanGFX Bus_RGB driver (double frame buffer with
 // show(), _frame_buffer, pixel_size, offset) and the ESP32_USB_Host_HID
@@ -80,6 +81,13 @@ uint32_t scriptMillis() {
 void scriptDelay(uint32_t ms) {
   TickType_t t = pdMS_TO_TICKS(ms);
   vTaskDelay(t > 0 ? t : 1);
+}
+
+static int scriptArgc = 0;
+
+int scriptArg(int i) {
+  (void)i;
+  return 0;
 }
 
 float scriptSin(float a) {
@@ -253,6 +261,10 @@ void setup() {
   bindVariable((char *)"uint8_t *", (char *)"wad", NULL, (void *)&wadData);
   bindVariable((char *)"int", (char *)"wadLoaded", NULL, (void *)&wadLoaded);
   bindFunction((char *)"int", (char *)"wadFind", (char *)"char*", (void *)wadFind);
+  // SolarOS's command line: none here (the game starts full screen; M
+  // switches to a window in the middle of the panel)
+  bindVariable((char *)"int", (char *)"argc", NULL, (void *)&scriptArgc);
+  bindFunction((char *)"int", (char *)"arg", (char *)"int", (void *)scriptArg);
   // the 3D maths
   bindFunction((char *)"float", (char *)"sin", (char *)"float", (void *)scriptSin);
   bindFunction((char *)"float", (char *)"hypot", (char *)"float,float", (void *)scriptHypot);

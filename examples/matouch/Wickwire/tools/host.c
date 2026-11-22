@@ -1,7 +1,7 @@
 /* Wickwire on a Mac: the script compiled as C (ffloat as float), the
  * SolarOS bindings stubbed, keys from a file, pictures saved as PPM.
  *
- *   cc -O2 -o host host.c -lm && ./host ../data/wickwire.wad keys.txt outdir
+ *   cc -O2 -o host host.c -lm && ./host ../data/wickwire.wad keys.txt outdir [pixel size]
  *
  * keys.txt as Lumenfall's: ENTER ESC SPACE y n ...; hold:KEYS:MS with
  * U D L R (the arrows), J jump, F spin; wait:MS; shot:name; level:n; god;
@@ -28,6 +28,9 @@ static char **toks;
 static int ntoks, ti;
 static const char *outdir;
 static uint32_t seed = 12345;
+int argc_ = 0;
+static int arg0 = 0;
+static int pixel = 2;
 static uint32_t holdUntil, waitUntil;
 static int heldU, heldD, heldL, heldR, heldJ, heldF;
 static int queue[32], qh, qt;
@@ -39,10 +42,11 @@ static void save(const char *name)
     char path[512];
     snprintf(path, sizeof(path), "%s/%s.ppm", outdir, name);
     FILE *f = fopen(path, "wb");
-    fprintf(f, "P6\n400 240\n255\n");
+    int w = pixel == 1 ? 800 : 400, h = pixel == 1 ? 480 : 240;
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
     const uint16_t *b = frames[back ^ 1];
-    for (int i = 0; i < 400 * 240; i++) {
-        uint16_t s = b[(i / 400) * 800 + (i % 400)];
+    for (int i = 0; i < w * h; i++) {
+        uint16_t s = b[(i / w) * 800 + (i % w)];
         uint16_t v = (uint16_t)((s << 8) | (s >> 8));
         unsigned char px[3] = {(unsigned char)(((v >> 11) & 31) * 255 / 31),
                                (unsigned char)(((v >> 5) & 63) * 255 / 63),
@@ -146,7 +150,8 @@ int readKey(void)
     return c;
 }
 void enableGraphicMode(void) {}
-void setPixelsize(int n) { (void)n; }
+void setPixelsize(int n) { pixel = n; }
+int arg(int i) { return i == 0 ? arg0 : 0; }
 void printfln(const char *f, ...)
 {
     va_list a;
@@ -174,7 +179,9 @@ int wadFind(const char *name)
 
 #define main script_main
 #define rand(n) host_rand(n)
+#define argc argc_
 #include "wickwire.sc"
+#undef argc
 #undef main
 
 int main(int argc, char **argv)
@@ -194,6 +201,10 @@ int main(int argc, char **argv)
         toks[ntoks++] = strdup(tok);
     fclose(f);
     outdir = argv[3];
+    if (argc > 4) {
+        argc_ = 1;
+        arg0 = atoi(argv[4]);
+    }
     int r = script_main();
     printf("script returned %d after %ld pictures\n", r, shown);
     return 0;
