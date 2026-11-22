@@ -35,6 +35,11 @@ def courtyard():
         w.box(x, 0, -4, x + 0.3, 0.6, 12, T['STONE'], T['MOSS_STONE'])
     w.thing('START', 0, 0, -2)
     gear_line(w, 0, 0.6, 2, 0, 10, 5)
+    # the approach: trees on the banks
+    for (x, z) in ((-7, -1), (8, 2), (-9, 7), (6.5, 9)):
+        w.tree(x, z, h=3.2)
+    for (x, z) in ((-5, 4), (5, 0), (-4.6, 10.5), (9.5, 5.5)):
+        w.bush(x, z)
     w.thing('CRATE', -1.5, 0, 6)
     w.thing('CRATE', 1.5, 0, 8)
 
@@ -97,11 +102,23 @@ def courtyard():
     w.thing('GHOST', 6, 1.2, 38)
     w.thing('BOMB', 4, 0, 42)
     w.thing('HEART', -10, 0.6, 44)
+    # trees, bushes and barrels about the yard, lamps along the path
+    for (x, z, h) in ((-10, 24.5, 3.4), (10.5, 25, 3.0), (-11, 39, 3.6), (11, 42, 3.2), (-6.5, 44, 2.6)):
+        w.tree(x, z, h=h, r=1.1 + h * 0.08)
+    for (x, z) in ((-12.5, 30), (12.5, 33), (-4.5, 23.5), (4.5, 23.5), (12.6, 37.5), (-12.6, 36)):
+        w.bush(x, z, r=0.55)
+    for (x, z) in ((7, 44.5), (7.9, 44.8), (-12.8, 27.5), (12.8, 45)):
+        w.barrel(x, z)
+    for z in (27, 40):
+        w.lamp_post(-2.6, z)
+        w.lamp_post(2.6, z)
 
     # the keep's front: a wall across with stairs up to the wall walk
     w.box(-14, 0, 46, -3, 4, 50, T['STONE'], T['FLAGS'])
     w.box(3, 0, 46, 14, 4, 50, T['STONE'], T['FLAGS'])
-    w.stairs(-3, 46, 6, 8, 0.5, 0.5, 0, axis='z')
+    w.stairs(-3, 46, 6, 8, 0.5, 0.5, 0, axis='z', tex='RED_BRICK', top='FLAGS')
+    w.lamp_post(-3.6, 45.4)
+    w.lamp_post(3.6, 45.4)
     w.floor(-3, 50, 3, 50.5, 4, T['FLAGS'])
     w.wall(-14, 50, -14, 46, 4, 10, T['STONE'])
     w.wall(14, 46, 14, 50, 4, 10, T['STONE'])
@@ -174,6 +191,8 @@ def staircase():
     w.fog_near, w.fog_far = 14.0, 30.0
     w.ambient = 6.0
     w.stars = 0
+    w.scenery = 0
+    w.birds = 0
 
     # the hall
     w.floor(-9, -2, 9, 34, 0, T['MARBLE'])
@@ -252,6 +271,8 @@ def gallery():
     w.fog_near, w.fog_far = 10.0, 26.0
     w.ambient = 5.5
     w.stars = 0
+    w.scenery = 0
+    w.birds = 0
     L = 96
     w.wall(-4, L, -4, 0, -6, 6, T['STONE_DARK'])
     w.wall(4, 0, 4, L, -6, 6, T['STONE_DARK'])
@@ -341,7 +362,10 @@ def rooftops():
             if (z // 12) % 2:
                 w.box(x - 0.6, h, z + 3, x + 0.6, h + 2, z + 4.2, T['RED_BRICK'], collide=False)
     for z in (8, 40, 76):
-        w.box(-0.6, 3.2, z, 0.6, 5.0, z + 1.2, T['RED_BRICK'], T['STONE_DARK'])
+        side = 1.6 if (z // 8) % 2 else -1.6
+        w.box(side - 0.5, 1.5, z, side + 0.5, 4.6, z + 1.0, T['RED_BRICK'], T['STONE_DARK'])
+    for (x, z) in ((-6, 18), (6, 46), (-6, 64), (6, 82)):
+        w.tree(x, z, y=-6, h=7.0, r=1.8)
     for (x, z) in ((-12, 30), (12, 62), (-12, 92)):
         w.cylinder(x, z, 2.5, -6, 12, 12, T['STONE'], collide=False)
         w.cone(x, z, 3.0, 12, 5, 12, T['ROOF'])
@@ -371,6 +395,8 @@ def moonlets():
     w.fog = (90, 60, 200)
     w.fog_near, w.fog_far = 16.0, 30.0
     w.ambient = 7.5
+    w.scenery = 2
+    w.birds = 0
     # the starting platform of star-stone
     w.box(-3, -1, -3, 3, 0, 5, T['STARSTONE'], T['STARSTONE'])
     w.thing('START', 0, 0, -1)

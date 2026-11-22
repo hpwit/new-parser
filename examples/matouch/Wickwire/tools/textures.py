@@ -523,6 +523,21 @@ def candle_wall():
     return t
 
 
+def leaves():
+    """Foliage: clumps of leaves, lit from above."""
+    t = Tex()
+    r = random.Random(33)
+    for y in range(N):
+        for x in range(N):
+            v = 0.45 + (noise(33, x * 2, y * 2) - 0.5) * 0.6
+            t.put(x, y, ramp([rgb('#0e3a14'), rgb('#1e6a24'), rgb('#3aa030'), rgb('#8ad850')], v))
+    for _ in range(60):
+        x, y = r.randrange(N), r.randrange(N)
+        t.put(x, y, rgb('#b0f070'))
+        t.put(x + 1, y + 1, rgb('#0a2a10'))
+    return t
+
+
 TEXTURES = [
     ('STONE', stone), ('STONE_DARK', stone_dark), ('FLAGS', flags), ('WOOD', wood),
     ('CRATE', crate), ('CRATE_GEAR', crate_gear), ('ROOF', roof), ('CARPET', carpet),
@@ -532,7 +547,7 @@ TEXTURES = [
     ('MARBLE', marble), ('BANNER', banner), ('PORTRAIT1', lambda: portrait(1)), ('PORTRAIT2', lambda: portrait(2)),
     ('WINDOW', window), ('DOOR', door), ('BOOKS', books), ('WATER', water),
     ('MOON_ROCK', moon_rock), ('MOON_MOSS', moon_moss), ('STARSTONE', starstone), ('RED_BRICK', red_brick),
-    ('PILLAR', pillar), ('BRONZE', bell_bronze), ('SCONCE', candle_wall),
+    ('PILLAR', pillar), ('BRONZE', bell_bronze), ('SCONCE', candle_wall), ('LEAVES', leaves),
 ]
 
 # the characters' flat colours: they take the palette's last entries

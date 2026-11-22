@@ -83,6 +83,8 @@ class World:
         self.fog_near = 10.0
         self.fog_far = 26.0
         self.stars = 1
+        self.scenery = 1     # the distance: 0 none, 1 mountains and hills, 2 a sea of clouds
+        self.birds = 1
 
     # ---------------------------------------------------- quads
 
@@ -264,6 +266,26 @@ class World:
             self.box(min(ax, bx, ax + nx, bx + nx), y, min(az, bz, az + nz, bz + nz),
                      max(ax, bx, ax + nx, bx + nx), y + h, max(az, bz, az + nz, bz + nz), tex)
             t += merlon + gap
+
+    def tree(self, x, z, y=0.0, h=3.0, r=1.2):
+        """A tree: a trunk, a round crown of leaves (three spheres)."""
+        self.cylinder(x, z, 0.18, y, y + h * 0.55, 6, TEX['WOOD'], collide=True)
+        for (dx, dy, dz, k) in ((0, 0.75, 0, 1.0), (-0.45, 0.55, 0.2, 0.7), (0.4, 0.6, -0.25, 0.7)):
+            self.sphere(x + dx * r, y + h * dy + r * 0.2, z + dz * r, r * k, 6, TEX['LEAVES'], pull=0)
+            self.spheres.pop()
+
+    def bush(self, x, z, y=0.0, r=0.6):
+        self.sphere(x, y + r * 0.55, z, r, 6, TEX['LEAVES'], pull=0)
+        self.spheres.pop()
+
+    def barrel(self, x, z, y=0.0):
+        self.cylinder(x, z, 0.38, y, y + 0.9, 8, TEX['WOOD'], top=TEX['WOOD'])
+
+    def lamp_post(self, x, z, y=0.0):
+        """An iron post with a lit lantern on top, and its light."""
+        self.box(x - 0.08, y, z - 0.08, x + 0.08, y + 2.4, z + 0.08, TEX['IRON'])
+        self.box(x - 0.22, y + 2.4, z - 0.22, x + 0.22, y + 2.85, z + 0.22, TEX['SCONCE'], TEX['IRON'], collide=False)
+        self.light(x, y + 2.6, z, 9.0, 6.0)
 
     def light(self, x, y, z, strength=9.0, reach=6.0):
         self.lights.append((x, y, z, strength, reach))

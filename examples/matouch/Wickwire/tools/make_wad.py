@@ -15,7 +15,8 @@ The WAD ("PWAD", u32 count, u32 directory, 16-byte entries as Valmora's):
 A level, unpacked (little endian; positions are int16 in 64ths of a unit):
   header, 32 int16: quads, boxes, spheres, things, zones, cells across,
   cells down, grid x0, grid z0, cell size, list length, fog r g b,
-  sky top r g b, sky bottom r g b, fog near, fog far, stars, then 0s
+  sky top r g b, sky bottom r g b, fog near, fog far, stars, scenery
+  (0 none, 1 mountains and hills, 2 a sea of clouds), birds, then 0s
   quads:   4 corners x, y, z; 4 x (u, v) in texels (32 a repeat); normal
            x, y, z (int8, 127 = 1); texture; light 0..15; flags
            (1 emissive, 2 a triangle)                       (46 bytes)
@@ -172,7 +173,7 @@ def level_lump(w):
     assert len(quads) < 65536 and len(lst) < 65536
 
     hdr = [len(quads), len(w.boxes), len(w.spheres), len(w.things), len(w.zones), gw, gh, gx0, gz0, int(CELL),
-           len(lst)] + list(w.fog) + list(w.sky[0]) + list(w.sky[1]) + [int(w.fog_near), int(w.fog_far), w.stars]
+           len(lst)] + list(w.fog) + list(w.sky[0]) + list(w.sky[1]) + [int(w.fog_near), int(w.fog_far), w.stars, w.scenery, w.birds]
     hdr += [0] * (32 - len(hdr))
     data = bytearray(struct.pack('<32h', *hdr))
     for (q, uv, tex, flags, n, lv) in quads:

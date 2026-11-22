@@ -286,7 +286,8 @@ char wickwire[] = R"EOF(// WICKWIRE AND THE HAUNTED KEEP - a 3D platform game, a
 #define TX_PILLAR 26
 #define TX_BRONZE 27
 #define TX_SCONCE 28
-#define NTEX 29
+#define TX_LEAVES 29
+#define NTEX 30
 #define C_FOX 232
 #define C_FOX_DARK 233
 #define C_CREAM 234
@@ -472,6 +473,8 @@ int skyBotB;
 ffloat fogNear;
 ffloat fogFar;
 int starsOn;
+int scenery;        // the distance: 0 none (indoors), 1 mountains and hills, 2 a sea of clouds
+int birdsOn;
 uint16_t skyRow[SH];
 
 // where the WAD's other lumps are
@@ -1351,6 +1354,248 @@ int shadeFor(int light, ffloat z)
    return (fog * 16 + light) * 256;
 }
 
+// ------------------------------------------------------------------ the distance
+//
+// Painted into the sky before the level, so it costs no polygon: a ring of
+// far mountains in the haze, nearer hills with the towers of other castles
+// and their lit windows, drifting clouds, birds. Each is a direction on a
+// sky dome round the camera: only its turning moves them, never its place.
+
+ffloat farHill[256];    // the far range: its height (a slope) per 1/256 turn
+ffloat nearHill[256];   // the near hills
+uint8_t towerAt[256];   // a tower on the near hills: its height in pixels-ish
+uint16_t farCol;
+uint16_t nearCol;
+uint16_t nearDark;
+uint16_t cloudLit;
+uint16_t cloudMid;
+uint16_t cloudDark;
+uint16_t windowCol;
+uint16_t birdCol;
+ffloat cloudA[12];
+ffloat cloudE[12];
+ffloat cloudS[12];
+ffloat birdA[8];
+ffloat birdE[8];
+int birdPh[8];
+
+int mixc(int a, int b, int k)
+{
+   return a + (((b - a) * k) >> 8);
+}
+
+void makeScenery()
+{
+   // heights from a few waves that close up round the turn
+   int p1 = rnd(1024);
+   int p2 = rnd(1024);
+   int p3 = rnd(1024);
+   for (int i = 0; i < 256; i++)
+   {
+      int a = i * 4;
+      ffloat h = isin(a * 3 + p1) * 0.05 + isin(a * 7 + p2) * 0.03 + isin(a * 13 + p3) * 0.015;
+      farHill[i] = 0.1 + h;
+      ffloat n = isin(a * 5 + p2) * 0.03 + isin(a * 11 + p1) * 0.018 + isin(a * 23 + p3) * 0.008;
+      nearHill[i] = 0.045 + n;
+      towerAt[i] = 0;
+   }
+   // a few towers, two or three columns wide
+   for (int t = 0; t < 7; t++)
+   {
+      int at = rnd(250);
+      int h = 14 + rnd(22);
+      for (int k = 0; k < 3; k++)
+         towerAt[at + k] = h;
+   }
+   farCol = col(mixc(skyBotR, fogR, 90) * 3 / 4, mixc(skyBotG, fogG, 90) * 3 / 4, mixc(skyBotB, fogB, 90) * 4 / 5);
+   nearCol = col(fogR * 2 / 5, fogG * 2 / 5 + 10, fogB * 2 / 5);
+   nearDark = col(fogR / 4, fogG / 4 + 6, fogB / 4);
+   cloudLit = col(255, 250, 245);
+   cloudMid = col(mixc(255, skyBotR, 90), mixc(250, skyBotG, 90), mixc(255, skyBotB, 70));
+   cloudDark = col(mixc(220, skyTopR, 120), mixc(220, skyTopG, 120), mixc(240, skyTopB, 100));
+   windowCol = col(255, 220, 110);
+   birdCol = col(skyTopR / 3, skyTopG / 3, skyTopB / 3);
+   for (int c = 0; c < 12; c++)
+   {
+      cloudA[c] = rnd(1024);
+      cloudE[c] = 0.12 + rnd(100) * 0.004;
+      if (scenery == 2)
+         cloudE[c] = -0.08 - rnd(100) * 0.004;
+      cloudS[c] = 0.6 + rnd(100) * 0.008;
+   }
+   for (int b = 0; b < 8; b++)
+   {
+      birdA[b] = rnd(1024);
+      birdE[b] = 0.2 + rnd(100) * 0.003;
+      birdPh[b] = rnd(1024);
+   }
+}
+
+// a direction on the dome (angle a round, slope e up) on the screen;
+// 0 when behind the camera
+int domeX;
+int domeY;
+
+int domePoint(ffloat a, ffloat e)
+{
+   int ai = (int)(a);
+   ffloat dx = isin(ai);
+   ffloat dz = icos(ai);
+   ffloat z = dx * fX + e * fY + dz * fZ;
+   if (z < 0.15)
+      return 0;
+   ffloat x = dx * rX + e * rY + dz * rZ;
+   ffloat y = dx * uX + e * uY + dz * uZ;
+   domeX = HALFW + (int)(x * 230 / z);
+   domeY = HALFH - (int)(y * 230 / z);
+   return 1;
+}
+
+// the screen row of slope e in the direction of screen column x
+int rowOfSlope(int x, ffloat e)
+{
+   // the column's way, flat: forward plus right times its offset
+   ffloat k = x - HALFW;
+   k = k / 230;
+   ffloat dx = fX + rX * k;
+   ffloat dz = fZ + rZ * k;
+   ffloat l = len2(dx, dz);
+   if (l < 0.001)
+      return SH;
+   dx = dx / l;
+   dz = dz / l;
+   ffloat z = dx * fX + e * fY + dz * fZ;
+   if (z < 0.05)
+      return SH;
+   ffloat y = dx * uX + e * uY + dz * uZ;
+   return HALFH - (int)(y * 230 / z);
+}
+
+// the mountains, the hills, their towers: columns of colour down from
+// their crest to the bottom of the screen (the level covers what is near)
+void drawRanges()
+{
+   int step = 2;
+   for (int x = 0; x < SW; x = x + step)
+   {
+      ffloat k = x - HALFW;
+      k = k / 230;
+      ffloat dx = fX + rX * k;
+      ffloat dz = fZ + rZ * k;
+      int ang = iangle(dx, dz);
+      int idx = (ang >> 2) & 255;
+      int yFar = rowOfSlope(x, farHill[idx]);
+      int yNear = rowOfSlope(x, nearHill[idx]);
+      int yGround = rowOfSlope(x, 0);
+      int tower = towerAt[idx];
+      if (yFar < 0)
+         yFar = 0;
+      for (int y = yFar; y < SH && y < yNear; y++)
+      {
+         int o = orgOff + y * stride + x;
+         display[o] = farCol;
+         display[o + 1] = farCol;
+      }
+      int yTop = yNear;
+      if (tower > 0 && scenery == 1)
+         yTop = yNear - tower;
+      if (yTop < 0)
+         yTop = 0;
+      for (int y = yTop; y < SH && y < yGround + 40; y++)
+      {
+         uint16_t c = nearCol;
+         if (y >= yNear + 6)
+            c = nearDark;
+         if (tower > 0 && y < yNear && ((y - yTop) % 7) == 3 && ((idx + x) & 2) != 0)
+            c = windowCol;
+         int o = orgOff + y * stride + x;
+         display[o] = c;
+         display[o + 1] = c;
+      }
+   }
+}
+
+// a filled ellipse on the screen, one colour
+void blob(int cx, int cy, int rx, int ry, uint16_t c)
+{
+   if (rx < 1 || ry < 1)
+      return;
+   for (int dy = -ry; dy <= ry; dy++)
+   {
+      int y = cy + dy;
+      if (y < 0 || y >= SH)
+         continue;
+      int w = rx * (ry * ry - dy * dy);
+      int half = 0;
+      // the half width: rx * sqrt(1 - (dy/ry)^2), by a short search
+      while (half < rx && (half + 1) * (half + 1) * ry * ry <= rx * rx * (ry * ry - dy * dy))
+         half++;
+      w = half;
+      int x0 = imax(0, cx - w);
+      int x1 = imin(SW - 1, cx + w);
+      int o = orgOff + y * stride;
+      for (int x = x0; x <= x1; x++)
+         display[o + x] = c;
+   }
+}
+
+// clouds: puffs, lit on top, darker under; they drift round slowly
+void drawClouds()
+{
+   for (int c = 0; c < 12; c++)
+   {
+      cloudA[c] = cloudA[c] + 0.08;
+      if (cloudA[c] >= 1024)
+         cloudA[c] = cloudA[c] - 1024;
+      if (domePoint(cloudA[c], cloudE[c]) == 0)
+         continue;
+      int cx = domeX;
+      int cy = domeY;
+      if (cx < -80 || cx > SW + 80 || cy < -40 || cy > SH + 40)
+         continue;
+      int r = (int)(cloudS[c] * 22);
+      blob(cx - r, cy + r / 4, r * 2 / 3, r / 2, cloudDark);
+      blob(cx + r, cy + r / 4, r * 2 / 3, r / 2, cloudDark);
+      blob(cx, cy + r / 5, r, r / 2, cloudDark);
+      blob(cx - r * 2 / 3, cy, r * 2 / 3, r / 2, cloudMid);
+      blob(cx + r * 2 / 3, cy - r / 8, r * 3 / 4, r / 2, cloudMid);
+      blob(cx, cy - r / 3, r * 2 / 3, r / 2, cloudMid);
+      blob(cx - r / 4, cy - r / 2, r / 2, r / 3, cloudLit);
+      blob(cx + r / 2, cy - r / 3, r / 3, r / 4, cloudLit);
+   }
+}
+
+// birds: a little V each, beating its wings, crossing the sky
+void drawBirds()
+{
+   for (int b = 0; b < 8; b++)
+   {
+      birdA[b] = birdA[b] + 0.6 + b * 0.05;
+      if (birdA[b] >= 1024)
+         birdA[b] = birdA[b] - 1024;
+      ffloat e = birdE[b] + isin(frameNo * 3 + birdPh[b]) * 0.01;
+      if (domePoint(birdA[b], e) == 0)
+         continue;
+      int x = domeX;
+      int y = domeY;
+      if (x < 4 || x >= SW - 4 || y < 2 || y >= SH - 4)
+         continue;
+      int flap = (frameNo / 3 + b) & 3;
+      int wy = 1;
+      if (flap == 0)
+         wy = -2;
+      if (flap == 2)
+         wy = 2;
+      for (int k = 0; k < 4; k++)
+      {
+         int yy = y + (wy * k) / 3;
+         display[orgOff + yy * stride + x - k] = birdCol;
+         display[orgOff + yy * stride + x + k] = birdCol;
+      }
+      display[orgOff + (y + 1) * stride + x] = birdCol;
+   }
+}
+
 // ------------------------------------------------------------------ the level
 
 int levelNo;
@@ -1406,6 +1651,8 @@ void loadLevel(int n)
    fogNear = rd16(40);
    fogFar = rd16(42);
    starsOn = rd16(44);
+   scenery = rd16(46);
+   birdsOn = rd16(48);
    if (nquads > MAXQ)
       nquads = MAXQ;
    int p = 64;
@@ -1503,6 +1750,7 @@ void loadLevel(int n)
    }
    makeShades();
    makeSky();
+   makeScenery();
 }
 
 // ------------------------------------------------------------------ drawing the world
@@ -1526,24 +1774,9 @@ void makeStars()
    }
 }
 
-// the sky's colour a row, and the depth buffer cleared, in one pass
-void drawSky()
+// the stars and the moon: directions on the sky, as the clouds
+void drawStarsAndMoon()
 {
-   int i = 0;
-   for (int y = 0; y < SH; y++)
-   {
-      uint16_t c = skyRow[y];
-      int dOff = orgOff + y * stride - y * SW;
-      int iEnd = i + SW;
-      while (i < iEnd)
-      {
-         display[i + dOff] = c;
-         zb[i] = 0;
-         i++;
-      }
-   }
-   if (starsOn == 0)
-      return;
    uint16_t w0 = col(255, 255, 255);
    uint16_t w1 = col(200, 210, 255);
    uint16_t w2 = col(255, 230, 190);
@@ -1598,6 +1831,33 @@ void drawSky()
             }
          }
    }
+}
+
+
+// the sky's colour a row, and the depth buffer cleared, in one pass
+void drawSky()
+{
+   int i = 0;
+   for (int y = 0; y < SH; y++)
+   {
+      uint16_t c = skyRow[y];
+      int dOff = orgOff + y * stride - y * SW;
+      int iEnd = i + SW;
+      while (i < iEnd)
+      {
+         display[i + dOff] = c;
+         zb[i] = 0;
+         i++;
+      }
+   }
+   if (starsOn == 1)
+      drawStarsAndMoon();
+   if (scenery == 1)
+      drawRanges();
+   if (scenery >= 1)
+      drawClouds();
+   if (birdsOn == 1)
+      drawBirds();
 }
 
 void clearDepth()
