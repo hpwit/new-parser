@@ -192,6 +192,15 @@ private:
         char *ptr;
     };
     PoolEntry *_pool = NULL;
+    // The pool's strings live in bump arenas (16 KB blocks chained by
+    // their first word, freed wholesale by clear()): no 16-byte heap
+    // header per line, and nothing the compile frees in between, so it
+    // cannot shred the heap. A released string's bytes just stay until
+    // clear() -- its hash entry goes, which is what correctness needs.
+    char *_arena = NULL;      // the newest block ([0..7]: the previous one)
+    uint32_t _arenaUsed = 0;
+    uint32_t _arenaCap = 0;
+    char *arenaAlloc(uint32_t n);
     uint32_t _poolCap = 0;    // a power of two, or 0
     uint32_t _poolUsed = 0;   // live + tombstones
     static uint32_t poolHash(const char *s);

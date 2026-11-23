@@ -16,7 +16,28 @@ void * p_realloc(void *original,int new_size)
     // an emptied list keeps a minimal block instead
     if (new_size <= 0)
         new_size = 1;
-    void * tmp=realloc(original,new_size);
+    void * tmp=compile_realloc(original,new_size);
     assert(tmp!=NULL);
     return tmp;
 }
+
+#if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+#include "esp_heap_caps.h"
+void *compile_alloc(size_t n)
+{
+    void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p == NULL)
+        p = malloc(n);
+    return p;
+}
+void *compile_realloc(void *p, size_t n)
+{
+    void *q = heap_caps_realloc(p, n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (q == NULL)
+        q = realloc(p, n);
+    return q;
+}
+#else
+void *compile_alloc(size_t n) { return malloc(n); }
+void *compile_realloc(void *p, size_t n) { return realloc(p, n); }
+#endif

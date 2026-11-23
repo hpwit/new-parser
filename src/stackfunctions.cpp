@@ -9,6 +9,24 @@
     // ---- the line pool (see stackfunctions.h): FNV-1a, linear probing,
     // a tombstone is an entry whose ptr is (char *)1
 
+    char *Text::arenaAlloc(uint32_t n)
+    {
+        n = (n + 3u) & ~3u;
+        if (_arena == NULL || _arenaUsed + n > _arenaCap)
+        {
+            uint32_t cap = n + 8 > 16384 ? n + 8 : 16384;
+            char *blk = (char *)compile_alloc(cap);
+            assert(blk != NULL);
+            *(char **)blk = _arena;
+            _arena = blk;
+            _arenaUsed = 8;
+            _arenaCap = cap;
+        }
+        char *p = _arena + _arenaUsed;
+        _arenaUsed += n;
+        return p;
+    }
+
     uint32_t Text::poolHash(const char *s)
     {
         uint32_t h = 2166136261u;
@@ -53,7 +71,8 @@
         uint32_t newCap = _poolCap == 0 ? 256 : _poolCap * 2;
         PoolEntry *old = _pool;
         uint32_t oldCap = _poolCap;
-        _pool = (PoolEntry *)calloc(newCap, sizeof(PoolEntry));
+        _pool = (PoolEntry *)compile_alloc(newCap * sizeof(PoolEntry));
+        memset(_pool, 0, (size_t)newCap * sizeof(PoolEntry));
         assert(_pool != NULL);
         _poolCap = newCap;
         _poolUsed = 0;
@@ -83,8 +102,7 @@
         if (_poolCap == 0 || _poolUsed * 4 >= _poolCap * 3)
             poolGrow();
         size_t n = strlen(m);
-        char *q = (char *)malloc(4 + n + 1);
-        assert(q != NULL);
+        char *q = arenaAlloc(4 + n + 1);
         *(uint32_t *)q = 1;
         memcpy(q + 4, m, n + 1);
         free(m);
@@ -112,10 +130,7 @@
         }
         uint32_t *refs = (uint32_t *)(p - 4);
         if (--*refs == 0)
-        {
-            e->ptr = (char *)1;
-            free(p - 4);
-        }
+            e->ptr = (char *)1;   // the bytes stay in the arena until clear()
     }
 
     void Text::poolReset()
@@ -434,10 +449,15 @@
                 *_texts.getptr(i) = NULL;
             }
         }
-        // every pooled string exactly once, whatever its use count
-        for (uint32_t i = 0; i < _poolCap; i++)
-            if (_pool[i].ptr != NULL && _pool[i].ptr != (char *)1)
-                free(_pool[i].ptr - 4);
+        // the pooled strings all live in the arena: its blocks go at once
+        while (_arena != NULL)
+        {
+            char *prev = *(char **)_arena;
+            free(_arena);
+            _arena = prev;
+        }
+        _arenaUsed = 0;
+        _arenaCap = 0;
         poolReset();
         _texts.clear();
         sp.clear();

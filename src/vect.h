@@ -10,6 +10,13 @@
 
 
 void * p_realloc(void *original,int new_size);
+
+// Compile-time allocations (the vects' storage, the line pool): on an
+// ESP32 with PSRAM they go there, so compiling never squeezes the
+// sketch's internal heap; without PSRAM, and on a host, they are plain
+// malloc. free() takes either kind on the IDF.
+void *compile_alloc(size_t n);
+void *compile_realloc(void *p, size_t n);
 template <class T>
 class vect
 {
