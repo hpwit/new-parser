@@ -3295,3 +3295,130 @@ void allocateLoopRegisters(Text *text)
         i = end;
     }
 }
+
+
+// ---- scaled addressing: addx2/addx4/addx8 ----
+//
+// The codegen scales an array index by its element size with doublings
+// (`*2` is add X,Y,Y; `*4` two of them) and then adds the base:
+//
+//     add a14,a2,a2            addx2 a14,a2,a8
+//     add a14,a8,a14     ->
+//
+//     add a15,a2,a2
+//     add a15,a15,a15          addx4 a15,a2,a10
+//     add a15,a10,a15    ->
+//
+// addx2/addx4/addx8 do the scale and the add in one single-cycle
+// instruction: 1-2 cycles back per indexed access of a 2/4/8-byte
+// element, the inner-loop pattern of every display[]/map[] walk. slli
+// X,Y,{1,2,3} before the base add folds the same way.
+//
+// The doubled temp X stops existing, so the fold only applies when X is
+// dead afterwards: the scan ahead accepts a write to X before any read,
+// and gives up at a label, branch, call or retw (conservative). X == Y
+// is fine -- the doubling lines go away, so the addx reads the original
+// value. Runs last (after allocateLoopRegisters), so hoisted bases fold
+// too.
+
+static bool readsBeforeWrites(Text *text, int from, int reg)
+{
+    for (int i = from; i < text->size(); i++)
+    {
+        const char *l = *text->getChildAtPos(i);
+        if (l == NULL || l[0] == 0 || (l[0] == ' ' && l[1] == 0))
+            continue;
+        if (strchr(l, ':') != NULL || l[0] == 'b' || l[0] == 'j' || isCallLine(l) || strncmp(l, "retw", 4) == 0)
+            return true;   // give up: treated as a read
+        uint32_t use = 0, def = 0;
+        registerUseDef(l, &use, &def);
+        if (use & (1u << reg))
+            return true;
+        if (def & (1u << reg))
+            return false;
+    }
+    return true;   // the end of the buffer: give up
+}
+
+void foldAddressScales(Text *text)
+{
+    int n = text->size();
+    // the significant (non-blank) lines, so the patterns read through
+    // what earlier passes blanked
+    for (int i = 0; i < n; i++)
+    {
+        const char *l0 = *text->getChildAtPos(i);
+        if (l0 == NULL)
+            continue;
+        int x, y, k = 0;
+        int chain[3];
+        int nchain = 0;
+        int sl;
+        if (sscanf(l0, "add a%d,a%d,a%d", &x, &y, &sl) == 3 && y == sl && x < 16 && y < 16)
+        {
+            // a doubling, possibly followed by more of the same register
+            k = 1;
+            chain[nchain++] = i;
+            int j = i;
+            while (k < 3)
+            {
+                int j2 = j + 1;
+                while (j2 < n)
+                {
+                    const char *lj = *text->getChildAtPos(j2);
+                    if (lj != NULL && !(lj[0] == ' ' && lj[1] == 0) && lj[0] != 0)
+                        break;
+                    j2++;
+                }
+                if (j2 >= n)
+                    break;
+                const char *lj = *text->getChildAtPos(j2);
+                int a, b, c;
+                if (sscanf(lj, "add a%d,a%d,a%d", &a, &b, &c) == 3 && a == x && b == x && c == x)
+                {
+                    chain[nchain++] = j2;
+                    k++;
+                    j = j2;
+                }
+                else
+                    break;
+            }
+        }
+        else if (sscanf(l0, "slli a%d,a%d,%d", &x, &y, &sl) == 3 && sl >= 1 && sl <= 3 && x < 16 && y < 16)
+        {
+            k = sl;
+            chain[nchain++] = i;
+        }
+        else
+            continue;
+        // the line after the chain: the base add, reading x once
+        int t = chain[nchain - 1] + 1;
+        while (t < n)
+        {
+            const char *lt = *text->getChildAtPos(t);
+            if (lt != NULL && !(lt[0] == ' ' && lt[1] == 0) && lt[0] != 0)
+                break;
+            t++;
+        }
+        if (t >= n)
+            continue;
+        const char *lt = *text->getChildAtPos(t);
+        int z, p, q;
+        if (sscanf(lt, "add a%d,a%d,a%d", &z, &p, &q) != 3 || z >= 16)
+            continue;
+        int base;
+        if (p == x && q != x)
+            base = q;
+        else if (q == x && p != x)
+            base = p;
+        else
+            continue;
+        // z == x: the addx itself redefines x, so what follows reads the
+        // new value and the old one needs no liveness check
+        if (z != x && readsBeforeWrites(text, t + 1, x))
+            continue;
+        for (int c = 0; c < nchain; c++)
+            text->replaceText(chain[c], " ");
+        text->replaceText(t, string_format("addx%d a%d,a%d,a%d", 1 << k, z, y, base));
+    }
+}

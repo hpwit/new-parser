@@ -213,6 +213,9 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     compileProgressRange(PROGRESS_OPTIMIZE3, PROGRESS_OPTIMIZED, "optimizing");
     PARSER_LOG("loop registers")
     allocateLoopRegisters(&content);
+    PARSER_LOG("fold address scales")
+    foldAddressScales(&content);
+    removeBlankLines(&content);
     // Global initializers run as one more function, @__footer.
     compileProgressRange(PROGRESS_OPTIMIZED, PROGRESS_OPTIMIZED, "optimizing");
     preserveAcrossCalls(&footer);

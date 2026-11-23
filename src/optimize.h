@@ -97,4 +97,8 @@ void preserveAcrossCalls(Text *text);
 // their source or the line reading them, dead computations removed,
 // `movi`+`addi` folded.
 void allocateLoopRegisters(Text *text);
+
+// addx2/addx4/addx8 for the scale-then-add-base addressing chains the
+// codegen emits (see optimize.cpp): runs last, after the register passes.
+void foldAddressScales(Text *text);
 #endif
