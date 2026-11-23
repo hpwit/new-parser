@@ -4229,8 +4229,14 @@ int main()
         "r = r + u%1; "
         "r = r + u%16; "
         "r = r + s/4; "
-        "r = r + s%8; }";
-    runCorrectnessTest("unsigned / and % by a power of two: r == 3347", divPow2Script, 60, 3347);
+        "r = r + s%8; "
+        "int t; t=0-7; "
+        "r = r + t/2; "
+        "r = r + s/8; "
+        "r = r + s/1; }";
+    // the signed additions: -7/2 = -3 (toward zero, not -4), -1000/8 =
+    // -125, -1000/1 = -1000 -> 3347 - 3 - 125 - 1000 = 2219
+    runCorrectnessTest("/ and % by a power of two, signed and unsigned: r == 2219", divPow2Script, 60, 2219);
 
     // `?:` and bare comparisons as values, as in v1: in an assignment, an
     // initializer, a return value or a call argument, the right-hand side

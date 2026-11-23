@@ -1145,12 +1145,16 @@ void _visitoperatorNode(NodeToken *nd)
                 asmInstr = quou;
             else
                 asmInstr = quos;
-            // An unsigned division by a constant power of two is a right
-            // shift (the ESP32's quou takes tens of cycles, srli one):
-            // the same "peek at the movi that just loaded the right
-            // operand" trick as TokenStar's below. Signed stays on quos
-            // (a shift rounds toward minus infinity, quos toward zero).
-            if (asmInstr == quou)
+            // A division by a constant power of two needs no divider (the
+            // ESP32's quou/quos take tens of cycles): the same "peek at
+            // the movi that just loaded the right operand" trick as
+            // TokenStar's below. Unsigned is one srli. Signed must round
+            // toward zero as quos does (a bare srai rounds toward minus
+            // infinity), so the divisor minus one is added first when the
+            // dividend is negative: srai takes its sign (all ones or
+            // zeros), srli keeps its low bits -- four single-cycle
+            // instructions, through the divisor's register, free once its
+            // movi is blanked.
             {
                 char *_last = bufferText->current();
                 char *tocmp = string_format("movi a%d,", register_numr.get());
@@ -1162,10 +1166,34 @@ void _visitoperatorNode(NodeToken *nd)
                         int shift = 0;
                         while ((1 << shift) < b)
                             shift++;
+                        // srli's field is 4 bits: a shift of 16..31 goes
+                        // through extui (the top 32-shift bits)
+                        if (asmInstr != quou && shift > 16)
+                        {
+                            // the correction mask would need a 17+-bit
+                            // extract: the divider keeps those rare ones
+                            free(tocmp);
+                            bufferText->addAfter(string_format(asmInstr, register_numl.get(), register_numl.get(),
+                                                               register_numr.get()));
+                            break;
+                        }
+                        int rl = register_numl.get();
+                        int rr = register_numr.get();
                         bufferText->blankCurrent();
-                        if (shift > 0)
-                            bufferText->addAfter(string_format("srli a%d,a%d,%d", register_numl.get(),
-                                                               register_numl.get(), shift));
+                        if (shift > 0 && asmInstr == quou)
+                        {
+                            if (shift < 16)
+                                bufferText->addAfter(string_format("srli a%d,a%d,%d", rl, rl, shift));
+                            else
+                                bufferText->addAfter(string_format("extui a%d,a%d,%d,%d", rl, rl, shift, 32 - shift));
+                        }
+                        else if (shift > 0)
+                        {
+                            bufferText->addAfter(string_format("srai a%d,a%d,31", rr, rl));
+                            bufferText->addAfter(string_format("extui a%d,a%d,%d,%d", rr, rr, 32 - shift, shift));
+                            bufferText->addAfter(string_format(add, rl, rl, rr));
+                            bufferText->addAfter(string_format("srai a%d,a%d,%d", rl, rl, shift));
+                        }
                         free(tocmp);
                         break;
                     }

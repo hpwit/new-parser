@@ -3422,3 +3422,92 @@ void foldAddressScales(Text *text)
         text->replaceText(t, string_format("addx%d a%d,a%d,a%d", 1 << k, z, y, base));
     }
 }
+
+
+// ---- load-use scheduling ----
+//
+// The LX6/LX7 stall a cycle when a load's result feeds the very next
+// instruction. When the instruction after that one is independent ALU
+// work, sliding it between the load and its user hides the stall:
+//
+//     l16ui a14,a15,0              l16ui a14,a15,0
+//     add   a4,a4,a14      ->      addi  a2,a2,1
+//     addi  a2,a2,1                add   a4,a4,a14
+//
+// The slid line must not touch what the user reads or writes (and the
+// user must not read what it writes), must be plain ALU (reordering two
+// memory accesses, anything with sar, a branch or a call is out), and
+// must not itself read the loaded register, or the stall only moves.
+// The swap exchanges the two slots' strings, so the pool's use counts
+// are untouched. One cycle per catch, in the loops where the loads are.
+
+static bool isLoadLine(const char *l)
+{
+    return strncmp(l, "l32i ", 5) == 0 || strncmp(l, "l16ui ", 6) == 0 || strncmp(l, "l16si ", 6) == 0 ||
+           strncmp(l, "l8ui ", 5) == 0;
+}
+
+static bool isPlainAlu(const char *l)
+{
+    static const char *ops[] = {"add ",  "addi ", "sub ",  "addx2 ", "addx4 ", "addx8 ", "subx2 ", "subx4 ",
+                                "subx8 ", "and ",  "or ",   "xor ",   "movi ",  "mov ",   "movr ",  "slli ",
+                                "srli ",  "srai ", "extui ", "neg ",  "abs ",   "mull "};
+    for (size_t k = 0; k < sizeof(ops) / sizeof(ops[0]); k++)
+        if (strncmp(l, ops[k], strlen(ops[k])) == 0)
+            return true;
+    return false;
+}
+
+static int nextSignificant(Text *text, int from)
+{
+    for (int i = from; i < text->size(); i++)
+    {
+        const char *l = *text->getChildAtPos(i);
+        if (l != NULL && l[0] != 0 && !(l[0] == ' ' && l[1] == 0))
+            return i;
+    }
+    return -1;
+}
+
+void scheduleLoadUse(Text *text)
+{
+    for (int i = 0; i < text->size(); i++)
+    {
+        const char *l0 = *text->getChildAtPos(i);
+        if (l0 == NULL || !isLoadLine(l0))
+            continue;
+        uint32_t use0 = 0, def0 = 0;
+        registerUseDef(l0, &use0, &def0);
+        uint32_t loaded = def0 & 0xFFFF;
+        if (loaded == 0)
+            continue;
+        int i1 = nextSignificant(text, i + 1);
+        if (i1 < 0)
+            continue;
+        const char *l1 = *text->getChildAtPos(i1);
+        if (strchr(l1, ':') != NULL || l1[0] == 'b' || l1[0] == 'j' || isCallLine(l1) || strncmp(l1, "retw", 4) == 0)
+            continue;
+        uint32_t use1 = 0, def1 = 0;
+        registerUseDef(l1, &use1, &def1);
+        if ((use1 & loaded) == 0)
+            continue;   // no stall to hide
+        int i2 = nextSignificant(text, i1 + 1);
+        if (i2 < 0)
+            continue;
+        const char *l2 = *text->getChildAtPos(i2);
+        if (!isPlainAlu(l2))
+            continue;
+        uint32_t use2 = 0, def2 = 0;
+        registerUseDef(l2, &use2, &def2);
+        if (use2 & loaded)
+            continue;   // it would stall in the user's place
+        if ((def2 & (use1 | def1)) != 0 || (use2 & def1) != 0)
+            continue;   // they depend on each other
+        char **p1 = text->getChildAtPos(i1);
+        char **p2 = text->getChildAtPos(i2);
+        char *tmp = *p1;
+        *p1 = *p2;
+        *p2 = tmp;
+        i = i1;   // the user sits at i1 now as ALU; carry on after the load
+    }
+}

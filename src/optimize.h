@@ -101,4 +101,8 @@ void allocateLoopRegisters(Text *text);
 // addx2/addx4/addx8 for the scale-then-add-base addressing chains the
 // codegen emits (see optimize.cpp): runs last, after the register passes.
 void foldAddressScales(Text *text);
+
+// slides an independent ALU line between a load and its next-line user,
+// hiding the one-cycle load-use stall (see optimize.cpp). Runs last.
+void scheduleLoadUse(Text *text);
 #endif
