@@ -4213,6 +4213,25 @@ int main()
         "for (i=0;i<n;i++) { int t; t=a+b; a=b; b=t; } int fib; fib=a;}";
     runCorrectnessTest("fibonacci: fib(10) == 55", fibonacciScript, 60, 55);
 
+    // Unsigned / and % by a constant power of two strength-reduce to
+    // srli/extui (visitnode's movi peek); signed stays on quos/rems (a
+    // shift would round toward minus infinity). Constants stay inside
+    // movi's range: MiniXtensa has no l32r. r (second local, offset 60
+    // as ternaryValueScript's) collects:
+    //   u=1000: u/8 = 125, u%256 = 232, u/1 = 1000, u%1 = 0, u%16 = 8
+    //   s=-1000: s/4 = -250 (toward zero), s%8 = 0
+    // r = 125 + 232*2 + 1000*3 + 0 + 8 - 250 + 0 = 3347
+    static const char *divPow2Script =
+        "void main(){uint32_t u; u=1000; int r; r=0; int s; s=0-1000; "
+        "r = r + u/8; "
+        "r = r + (u%256)*2; "
+        "r = r + (u/1)*3; "
+        "r = r + u%1; "
+        "r = r + u%16; "
+        "r = r + s/4; "
+        "r = r + s%8; }";
+    runCorrectnessTest("unsigned / and % by a power of two: r == 3347", divPow2Script, 60, 3347);
+
     // `?:` and bare comparisons as values, as in v1: in an assignment, an
     // initializer, a return value or a call argument, the right-hand side
     // is a full expression (comparisons, && ||, ?:), not only arithmetic --

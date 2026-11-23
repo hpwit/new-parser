@@ -3,7 +3,8 @@
 // compiler emits for straight-line arithmetic + if/while/for control flow
 // in a single, non-recursive, call-free function: movi/mov/movr, add/sub/
 // mull/quou/quos/remu/and/or/neg/abs, addi, l32i/s32i/l16ui/l16si/s16i/
-// l8ui/s8i, ssl/sll/srl, extui, blt/bge/beq/bne, beqz/bnez/bltz/bgez, j,
+// l8ui/s8i, rems, ssl/sll/srl, slli/srli/srai, addx2/4/8, subx2/4/8, extui,
+// blt/bge/beq/bne, beqz/bnez/bltz/bgez, j,
 // retw.n, entry (a no-op
 // here), and bare "label:" markers.
 //
@@ -246,6 +247,11 @@ struct MiniXtensa
             int32_t b = readReg(args.get(2));
             regs[regNum(args.get(0))] = (b == 0) ? 0 : readReg(args.get(1)) / b;
         }
+        else if (strcmp(op, "rems") == 0)
+        {
+            int32_t d = readReg(args.get(2));
+            regs[regNum(args.get(0))] = d == 0 ? 0 : readReg(args.get(1)) % d;
+        }
         else if (strcmp(op, "remu") == 0)
         {
             int32_t b = readReg(args.get(2));
@@ -270,6 +276,24 @@ struct MiniXtensa
             regs[regNum(args.get(0))] = readReg(args.get(1)) << sar;
         else if (strcmp(op, "srl") == 0)
             regs[regNum(args.get(0))] = (int32_t)(((uint32_t)readReg(args.get(1))) >> sar);
+        else if (strcmp(op, "addx2") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 1) + readReg(args.get(2));
+        else if (strcmp(op, "addx4") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 2) + readReg(args.get(2));
+        else if (strcmp(op, "addx8") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 3) + readReg(args.get(2));
+        else if (strcmp(op, "subx2") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 1) - readReg(args.get(2));
+        else if (strcmp(op, "subx4") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 2) - readReg(args.get(2));
+        else if (strcmp(op, "subx8") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 3) - readReg(args.get(2));
+        else if (strcmp(op, "srli") == 0)
+            regs[regNum(args.get(0))] = (int32_t)(((uint32_t)readReg(args.get(1))) >> (toI32(args.get(2)) & 31));
+        else if (strcmp(op, "slli") == 0)
+            regs[regNum(args.get(0))] = readReg(args.get(1)) << (toI32(args.get(2)) & 31);
+        else if (strcmp(op, "srai") == 0)
+            regs[regNum(args.get(0))] = readReg(args.get(1)) >> (toI32(args.get(2)) & 31);
         else if (strcmp(op, "extui") == 0)
         {
             int shift = (int)toI32(args.get(2));
@@ -359,7 +383,11 @@ struct MiniXtensa
         }
         else
         {
-            *error = op; // caller's error string just names the unsupported mnemonic
+            // op points into tok, freed before the caller reads the error:
+            // a copy that outlives this call
+            static char unsupported[48];
+            snprintf(unsupported, sizeof(unsupported), "%s", op);
+            *error = unsupported;
             return false;
         }
 

@@ -1141,11 +1141,37 @@ void _visitoperatorNode(NodeToken *nd)
         }
         else
         {
-            // asmInstr = quou;
             if (l == __uint32_t__ || r == __uint32_t__)
                 asmInstr = quou;
             else
                 asmInstr = quos;
+            // An unsigned division by a constant power of two is a right
+            // shift (the ESP32's quou takes tens of cycles, srli one):
+            // the same "peek at the movi that just loaded the right
+            // operand" trick as TokenStar's below. Signed stays on quos
+            // (a shift rounds toward minus infinity, quos toward zero).
+            if (asmInstr == quou)
+            {
+                char *_last = bufferText->current();
+                char *tocmp = string_format("movi a%d,", register_numr.get());
+                if (strncmp(_last, tocmp, strlen(tocmp)) == 0)
+                {
+                    int a, b;
+                    if (sscanf(_last, "movi a%d,%d", &a, &b) == 2 && b > 0 && (b & (b - 1)) == 0)
+                    {
+                        int shift = 0;
+                        while ((1 << shift) < b)
+                            shift++;
+                        bufferText->blankCurrent();
+                        if (shift > 0)
+                            bufferText->addAfter(string_format("srli a%d,a%d,%d", register_numl.get(),
+                                                               register_numl.get(), shift));
+                        free(tocmp);
+                        break;
+                    }
+                }
+                free(tocmp);
+            }
             bufferText->addAfter(string_format(asmInstr, register_numl.get(), register_numl.get(), register_numr.get()));
         }
         // return;
@@ -1242,6 +1268,34 @@ void _visitoperatorNode(NodeToken *nd)
         // Signed unless an operand is uint32_t, as in C and as for `/`
         // above: `-7 % 3` is -1. It was always unsigned (remu), which
         // gave 0 for that (0xFFFFFFF9 % 3).
+        // An unsigned remainder by a constant power of two is a mask:
+        // extui keeps the low bits in one cycle (width up to 16 bits).
+        if (l == __uint32_t__ || r == __uint32_t__)
+        {
+            char *_last = bufferText->current();
+            char *tocmp = string_format("movi a%d,", register_numr.get());
+            bool done = false;
+            if (strncmp(_last, tocmp, strlen(tocmp)) == 0)
+            {
+                int a, b;
+                if (sscanf(_last, "movi a%d,%d", &a, &b) == 2 && b > 0 && (b & (b - 1)) == 0 && b <= 65536)
+                {
+                    int shift = 0;
+                    while ((1 << shift) < b)
+                        shift++;
+                    bufferText->blankCurrent();
+                    if (shift == 0)
+                        bufferText->addAfter(string_format(movi, register_numl.get(), 0));
+                    else
+                        bufferText->addAfter(string_format("extui a%d,a%d,0,%d", register_numl.get(),
+                                                           register_numl.get(), shift));
+                    done = true;
+                }
+            }
+            free(tocmp);
+            if (done)
+                break;
+        }
         bufferText->addAfter(string_format((l == __uint32_t__ || r == __uint32_t__) ? remu : rems,
                                            register_numl.get(), register_numl.get(), register_numr.get()));
         //  return;
