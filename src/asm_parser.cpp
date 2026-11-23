@@ -243,7 +243,10 @@ static result_parse_operande operandeParse(char *s, operandeType optype)
     case operandeType::lm128_127:
         return parseNumberRange(s, -128, 127);
     case operandeType::lm32768_32512:
-        return parseNumberRange(s, -32768, 35512);
+        // -32768..32512: ADDMI's range (imm8 << 8). 35512 here was a typo --
+        // it let 32513..35512 through to a wrong encoding (latent: nothing
+        // emits addmi today).
+        return parseNumberRange(s, -32768, 32512);
     case operandeType::l1_31:
         return parseNumberRange(s, 1, 31);
     case operandeType::l1_16:
@@ -273,7 +276,7 @@ static result_parse_operande operandeParse(char *s, operandeType optype)
     return res;
 }
 
-static result_parse_line parseOperandes(char *str, int nboperande, operandeType *optypes, int size,
+static result_parse_line parseOperandes(char *str, int nboperande, const operandeType *optypes, int size,
                                          uint32_t (*createbin)(uint32_t *val))
 {
     result_parse_line result;
