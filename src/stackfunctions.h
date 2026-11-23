@@ -174,6 +174,37 @@ int addTextNoDelete(char* str);
     vect<char *> _texts;
 
 private:
+    // The line pool: every string a slot of _texts points at is owned by
+    // this open-addressing hash (content -> one canonical copy), with a
+    // use count in 4 bytes in front of the characters. addText()/
+    // addAfter()/addBefore()/replaceText() all share through it (what
+    // findText()'s linear scan used to give in O(n) a line), and the
+    // destructive paths (eraseLine, pop, pop_front, replaceText,
+    // blankCurrent) put a use back and free the copy with the last one
+    // (what isReused()'s O(n) scan was for). _poolIdx in an entry is the
+    // slot addText() first gave that content -- only meaningful in
+    // append-only buffers (the tokenizer's all_text), which are the only
+    // callers of addText()'s dedup return.
+    struct PoolEntry
+    {
+        uint32_t h;
+        uint32_t idx;
+        char *ptr;
+    };
+    PoolEntry *_pool = NULL;
+    uint32_t _poolCap = 0;    // a power of two, or 0
+    uint32_t _poolUsed = 0;   // live + tombstones
+    static uint32_t poolHash(const char *s);
+    PoolEntry *poolLookup(const char *s, uint32_t h);
+    PoolEntry *poolSlotFor(uint32_t h);  // insert position (empty or tombstone)
+    void poolGrow();
+    // takes ownership of m (a plain malloc'd string): returns the pooled
+    // copy, its use count raised, and frees m when it was a duplicate
+    char *poolAcquire(char *m, int *firstIdx);
+    // one use less; frees the copy and empties its entry on the last
+    void poolRelease(char *p);
+    void poolReset();
+
     int position;
     char **_it;
     // Set by putIteratorAtPos(-1): the next addAfter() inserts in front
