@@ -276,11 +276,12 @@ static result_parse_operande operandeParse(char *s, operandeType optype)
     return res;
 }
 
-static result_parse_line parseOperandes(char *str, int nboperande, const operandeType *optypes, int size,
-                                         uint32_t (*createbin)(uint32_t *val))
+static result_parse_line parseOperandesV(char *str, int nboperande, const operandeType *optypes, int size,
+                                          uint32_t (*createbin)(uint32_t *val), uint32_t *outValues)
 {
     result_parse_line result;
-    uint32_t values[4] = {0, 0, 0, 0};
+    uint32_t *values = outValues;
+    values[0] = values[1] = values[2] = values[3] = 0;
     asm_Error.error = 0;
     result.align = false;
     result.size = size;
@@ -322,6 +323,55 @@ static result_parse_line parseOperandes(char *str, int nboperande, const operand
     result.op = opCodeType::standard;
     return result;
 }
+
+static result_parse_line parseOperandes(char *str, int nboperande, const operandeType *optypes, int size,
+                                        uint32_t (*createbin)(uint32_t *val))
+{
+    uint32_t values[4];
+    return parseOperandesV(str, nboperande, optypes, size, createbin, values);
+}
+
+// The narrow (16-bit) form of an instruction whose fields fit, the wide
+// one otherwise: the same line of text either way, so nothing upstream
+// changes -- the codegen and the optimizer keep writing "add a5,a6,a7",
+// and the assembler packs it in 2 bytes. fits() sees the parsed operand
+// values (fits == NULL: always). The jump offsets and the alignment
+// padding both work from each line's size, so they follow along.
+static result_parse_line parseOperandesNarrow(char *str, int nboperande, const operandeType *optypes,
+                                              uint32_t (*wide)(uint32_t *), uint32_t (*narrow)(uint32_t *),
+                                              bool (*fits)(uint32_t *))
+{
+    uint32_t values[4];
+    result_parse_line res = parseOperandesV(str, nboperande, optypes, 3, NULL, values);
+    if (asm_Error.error != 0)
+        return res;
+    if (fits == NULL || fits(values))
+    {
+        res.size = 2;
+        res.bincode = narrow(values);
+    }
+    else
+        res.bincode = wide(values);
+    return res;
+}
+
+static bool fitsAddiN(uint32_t *v)
+{
+    int32_t imm = (int32_t)v[2];
+    return imm == -1 || (imm >= 1 && imm <= 15);
+}
+
+static bool fitsMoviN(uint32_t *v)
+{
+    int32_t imm = (int32_t)v[1];
+    return imm >= -32 && imm <= 95;
+}
+
+static bool fitsL32iN(uint32_t *v)
+{
+    return v[2] <= 60 && (v[2] & 3) == 0;
+}
+
 
 // trim() without the mutation: the trimmed text of src in dst. The
 // labels findLabel() reads are pooled (asm_text) -- trimming them in
@@ -611,7 +661,7 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
 
     char *op = sp.opcde;
     if (strcmp(op, "add") == 0)
-        return parseOperandes(sp.operandes, 3, op_add, 3, bin_add);
+        return parseOperandesNarrow(sp.operandes, 3, op_add, bin_add, bin_add_n, NULL);
     if (strcmp(op, "sub") == 0)
         return parseOperandes(sp.operandes, 3, op_sub, 3, bin_sub);
     if (strcmp(op, "quou") == 0)
@@ -631,7 +681,7 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
     if (strcmp(op, "subx8") == 0)
         return parseOperandes(sp.operandes, 3, op_subx8, 3, bin_subx8);
     if (strcmp(op, "addi") == 0)
-        return parseOperandes(sp.operandes, 3, op_addi, 3, bin_addi);
+        return parseOperandesNarrow(sp.operandes, 3, op_addi, bin_addi, bin_addi_n, fitsAddiN);
     if (strcmp(op, "and") == 0)
         return parseOperandes(sp.operandes, 3, op_and, 3, bin_and);
     if (strcmp(op, "or") == 0)
@@ -781,7 +831,7 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
     }
 
     if (strcmp(op, "l32i") == 0)
-        return parseOperandes(sp.operandes, 3, op_l32i, 3, bin_l32i);
+        return parseOperandesNarrow(sp.operandes, 3, op_l32i, bin_l32i, bin_l32i_n, fitsL32iN);
     if (strcmp(op, "l32r") == 0)
     {
         result_parse_line ps = parseOperandes(sp.operandes, 2, op_l32r, 3, bin_l32r);
@@ -855,9 +905,9 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
     if (strcmp(op, "sext") == 0)
         return parseOperandes(sp.operandes, 3, op_rr_imm7_22, 3, bin_sext);
     if (strcmp(op, "mov") == 0)
-        return parseOperandes(sp.operandes, 2, op_mov, 3, bin_mov);
+        return parseOperandesNarrow(sp.operandes, 2, op_mov, bin_mov, bin_mov_n, NULL);
     if (strcmp(op, "movr") == 0)
-        return parseOperandes(sp.operandes, 2, op_mov, 3, bin_mov);
+        return parseOperandesNarrow(sp.operandes, 2, op_mov, bin_mov, bin_mov_n, NULL);
     if (strcmp(op, "abs") == 0)
         return parseOperandes(sp.operandes, 2, op_mov, 3, bin_abs);
     if (strcmp(op, "sll") == 0)
@@ -873,9 +923,9 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
     if (strcmp(op, "neg") == 0)
         return parseOperandes(sp.operandes, 2, op_mov, 3, bin_neg);
     if (strcmp(op, "movi") == 0)
-        return parseOperandes(sp.operandes, 2, op_movi, 3, bin_movi);
+        return parseOperandesNarrow(sp.operandes, 2, op_movi, bin_movi, bin_movi_n, fitsMoviN);
     if (strcmp(op, "s32i") == 0)
-        return parseOperandes(sp.operandes, 3, op_l32i, 3, bin_s32i);
+        return parseOperandesNarrow(sp.operandes, 3, op_l32i, bin_s32i, bin_s32i_n, fitsL32iN);
     if (strcmp(op, "s8i") == 0)
         return parseOperandes(sp.operandes, 3, op_l8ui, 3, bin_s8i);
     if (strcmp(op, "l8ui") == 0)
