@@ -323,19 +323,133 @@ static result_parse_line parseOperandes(char *str, int nboperande, const operand
     return result;
 }
 
+// trim() without the mutation: the trimmed text of src in dst. The
+// labels findLabel() reads are pooled (asm_text) -- trimming them in
+// place would change a pooled string under its hash key.
+static const char *trimCopy(char *dst, size_t n, const char *src)
+{
+    while (*src == ' ' || *src == '\n' || *src == '\r' || *src == '\t')
+        src++;
+    size_t len = 0;
+    while (src[len] && len < n - 1)
+    {
+        if (src[len] == '/' && src[len + 1] == '/')
+            break;
+        dst[len] = src[len];
+        len++;
+    }
+    while (len > 0 && (dst[len - 1] == ' ' || dst[len - 1] == '\n' || dst[len - 1] == '\r' || dst[len - 1] == '\t'))
+        len--;
+    dst[len] = 0;
+    return dst;
+}
+
+static bool isLabelKind(opCodeType op)
+{
+    return op == opCodeType::label || op == opCodeType::data_label || op == opCodeType::number_label ||
+           op == opCodeType::external_var_label || op == opCodeType::external_call;
+}
+
+// The labels seen so far, hashed (FNV-1a, linear probing): what
+// findLabel() scanned every parsed line for, per jump and per label's
+// duplicate check. Grown as the parse appends lines (the labels a call
+// could see are exactly the ones parsed before it, as the scan's were),
+// and rebuilt whenever the parsedLines it mirrors changes or starts over.
+static struct
+{
+    parsedLines *owner;
+    int scanned;
+    uint32_t cap;   // a power of two, or 0
+    uint32_t used;
+    struct LabelSlot
+    {
+        uint32_t h;
+        int32_t idx;   // -1: empty
+    } *e;
+} _labels = {NULL, 0, 0, 0, NULL};
+
+static uint32_t labelHash(const char *s)
+{
+    uint32_t h = 2166136261u;
+    while (*s)
+    {
+        h ^= (uint8_t)*s++;
+        h *= 16777619u;
+    }
+    return h == 0 ? 1 : h;
+}
+
+static void labelCacheReset()
+{
+    free(_labels.e);
+    _labels.e = NULL;
+    _labels.owner = NULL;
+    _labels.scanned = 0;
+    _labels.cap = 0;
+    _labels.used = 0;
+}
+
+static void labelCacheInsert(uint32_t h, int idx)
+{
+    if (_labels.cap == 0 || _labels.used * 4 >= _labels.cap * 3)
+    {
+        uint32_t newCap = _labels.cap == 0 ? 256 : _labels.cap * 2;
+        auto *old = _labels.e;
+        uint32_t oldCap = _labels.cap;
+        _labels.e = (decltype(_labels.e))malloc(newCap * sizeof(*_labels.e));
+        assert(_labels.e != NULL);
+        for (uint32_t i = 0; i < newCap; i++)
+            _labels.e[i].idx = -1;
+        _labels.cap = newCap;
+        for (uint32_t i = 0; i < oldCap; i++)
+            if (old[i].idx != -1)
+            {
+                uint32_t j = old[i].h & (newCap - 1);
+                while (_labels.e[j].idx != -1)
+                    j = (j + 1) & (newCap - 1);
+                _labels.e[j] = old[i];
+            }
+        free(old);
+    }
+    uint32_t j = h & (_labels.cap - 1);
+    while (_labels.e[j].idx != -1)
+        j = (j + 1) & (_labels.cap - 1);
+    _labels.e[j].h = h;
+    _labels.e[j].idx = idx;
+    _labels.used++;
+}
+
 static int findLabel(char *s, parsedLines *asm_parsed)
 {
-    char *strimmed = trim(s);
-    for (int i = 0; i < asm_parsed->size(); i++)
+    char name[128];
+    char stored[128];
+    trimCopy(name, sizeof(name), s);
+    if (_labels.owner != asm_parsed || _labels.scanned > asm_parsed->size())
+    {
+        labelCacheReset();
+        _labels.owner = asm_parsed;
+    }
+    // the lines parsed since the last call: their labels into the table
+    for (int i = _labels.scanned; i < asm_parsed->size(); i++)
     {
         result_parse_line *it = asm_parsed->getChildAtPos(i);
-        if (it->op == opCodeType::label || it->op == opCodeType::data_label ||
-            it->op == opCodeType::number_label || it->op == opCodeType::external_var_label ||
-            it->op == opCodeType::external_call)
+        if (isLabelKind(it->op))
+            labelCacheInsert(labelHash(trimCopy(stored, sizeof(stored), it->getText())), i);
+    }
+    _labels.scanned = asm_parsed->size();
+    if (_labels.cap == 0)
+        return -1;
+    uint32_t h = labelHash(name);
+    uint32_t j = h & (_labels.cap - 1);
+    while (_labels.e[j].idx != -1)
+    {
+        if (_labels.e[j].h == h)
         {
-            if (strcmp(trim(it->getText()), strimmed) == 0)
-                return i;
+            result_parse_line *it = asm_parsed->getChildAtPos(_labels.e[j].idx);
+            if (strcmp(trimCopy(stored, sizeof(stored), it->getText()), name) == 0)
+                return _labels.e[j].idx;
         }
+        j = (j + 1) & (_labels.cap - 1);
     }
     return -1;
 }
@@ -1113,6 +1227,7 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
     // runs off the end of the copied buffer into whatever memory follows.
     int nb_callExt = 0;
     freeLoopHeads();
+    labelCacheReset();
     findLoopHeads(_content);
     findLoopHeads(_footer);
     for (int pass = 0; pass < 2; pass++)
