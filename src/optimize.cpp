@@ -3321,6 +3321,47 @@ void allocateLoopRegisters(Text *text)
 // value. Runs last (after allocateLoopRegisters), so hoisted bases fold
 // too.
 
+// "<op> aX,aY,aZ" (a third number, not a register, when thirdReg is
+// false) without sscanf: on the ESP32 newlib's sscanf costs tens of
+// microseconds per call even on a mismatch at the first character, and
+// the fold looks at every line of the program.
+static bool parseUnsigned(const char *&p, int *out)
+{
+    if (*p < '0' || *p > '9')
+        return false;
+    int v = 0;
+    int digits = 0;
+    while (*p >= '0' && *p <= '9' && digits < 5)
+    {
+        v = v * 10 + (*p - '0');
+        p++;
+        digits++;
+    }
+    *out = v;
+    return true;
+}
+
+static bool parseAluLine(const char *l, const char *op, bool thirdReg, int *a, int *b, int *c)
+{
+    size_t n = strlen(op);
+    if (strncmp(l, op, n) != 0 || l[n] != ' ' || l[n + 1] != 'a')
+        return false;
+    const char *p = l + n + 2;
+    if (!parseUnsigned(p, a) || p[0] != ',' || p[1] != 'a')
+        return false;
+    p += 2;
+    if (!parseUnsigned(p, b) || p[0] != ',')
+        return false;
+    p++;
+    if (thirdReg)
+    {
+        if (*p != 'a')
+            return false;
+        p++;
+    }
+    return parseUnsigned(p, c) && *p == 0;
+}
+
 static bool readsBeforeWrites(Text *text, int from, int reg)
 {
     for (int i = from; i < text->size(); i++)
@@ -3354,7 +3395,7 @@ void foldAddressScales(Text *text)
         int chain[3];
         int nchain = 0;
         int sl;
-        if (sscanf(l0, "add a%d,a%d,a%d", &x, &y, &sl) == 3 && y == sl && x < 16 && y < 16)
+        if (parseAluLine(l0, "add", true, &x, &y, &sl) && y == sl && x < 16 && y < 16)
         {
             // a doubling, possibly followed by more of the same register
             k = 1;
@@ -3374,7 +3415,7 @@ void foldAddressScales(Text *text)
                     break;
                 const char *lj = *text->getChildAtPos(j2);
                 int a, b, c;
-                if (sscanf(lj, "add a%d,a%d,a%d", &a, &b, &c) == 3 && a == x && b == x && c == x)
+                if (parseAluLine(lj, "add", true, &a, &b, &c) && a == x && b == x && c == x)
                 {
                     chain[nchain++] = j2;
                     k++;
@@ -3384,7 +3425,7 @@ void foldAddressScales(Text *text)
                     break;
             }
         }
-        else if (sscanf(l0, "slli a%d,a%d,%d", &x, &y, &sl) == 3 && sl >= 1 && sl <= 3 && x < 16 && y < 16)
+        else if (parseAluLine(l0, "slli", false, &x, &y, &sl) && sl >= 1 && sl <= 3 && x < 16 && y < 16)
         {
             k = sl;
             chain[nchain++] = i;
@@ -3404,7 +3445,7 @@ void foldAddressScales(Text *text)
             continue;
         const char *lt = *text->getChildAtPos(t);
         int z, p, q;
-        if (sscanf(lt, "add a%d,a%d,a%d", &z, &p, &q) != 3 || z >= 16)
+        if (!parseAluLine(lt, "add", true, &z, &p, &q) || z >= 16)
             continue;
         int base;
         if (p == x && q != x)

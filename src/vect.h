@@ -113,7 +113,7 @@ T *vect<T>::push_back(T asset)
     if (_size >= _capacity)
     {
         int new_capacity = (_capacity == 0) ? 1 : (int)_capacity * 2;
-        T *point2 = (point == NULL) ? (T *)malloc((size_t)new_capacity * size_item)
+        T *point2 = (point == NULL) ? (T *)compile_alloc((size_t)new_capacity * size_item)
                                      : (T *)p_realloc(point, new_capacity * size_item);
         if (point2 == NULL)
         {

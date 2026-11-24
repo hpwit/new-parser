@@ -23,8 +23,21 @@ void * p_realloc(void *original,int new_size)
 
 #if defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
 #include "esp_heap_caps.h"
+// Is there any PSRAM? Asked once. Without it every request for PSRAM
+// memory fails, and a failed heap_caps_malloc/realloc is slow (about 3000
+// cycles on an ESP32: measured at 18 ms of a 143 ms compile, from the
+// 1459 vect growths) before the fallback to the plain heap even starts.
+static int psramState = 0;   // 0 not asked, 1 there is, 2 there is not
+static bool havePsram()
+{
+    if (psramState == 0)
+        psramState = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0 ? 1 : 2;
+    return psramState == 1;
+}
 void *compile_alloc(size_t n)
 {
+    if (!havePsram())
+        return malloc(n);
     void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (p == NULL)
         p = malloc(n);
@@ -32,6 +45,8 @@ void *compile_alloc(size_t n)
 }
 void *compile_realloc(void *p, size_t n)
 {
+    if (!havePsram())
+        return realloc(p, n);
     void *q = heap_caps_realloc(p, n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (q == NULL)
         q = realloc(p, n);
