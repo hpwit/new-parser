@@ -411,11 +411,10 @@ static struct
     int scanned;
     uint32_t cap;   // a power of two, or 0
     uint32_t used;
-    struct LabelSlot
-    {
-        uint32_t h;
-        int32_t idx;   // -1: empty
-    } *e;
+    // 4 bytes a slot: the hash's top 8 bits, and the line number + 1 in
+    // the low 24 (0 is an empty slot). The labels' text stays in the
+    // parsed lines, which a hit is checked against.
+    uint32_t *e;
 } _labels = {NULL, 0, 0, 0, NULL};
 
 static uint32_t labelHash(const char *s)
@@ -441,31 +440,33 @@ static void labelCacheReset()
 
 static void labelCacheInsert(uint32_t h, int idx)
 {
+    assert(idx >= 0 && idx < 0xFFFFFF);
     if (_labels.cap == 0 || _labels.used * 4 >= _labels.cap * 3)
     {
         uint32_t newCap = _labels.cap == 0 ? 256 : _labels.cap * 2;
-        auto *old = _labels.e;
+        uint32_t *old = _labels.e;
         uint32_t oldCap = _labels.cap;
-        _labels.e = (decltype(_labels.e))malloc(newCap * sizeof(*_labels.e));
+        _labels.e = (uint32_t *)calloc(newCap, sizeof(uint32_t));
         assert(_labels.e != NULL);
-        for (uint32_t i = 0; i < newCap; i++)
-            _labels.e[i].idx = -1;
         _labels.cap = newCap;
+        char stored[128];
         for (uint32_t i = 0; i < oldCap; i++)
-            if (old[i].idx != -1)
+            if (old[i] != 0)
             {
-                uint32_t j = old[i].h & (newCap - 1);
-                while (_labels.e[j].idx != -1)
+                // the hash is not kept: from the label's own text
+                int at = (int)(old[i] & 0xFFFFFF) - 1;
+                uint32_t oh = labelHash(trimCopy(stored, sizeof(stored), _labels.owner->getChildAtPos(at)->getText()));
+                uint32_t j = oh & (newCap - 1);
+                while (_labels.e[j] != 0)
                     j = (j + 1) & (newCap - 1);
                 _labels.e[j] = old[i];
             }
         free(old);
     }
     uint32_t j = h & (_labels.cap - 1);
-    while (_labels.e[j].idx != -1)
+    while (_labels.e[j] != 0)
         j = (j + 1) & (_labels.cap - 1);
-    _labels.e[j].h = h;
-    _labels.e[j].idx = idx;
+    _labels.e[j] = (h & 0xFF000000u) | (uint32_t)(idx + 1);
     _labels.used++;
 }
 
@@ -491,13 +492,14 @@ static int findLabel(char *s, parsedLines *asm_parsed)
         return -1;
     uint32_t h = labelHash(name);
     uint32_t j = h & (_labels.cap - 1);
-    while (_labels.e[j].idx != -1)
+    while (_labels.e[j] != 0)
     {
-        if (_labels.e[j].h == h)
+        if ((_labels.e[j] & 0xFF000000u) == (h & 0xFF000000u))
         {
-            result_parse_line *it = asm_parsed->getChildAtPos(_labels.e[j].idx);
+            int at = (int)(_labels.e[j] & 0xFFFFFF) - 1;
+            result_parse_line *it = asm_parsed->getChildAtPos(at);
             if (strcmp(trimCopy(stored, sizeof(stored), it->getText()), name) == 0)
-                return _labels.e[j].idx;
+                return at;
         }
         j = (j + 1) & (_labels.cap - 1);
     }
@@ -1363,6 +1365,9 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
         // the loader's data buffer needs to be at least this big.
         _data_size = _address_data;
 
+    // the label lookup is not needed past the assembling: its table goes
+    // now, not at the next compile
+    labelCacheReset();
     return main_error;
 }
 

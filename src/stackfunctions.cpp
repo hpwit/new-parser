@@ -6,26 +6,11 @@
 #include "string.h"
 //#define __SPEED
 
-    // ---- the line pool (see stackfunctions.h): FNV-1a, linear probing,
-    // a tombstone is an entry whose ptr is (char *)1
+    // ---- the line pool (see stackfunctions.h): FNV-1a, linear probing;
+    // a string is [use count:4][slot index:4][characters], one heap block
 
-    char *Text::arenaAlloc(uint32_t n)
-    {
-        n = (n + 3u) & ~3u;
-        if (_arena == NULL || _arenaUsed + n > _arenaCap)
-        {
-            uint32_t cap = n + 8 > 16384 ? n + 8 : 16384;
-            char *blk = (char *)compile_alloc(cap);
-            assert(blk != NULL);
-            *(char **)blk = _arena;
-            _arena = blk;
-            _arenaUsed = 8;
-            _arenaCap = cap;
-        }
-        char *p = _arena + _arenaUsed;
-        _arenaUsed += n;
-        return p;
-    }
+    static inline uint32_t &refsOf(char *p) { return *(uint32_t *)(p - 8); }
+    static inline int32_t &idxOf(char *p) { return *(int32_t *)(p - 4); }
 
     uint32_t Text::poolHash(const char *s)
     {
@@ -38,99 +23,101 @@
         return h == 0 ? 1 : h;
     }
 
-    Text::PoolEntry *Text::poolLookup(const char *s, uint32_t h)
+    char **Text::poolLookup(const char *s, uint32_t h)
     {
         if (_poolCap == 0)
             return NULL;
         uint32_t i = h & (_poolCap - 1);
         while (true)
         {
-            PoolEntry *e = &_pool[i];
-            if (e->ptr == NULL)
+            char *p = _pool[i];
+            if (p == NULL)
                 return NULL;
-            if (e->ptr != (char *)1 && e->h == h && strcmp(e->ptr, s) == 0)
-                return e;
+            if (p != (char *)1 && strcmp(p, s) == 0)
+                return &_pool[i];
             i = (i + 1) & (_poolCap - 1);
         }
     }
 
-    Text::PoolEntry *Text::poolSlotFor(uint32_t h)
+    char **Text::poolSlotFor(uint32_t h)
     {
         uint32_t i = h & (_poolCap - 1);
         while (true)
         {
-            PoolEntry *e = &_pool[i];
-            if (e->ptr == NULL || e->ptr == (char *)1)
-                return e;
+            char *p = _pool[i];
+            if (p == NULL || p == (char *)1)
+                return &_pool[i];
             i = (i + 1) & (_poolCap - 1);
         }
     }
 
     void Text::poolGrow()
     {
-        uint32_t newCap = _poolCap == 0 ? 256 : _poolCap * 2;
-        PoolEntry *old = _pool;
+        // mostly tombstones: the same size, rehashed, clears them
+        uint32_t newCap = _poolCap == 0 ? 256 : (_poolLive * 2 < _poolCap ? _poolCap : _poolCap * 2);
+        char **old = _pool;
         uint32_t oldCap = _poolCap;
-        _pool = (PoolEntry *)compile_alloc(newCap * sizeof(PoolEntry));
-        memset(_pool, 0, (size_t)newCap * sizeof(PoolEntry));
+        _pool = (char **)compile_alloc((size_t)newCap * sizeof(char *));
         assert(_pool != NULL);
+        memset(_pool, 0, (size_t)newCap * sizeof(char *));
         _poolCap = newCap;
         _poolUsed = 0;
         for (uint32_t i = 0; i < oldCap; i++)
-            if (old[i].ptr != NULL && old[i].ptr != (char *)1)
+            if (old[i] != NULL && old[i] != (char *)1)
             {
-                PoolEntry *e = poolSlotFor(old[i].h);
-                *e = old[i];
+                *poolSlotFor(poolHash(old[i])) = old[i];
                 _poolUsed++;
             }
         free(old);
     }
 
-    char *Text::poolAcquire(char *m, int *firstIdx)
+    char *Text::poolAcquire(char *m)
     {
         uint32_t h = poolHash(m);
-        PoolEntry *e = poolLookup(m, h);
+        char **e = poolLookup(m, h);
         if (e != NULL)
         {
-            if (m != e->ptr)
+            char *p = *e;
+            if (m != p)
                 free(m);
-            *(uint32_t *)(e->ptr - 4) += 1;
-            if (firstIdx)
-                *firstIdx = (int)e->idx;
-            return e->ptr;
+            refsOf(p) += 1;
+            return p;
         }
         if (_poolCap == 0 || _poolUsed * 4 >= _poolCap * 3)
             poolGrow();
         size_t n = strlen(m);
-        char *q = arenaAlloc(4 + n + 1);
-        *(uint32_t *)q = 1;
-        memcpy(q + 4, m, n + 1);
+        char *q = (char *)malloc(8 + n + 1);
+        assert(q != NULL);
+        char *p = q + 8;
+        refsOf(p) = 1;
+        idxOf(p) = -1;
+        memcpy(p, m, n + 1);
         free(m);
-        e = poolSlotFor(h);
-        e->h = h;
-        e->ptr = q + 4;
-        e->idx = (uint32_t)-1;
-        _poolUsed++;
-        if (firstIdx)
-            *firstIdx = -1;
-        return q + 4;
+        char **slot = poolSlotFor(h);
+        if (*slot == NULL)
+            _poolUsed++;
+        *slot = p;
+        _poolLive++;
+        return p;
     }
 
     void Text::poolRelease(char *p)
     {
         if (p == NULL)
             return;
-        uint32_t h = poolHash(p);
-        PoolEntry *e = poolLookup(p, h);
-        if (e == NULL || e->ptr != p)
+        char **e = poolLookup(p, poolHash(p));
+        if (e == NULL || *e != p)
         {
             // not a pooled copy (addText(str, si)'s raw append): its own
             free(p);
             return;
         }
-        uint32_t *refs = (uint32_t *)(p - 4);
-        if (--*refs == 0)
-            e->ptr = (char *)1;   // the bytes stay in the arena until clear()
+        if (--refsOf(p) == 0)
+        {
+            *e = (char *)1;
+            _poolLive--;
+            free(p - 8);
+        }
     }
 
     void Text::poolReset()
@@ -139,21 +126,24 @@
         _pool = NULL;
         _poolCap = 0;
         _poolUsed = 0;
+        _poolLive = 0;
     }
 
     int Text::findText(char *str)
     {
-        PoolEntry *e = poolLookup(str, poolHash(str));
+        char **e = poolLookup(str, poolHash(str));
         if (e == NULL)
             return -1;
+        char *p = *e;
         // the slot addText() recorded, when it still holds this string
-        if (e->idx != (uint32_t)-1 && (int)e->idx < _texts.size() && _texts.get((int)e->idx) == e->ptr)
-            return (int)e->idx;
+        int idx = idxOf(p);
+        if (idx >= 0 && idx < _texts.size() && _texts.get(idx) == p)
+            return idx;
         // a line addAfter()/addBefore() put in (no slot recorded), or the
         // recorded one moved: an entry's uses all live in this buffer, so
         // a scan by pointer finds one (rare: the few existence checks)
         for (int i = 0; i < _texts.size(); i++)
-            if (_texts.get(i) == e->ptr)
+            if (_texts.get(i) == p)
                 return i;
         return -1;
     }
@@ -195,20 +185,20 @@
     // tokenizer's string table), a new one otherwise
     int Text::addText(char *str)
     {
-        char *p = poolAcquire(str, NULL);
-        PoolEntry *e = poolLookup(p, poolHash(p));
+        char *p = poolAcquire(str);
         // the slot recorded for this content, when it still holds it --
         // pop() (the tokenizer's #define path) can have taken it away
-        if (e->idx != (uint32_t)-1 && (int)e->idx < _texts.size() && _texts.get((int)e->idx) == p)
+        int idx = idxOf(p);
+        if (idx >= 0 && idx < _texts.size() && _texts.get(idx) == p)
         {
             // already a slot: no new one, the use we just took given back
-            *(uint32_t *)(p - 4) -= 1;
-            return (int)e->idx;
+            refsOf(p) -= 1;
+            return idx;
         }
         _texts.push_back(p);
         position++;
-        e->idx = (uint32_t)(_texts.size() - 1);
-        return (int)e->idx;
+        idxOf(p) = _texts.size() - 1;
+        return idxOf(p);
     }
     void Text::addAfter(int pos, char * s)
     {
@@ -220,7 +210,7 @@
         // store's address loaded after the store.
         if (pos < 0)
         {
-            char *m = poolAcquire(s, NULL);
+            char *m = poolAcquire(s);
             if (_texts.size() == 0)
                 _texts.push_back(m);
             else
@@ -262,7 +252,7 @@
    }
     void Text::addAfter(char *str)
     {
-        char *m = poolAcquire(str, NULL);
+        char *m = poolAcquire(str);
         if (_beforeFirst)
         {
             _beforeFirst = false;
@@ -302,11 +292,11 @@
         char *m2 = (char *)malloc(2);
         m2[0] = 32;
         m2[1] = 0;
-        char *blank = poolAcquire(m2, NULL);
+        char *blank = poolAcquire(m2);
         if (blank == old2)
         {
             // already blank: the use we just took given back
-            *(uint32_t *)(blank - 4) -= 1;
+            refsOf(blank) -= 1;
             return;
         }
         poolRelease(old2);
@@ -351,7 +341,7 @@
     }
     void Text::addBefore(char *s)
     {
-        _it = _texts.insertBefore(_it, poolAcquire(s, NULL));
+        _it = _texts.insertBefore(_it, poolAcquire(s));
         _it++;
         position++;
     }
@@ -374,7 +364,7 @@
             // the new string pooled before the old use goes back, so a
             // replace by the same content keeps the copy alive throughout
             char *old = _texts.get(pos);
-            char *p = poolAcquire(str, NULL);
+            char *p = poolAcquire(str);
             poolRelease(old);
             *_texts.getptr(pos) = p;
         }
@@ -438,8 +428,8 @@
             char *p = _texts.get(i);
             if (p == NULL)
                 continue;
-            PoolEntry *e = poolLookup(p, poolHash(p));
-            if (e == NULL || e->ptr != p)
+            char **e = poolLookup(p, poolHash(p));
+            if (e == NULL || *e != p)
             {
                 free(p);
                 // the same raw pointer never sits in two slots
@@ -449,15 +439,10 @@
                 *_texts.getptr(i) = NULL;
             }
         }
-        // the pooled strings all live in the arena: its blocks go at once
-        while (_arena != NULL)
-        {
-            char *prev = *(char **)_arena;
-            free(_arena);
-            _arena = prev;
-        }
-        _arenaUsed = 0;
-        _arenaCap = 0;
+        // every pooled string still alive, once, whatever its use count
+        for (uint32_t i = 0; i < _poolCap; i++)
+            if (_pool[i] != NULL && _pool[i] != (char *)1)
+                free(_pool[i] - 8);
         poolReset();
         _texts.clear();
         sp.clear();
@@ -485,8 +470,8 @@
         if (pos < 0 or pos >= _texts.size())
             return false;
         char *c = _texts[pos];
-        PoolEntry *e = poolLookup(c, poolHash(c));
-        return e != NULL && e->ptr == c && *(uint32_t *)(c - 4) > 1;
+        char **e = poolLookup(c, poolHash(c));
+        return e != NULL && *e == c && refsOf(c) > 1;
     }
     void Text::pop()
     {

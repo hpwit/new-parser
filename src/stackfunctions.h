@@ -185,32 +185,30 @@ private:
     // slot addText() first gave that content -- only meaningful in
     // append-only buffers (the tokenizer's all_text), which are the only
     // callers of addText()'s dedup return.
-    struct PoolEntry
-    {
-        uint32_t h;
-        uint32_t idx;
-        char *ptr;
-    };
-    PoolEntry *_pool = NULL;
-    // The pool's strings live in bump arenas (16 KB blocks chained by
-    // their first word, freed wholesale by clear()): no 16-byte heap
-    // header per line, and nothing the compile frees in between, so it
-    // cannot shred the heap. A released string's bytes just stay until
-    // clear() -- its hash entry goes, which is what correctness needs.
-    char *_arena = NULL;      // the newest block ([0..7]: the previous one)
-    uint32_t _arenaUsed = 0;
-    uint32_t _arenaCap = 0;
-    char *arenaAlloc(uint32_t n);
-    uint32_t _poolCap = 0;    // a power of two, or 0
-    uint32_t _poolUsed = 0;   // live + tombstones
+    // The table: 4 bytes a slot (NULL empty, (char *)1 a tombstone, else
+    // the string), found by FNV-1a and linear probing, compared with
+    // strcmp; the hash is not kept, a growth recomputes it. Each string
+    // is [use count:4][slot index:4][characters], p pointing at the
+    // characters. The table was 12 bytes a slot (hash and index kept in
+    // it): on a big script it cost three times the strings themselves.
+    char **_pool = NULL;
+    uint32_t _poolCap = 0;     // a power of two, or 0
+    uint32_t _poolUsed = 0;    // live + tombstones
+    uint32_t _poolLive = 0;
+    // The strings are separate heap blocks, as they always were: a line
+    // the optimizer rewrites gives its block back to the heap at once,
+    // for anything to use. (Bump arenas were tried here: a released
+    // line's bytes could only serve a line of the same size, so most of
+    // them stayed dead until the pool was cleared, and a big script's
+    // compile peaked 25-56% above the plain heap's.)
     static uint32_t poolHash(const char *s);
-    PoolEntry *poolLookup(const char *s, uint32_t h);
-    PoolEntry *poolSlotFor(uint32_t h);  // insert position (empty or tombstone)
+    char **poolLookup(const char *s, uint32_t h);
+    char **poolSlotFor(uint32_t h);   // insert position (empty or tombstone)
     void poolGrow();
     // takes ownership of m (a plain malloc'd string): returns the pooled
     // copy, its use count raised, and frees m when it was a duplicate
-    char *poolAcquire(char *m, int *firstIdx);
-    // one use less; frees the copy and empties its entry on the last
+    char *poolAcquire(char *m);
+    // one use less; the block goes on its free list on the last
     void poolRelease(char *p);
     void poolReset();
 
