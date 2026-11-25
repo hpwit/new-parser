@@ -97,4 +97,17 @@ void preserveAcrossCalls(Text *text);
 // their source or the line reading them, dead computations removed,
 // `movi`+`addi` folded.
 void allocateLoopRegisters(Text *text);
+
+// addx2/addx4/addx8 for the scale-then-add-base addressing chains the
+// codegen emits (see optimize.cpp): runs last, after the register passes.
+void foldAddressScales(Text *text);
+
+// slides an independent ALU line between a load and its next-line user,
+// hiding the one-cycle load-use stall (see optimize.cpp). Runs last.
+void scheduleLoadUse(Text *text);
+
+// Innermost counted loops with no call inside become Xtensa
+// zero-overhead loops (`loop`): no limit reload, no taken branch per
+// iteration. Runs last. See optimize.cpp.
+void zeroOverheadLoops(Text *text);
 #endif

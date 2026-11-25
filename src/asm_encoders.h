@@ -13,33 +13,33 @@
 // three registers). Ported from the (otherwise-superseded) old operand
 // table in upstream asm_struct_enum.h -- these specific declarations are
 // still live dependencies of asm_parser_LMbin.h.
-operandeType op_mov_n[2] = {operandeType::registers, operandeType::registers};
-operandeType *op_mov = op_mov_n;
-operandeType op_l8ui[3] = {operandeType::registers, operandeType::registers, operandeType::l0_255};
-operandeType *op_s8i = op_l8ui;
-operandeType op_l16si[3] = {operandeType::registers, operandeType::registers, operandeType::l0_510};
-operandeType *op_l16ui = op_l16si;
-operandeType *op_s16i = op_l16si;
-operandeType op_l32i_n[3] = {operandeType::registers, operandeType::registers, operandeType::l0_60};
-operandeType op_s32i[3] = {operandeType::registers, operandeType::registers, operandeType::l0_1020};
-operandeType *op_s32i_n = op_l32i_n;
-operandeType *op_l32i = op_s32i;
-operandeType op_lsi[3] = {operandeType::floatregisters, operandeType::registers, operandeType::l0_1020};
-operandeType *op_ssi = op_lsi;
-operandeType op_rfr[2] = {operandeType::registers, operandeType::floatregisters};
-operandeType op_wfr[2] = {operandeType::floatregisters, operandeType::registers};
-operandeType op_add[3] = {operandeType::registers, operandeType::registers, operandeType::registers};
-operandeType *op_quou = op_add;
-operandeType *op_sub = op_add;
-operandeType *op_mull = op_add;
-operandeType *op_addx2 = op_add;
-operandeType *op_addx4 = op_add;
-operandeType *op_addx8 = op_add;
-operandeType *op_subx2 = op_add;
-operandeType *op_subx4 = op_add;
-operandeType *op_subx8 = op_add;
+const operandeType op_mov_n[2] = {operandeType::registers, operandeType::registers};
+const operandeType *const op_mov = op_mov_n;
+const operandeType op_l8ui[3] = {operandeType::registers, operandeType::registers, operandeType::l0_255};
+const operandeType *const op_s8i = op_l8ui;
+const operandeType op_l16si[3] = {operandeType::registers, operandeType::registers, operandeType::l0_510};
+const operandeType *const op_l16ui = op_l16si;
+const operandeType *const op_s16i = op_l16si;
+const operandeType op_l32i_n[3] = {operandeType::registers, operandeType::registers, operandeType::l0_60};
+const operandeType op_s32i[3] = {operandeType::registers, operandeType::registers, operandeType::l0_1020};
+const operandeType *const op_s32i_n = op_l32i_n;
+const operandeType *const op_l32i = op_s32i;
+const operandeType op_lsi[3] = {operandeType::floatregisters, operandeType::registers, operandeType::l0_1020};
+const operandeType *const op_ssi = op_lsi;
+const operandeType op_rfr[2] = {operandeType::registers, operandeType::floatregisters};
+const operandeType op_wfr[2] = {operandeType::floatregisters, operandeType::registers};
+const operandeType op_add[3] = {operandeType::registers, operandeType::registers, operandeType::registers};
+const operandeType *const op_quou = op_add;
+const operandeType *const op_sub = op_add;
+const operandeType *const op_mull = op_add;
+const operandeType *const op_addx2 = op_add;
+const operandeType *const op_addx4 = op_add;
+const operandeType *const op_addx8 = op_add;
+const operandeType *const op_subx2 = op_add;
+const operandeType *const op_subx4 = op_add;
+const operandeType *const op_subx8 = op_add;
 
-operandeType op_rsr[2] = {operandeType::registers, operandeType::l0_255};
+const operandeType op_rsr[2] = {operandeType::registers, operandeType::l0_255};
 
 uint32_t bin_rsr(uint32_t *values)
 {
@@ -60,7 +60,7 @@ uint32_t bin_sll(uint32_t *values)
 {
     return ((values[0] << 12) & 0xF000) + ((values[1] << 8) & 0xF00) + 0xa10000;
 }
-operandeType op_ssl[1] = {operandeType::registers};
+const operandeType op_ssl[1] = {operandeType::registers};
 uint32_t bin_ssl(uint32_t *values)
 {
     return ((values[0] << 8) & 0xF00) + 0x401000;
@@ -197,12 +197,12 @@ uint32_t bin_add_n(uint32_t *values)
 {
     return 10 + (((values[2] << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) + (((values[0] << 12) & 0xF000));
 }
-operandeType op_addi[3] = {operandeType::registers, operandeType::registers, operandeType::lm128_127};
+const operandeType op_addi[3] = {operandeType::registers, operandeType::registers, operandeType::lm128_127};
 uint32_t bin_addi(uint32_t *values)
 {
     return 2 + (((values[0] << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) + 0xc000 + (((values[2] << 16) & 0xFF0000));
 }
-operandeType op_addi_n[3] = {operandeType::registers, operandeType::registers, operandeType::lm1_15};
+const operandeType op_addi_n[3] = {operandeType::registers, operandeType::registers, operandeType::lm1_15};
 uint32_t bin_addi_n(uint32_t *values)
 {
     int v = values[2];
@@ -221,7 +221,7 @@ uint32_t bin_s32i_n(uint32_t *values)
     return 0x9 + (((values[0] << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) + ((((values[2] / 4) << 12) & 0xF000));
 }
 
-operandeType op_bnez[2] = {operandeType::registers, operandeType::label};
+const operandeType op_bnez[2] = {operandeType::registers, operandeType::label};
 uint32_t bin_bnez(uint32_t *values)
 {
     return 0x56 + (((values[0] << 8) & 0xF00));
@@ -245,7 +245,28 @@ uint32_t jump_bnez(uint32_t value, uint32_t current_address, uint32_t destinatio
     uint32_t dif = destination_address - current_address - 4;
     return value + ((dif << 12) & 0xFFF000);
 }
-operandeType op_blti[3] = {operandeType::registers, operandeType::l0_15, operandeType::label};
+// The zero-overhead loops (BRI8, op0 6, m 1, n 3, r 8/9/10 for loop,
+// loopnez, loopgtz), checked against xtensa-esp32-elf-as: `loop a2,L`
+// runs the instructions from the next one up to L, a2 times. The offset
+// is unsigned: LEND = pc + 4 + imm8.
+uint32_t bin_loop(uint32_t *values)
+{
+    return 0x8076 + (((values[0] << 8) & 0xF00));
+}
+uint32_t bin_loopnez(uint32_t *values)
+{
+    return 0x9076 + (((values[0] << 8) & 0xF00));
+}
+uint32_t bin_loopgtz(uint32_t *values)
+{
+    return 0xA076 + (((values[0] << 8) & 0xF00));
+}
+uint32_t jump_loop(uint32_t value, uint32_t current_address, uint32_t destination_address)
+{
+    uint32_t dif = destination_address - current_address - 4;
+    return value + ((dif << 16) & 0xFF0000);
+}
+const operandeType op_blti[3] = {operandeType::registers, operandeType::l0_15, operandeType::label};
 uint32_t bin_blti(uint32_t *values)
 {
     return 0xA6 + (((values[1] << 12) & 0xF000)) + (((values[0] << 8) & 0xF00));
@@ -262,7 +283,7 @@ uint32_t bin_beqi(uint32_t *values)
 {
     return 0x26 + (((values[1] << 12) & 0xF000)) + (((values[0] << 8) & 0xF00));
 }
-operandeType op_blt[3] = {operandeType::registers, operandeType::registers, operandeType::label};
+const operandeType op_blt[3] = {operandeType::registers, operandeType::registers, operandeType::label};
 uint32_t bin_blt(uint32_t *values)
 {
     return 0x7 + (((values[1] << 4) & 0xF0)) + (((values[0] << 8) & 0xF00)) + 0x2000;
@@ -277,7 +298,7 @@ uint32_t jump_blt(uint32_t value, uint32_t current_address, uint32_t destination
     return value + ((dif << 16) & 0xFF0000);
 }
 
-operandeType op_bge[3] = {operandeType::registers, operandeType::registers, operandeType::label};
+const operandeType op_bge[3] = {operandeType::registers, operandeType::registers, operandeType::label};
 uint32_t bin_bge(uint32_t *values)
 {
     return 0x7 + (((values[1] << 4) & 0xF0)) + (((values[0] << 8) & 0xF00)) + 0xa000;
@@ -292,7 +313,7 @@ uint32_t jump_bge(uint32_t value, uint32_t current_address, uint32_t destination
     return value + ((dif << 16) & 0xFF0000);
 }
 
-operandeType *op_bne = op_bge;
+const operandeType *const op_bne = op_bge;
 uint32_t bin_bne(uint32_t *values)
 {
     return 0x7 + (((values[1] << 4) & 0xF0)) + (((values[0] << 8) & 0xF00)) + 0x9000;
@@ -303,7 +324,7 @@ uint32_t jump_bne(uint32_t value, uint32_t current_address, uint32_t destination
     return value + ((dif << 16) & 0xFF0000);
 }
 
-operandeType *op_beq = op_bge;
+const operandeType *const op_beq = op_bge;
 uint32_t bin_beq(uint32_t *values)
 {
     return 0x7 + (((values[1] << 4) & 0xF0)) + (((values[0] << 8) & 0xF00)) + 0x1000;
@@ -313,7 +334,7 @@ uint32_t jump_beq(uint32_t value, uint32_t current_address, uint32_t destination
     uint32_t dif = destination_address - current_address - 4;
     return value + ((dif << 16) & 0xFF0000);
 }
-operandeType op_j[1] = {operandeType::label};
+const operandeType op_j[1] = {operandeType::label};
 uint32_t bin_j(uint32_t *values)
 {
     return 0x6;
@@ -324,7 +345,7 @@ uint32_t jump_j(uint32_t value, uint32_t current_address, uint32_t destination_a
     return value + ((dif << 6) & 0xFFFFC0);
 }
 
-operandeType op_slli[3] = {operandeType::registers, operandeType::registers, operandeType::l1_31};
+const operandeType op_slli[3] = {operandeType::registers, operandeType::registers, operandeType::l1_31};
 uint32_t bin_slli(uint32_t *values)
 {
     return ((((32 - values[2]) << 4) & 0xF0)) + (((values[1] << 8) & 0xF00)) +
@@ -334,18 +355,18 @@ uint32_t bin_slli(uint32_t *values)
 // Shifts by a constant, the funnel shift, xor and the high half of a
 // signed product -- used by ffloat arithmetic (visitnode.cpp). Encodings
 // checked against xtensa-esp32-elf-as.
-operandeType op_srai[3] = {operandeType::registers, operandeType::registers, operandeType::l0_31};
+const operandeType op_srai[3] = {operandeType::registers, operandeType::registers, operandeType::l0_31};
 uint32_t bin_srai(uint32_t *values) // srai ar, at, sa
 {
     return 0x210000 + ((values[2] & 0x10) << 16) + ((values[0] << 12) & 0xF000) + ((values[2] << 8) & 0xF00) +
            ((values[1] << 4) & 0xF0);
 }
-operandeType op_srli[3] = {operandeType::registers, operandeType::registers, operandeType::l0_15};
+const operandeType op_srli[3] = {operandeType::registers, operandeType::registers, operandeType::l0_15};
 uint32_t bin_srli(uint32_t *values) // srli ar, at, sa
 {
     return 0x410000 + ((values[0] << 12) & 0xF000) + ((values[2] << 8) & 0xF00) + ((values[1] << 4) & 0xF0);
 }
-operandeType op_ssai[1] = {operandeType::l0_31};
+const operandeType op_ssai[1] = {operandeType::l0_31};
 uint32_t bin_ssai(uint32_t *values) // ssai sa
 {
     return 0x404000 + ((values[0] << 8) & 0xF00) + ((values[0] & 0x10) << 0);
@@ -383,31 +404,31 @@ uint32_t bin_sext(uint32_t *v) { return rrr(2, 3, v[0], v[1], v[2] - 7); }
 uint32_t bin_memw(uint32_t *v) { return 0x0020c0; }
 uint32_t bin_extw(uint32_t *v) { return 0x0020d0; }
 uint32_t bin_isync(uint32_t *v) { return 0x002000; }
-operandeType op_rr_imm7_22[3] = {operandeType::registers, operandeType::registers, operandeType::l7_22};
+const operandeType op_rr_imm7_22[3] = {operandeType::registers, operandeType::registers, operandeType::l7_22};
 
 uint32_t bin_mulsh(uint32_t *values)
 {
     return 0xb20000 + ((values[0] << 12) & 0xF000) + ((values[1] << 8) & 0xF00) + ((values[2] << 4) & 0xF0);
 }
 
-operandeType op_movi[2] = {operandeType::registers, operandeType::lm2048_2047};
+const operandeType op_movi[2] = {operandeType::registers, operandeType::lm2048_2047};
 uint32_t bin_movi(uint32_t *values)
 {
     return 2 + (((values[0] << 4) & 0xF0)) + ((values[1]) & 0xF00) + (0xa << 12) + ((values[1] << 16) & 0xFF0000);
 }
-operandeType op_movi_n[2] = {operandeType::registers, operandeType::lm32_95};
+const operandeType op_movi_n[2] = {operandeType::registers, operandeType::lm32_95};
 uint32_t bin_movi_n(uint32_t *values)
 {
     return 0xc + (((values[0] << 8) & 0xF00)) + ((values[1] << 12) & 0xF000) + ((values[1]) & 0x70);
 }
 
-operandeType *op_and = op_add;
+const operandeType *const op_and = op_add;
 uint32_t bin_and(uint32_t *values)
 {
     return (((values[2] << 4) & 0xF0)) + ((values[1] << 8) & 0xF00) + ((values[0] << 12) & 0x0F000) + 0x100000;
 }
 
-operandeType *op_remu = op_add;
+const operandeType *const op_remu = op_add;
 uint32_t bin_remu(uint32_t *values)
 {
     return (((values[2] << 4) & 0xF0)) + ((values[1] << 8) & 0xF00) + ((values[0] << 12) & 0x0F000) + 0xe20000;
@@ -418,16 +439,16 @@ uint32_t bin_rems(uint32_t *values)
     return (((values[2] << 4) & 0xF0)) + ((values[1] << 8) & 0xF00) + ((values[0] << 12) & 0x0F000) + 0xf20000;
 }
 
-operandeType op_entry[2] = {operandeType::registers, operandeType::l0_32760};
+const operandeType op_entry[2] = {operandeType::registers, operandeType::l0_32760};
 uint32_t bin_entry(uint32_t *values)
 {
     return 0x36 + (((values[0] << 8) & 0xF00)) + (((values[1] / 8) << 12) & 0xFF000);
 }
-operandeType op_word[1] = {operandeType::l0_FFFFFFFF};
+const operandeType op_word[1] = {operandeType::l0_FFFFFFFF};
 uint32_t bin_word(uint32_t *values) { return values[0]; }
 
 // extui ar, at, shift, width: the width field holds width - 1, so 1..16.
-operandeType op_extui[4] = {operandeType::registers, operandeType::registers, operandeType::l0_31, operandeType::l1_16};
+const operandeType op_extui[4] = {operandeType::registers, operandeType::registers, operandeType::l0_31, operandeType::l1_16};
 uint32_t bin_extui(uint32_t *values)
 {
     return (values[1] << 4) + (values[0] << 12) + (2 << 17) +
@@ -435,7 +456,7 @@ uint32_t bin_extui(uint32_t *values)
 }
 uint32_t bin_nop_n(uint32_t *values) { return 0xf03d; }
 uint32_t bin_nop(uint32_t *values) { return 0x0020f0; }
-operandeType op_l32r[2] = {operandeType::registers, operandeType::label};
+const operandeType op_l32r[2] = {operandeType::registers, operandeType::label};
 uint32_t bin_l32r(uint32_t *values) { return 1 + ((values[0] << 4) & 0xF0); }
 
 /******float********/
@@ -468,13 +489,13 @@ uint32_t bin_subs(uint32_t *values)
 {
     return 0x0 + 0x1A0000 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + (((values[2] << 4) & 0xF0));
 }
-operandeType op_floats[3] = {operandeType::floatregisters, operandeType::registers, operandeType::l0_15};
+const operandeType op_floats[3] = {operandeType::floatregisters, operandeType::registers, operandeType::l0_15};
 uint32_t bin_floats(uint32_t *values)
 {
     return 0x0 + 0xCA0000 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + (((values[2] << 4) & 0xF0));
 }
 
-operandeType op_floors[3] = {operandeType::registers, operandeType::floatregisters, operandeType::l0_15};
+const operandeType op_floors[3] = {operandeType::registers, operandeType::floatregisters, operandeType::l0_15};
 uint32_t bin_floors(uint32_t *values)
 {
     return 0x0 + 0xAA0000 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + (((values[2] << 4) & 0xF0));
@@ -483,7 +504,7 @@ uint32_t bin_rounds(uint32_t *values)
 {
     return 0x0 + 0x8A0000 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + (((values[2] << 4) & 0xF0));
 }
-operandeType *op_truncs = op_floors;
+const operandeType *const op_truncs = op_floors;
 uint32_t bin_truncs(uint32_t *values)
 {
     return 0x0 + 0x9A0000 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + (((values[2] << 4) & 0xF0));
@@ -493,19 +514,19 @@ uint32_t bin_muls(uint32_t *values)
 {
     return 0x0 + 0x2A0000 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + (((values[2] << 4) & 0xF0));
 }
-operandeType op_div0s[2] = {operandeType::floatregisters, operandeType::floatregisters};
+const operandeType op_div0s[2] = {operandeType::floatregisters, operandeType::floatregisters};
 uint32_t bin_div0s(uint32_t *values)
 {
     return (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + 0x70 + 0xfa0000;
 }
-operandeType op_adds[3] = {operandeType::floatregisters, operandeType::floatregisters, operandeType::floatregisters};
-operandeType *op_divns = op_adds;
+const operandeType op_adds[3] = {operandeType::floatregisters, operandeType::floatregisters, operandeType::floatregisters};
+const operandeType *const op_divns = op_adds;
 uint32_t bin_divns(uint32_t *values)
 {
     return 0x0 + 0x7A0000 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + (((values[2] << 4) & 0xF0));
 }
 
-operandeType *op_maddns = op_adds;
+const operandeType *const op_maddns = op_adds;
 uint32_t bin_maddns(uint32_t *values)
 {
     return 0x0 + 0x6A0000 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + (((values[2] << 4) & 0xF0));
@@ -515,36 +536,36 @@ uint32_t bin_nexp01s(uint32_t *values)
 {
     return (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + 0xB0 + 0xfa0000;
 }
-operandeType op_nexp01s[2] = {operandeType::floatregisters, operandeType::floatregisters};
+const operandeType op_nexp01s[2] = {operandeType::floatregisters, operandeType::floatregisters};
 
 uint32_t bin_negs(uint32_t *values)
 {
     return (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + 0x60 + 0xfa0000;
 }
-operandeType *op_negs = op_nexp01s;
+const operandeType *const op_negs = op_nexp01s;
 
-operandeType *op_addexpms = op_nexp01s;
+const operandeType *const op_addexpms = op_nexp01s;
 uint32_t bin_addexpms(uint32_t *values)
 {
     return (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + 0xF0 + 0xfa0000;
 }
-operandeType *op_addexps = op_nexp01s;
+const operandeType *const op_addexps = op_nexp01s;
 uint32_t bin_addexps(uint32_t *values)
 {
     return (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + 0xE0 + 0xfa0000;
 }
-operandeType *op_mkdadjs = op_nexp01s;
+const operandeType *const op_mkdadjs = op_nexp01s;
 uint32_t bin_mkdadjs(uint32_t *values)
 {
     return (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00)) + 0xD0 + 0xfa0000;
 }
-operandeType op_consts[2] = {operandeType::floatregisters, operandeType::l0_15};
+const operandeType op_consts[2] = {operandeType::floatregisters, operandeType::l0_15};
 uint32_t bin_consts(uint32_t *values)
 {
     return 0x30 + 0xFA0000 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00));
 }
 
-operandeType *op_movs = op_nexp01s;
+const operandeType *const op_movs = op_nexp01s;
 uint32_t bin_movs(uint32_t *values)
 {
     return 0x00 + 0xFA0000 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00));
@@ -554,7 +575,7 @@ uint32_t bin_abss(uint32_t *values)
     return 0xFA0010 + (((values[0] << 12) & 0xF000)) + (((values[1] << 8) & 0xF00));
 }
 
-operandeType op_floatco[3] = {operandeType::boolregisters, operandeType::floatregisters, operandeType::floatregisters};
+const operandeType op_floatco[3] = {operandeType::boolregisters, operandeType::floatregisters, operandeType::floatregisters};
 uint32_t bin_olts(uint32_t *values)
 {
     return 0x00 + (((values[2] << 4) & 0x00F0)) + (((values[1] << 8) & 0x00F00)) + (((values[0] << 12) & 0x00F000)) + 0x4B0000;
@@ -567,7 +588,7 @@ uint32_t bin_oeqs(uint32_t *values)
 {
     return 0x00 + (((values[2] << 4) & 0x00F0)) + (((values[1] << 8) & 0x00F00)) + (((values[0] << 12) & 0x00F000)) + 0x2B0000;
 }
-operandeType op_jumpfloat[2] = {operandeType::boolregisters, operandeType::label};
+const operandeType op_jumpfloat[2] = {operandeType::boolregisters, operandeType::label};
 uint32_t bin_bt(uint32_t *values)
 {
     return 0x1076 + (((values[0] << 8) & 0x00F00));
@@ -577,7 +598,7 @@ uint32_t bin_bf(uint32_t *values)
     return 0x0076 + (((values[0] << 8) & 0x00F00));
 }
 
-operandeType op_call8[1] = {operandeType::label};
+const operandeType op_call8[1] = {operandeType::label};
 uint32_t bin_call8(uint32_t *values) { return 0x25; }
 uint32_t bin_call12(uint32_t *values) { return 0x35; }
 uint32_t jump_call8(uint32_t value, uint32_t current_address, uint32_t destination_address)
@@ -611,7 +632,7 @@ uint32_t jump_l32r(uint32_t value, uint32_t current_address, uint32_t destinatio
     return value + ((dif << 8) & 0xFFFF00);
 }
 
-operandeType op_callx8[1] = {operandeType::registers};
+const operandeType op_callx8[1] = {operandeType::registers};
 uint32_t bin_callx8(uint32_t *values)
 {
     return 0xe0 + ((values[0] << 8) & 0xF00);
@@ -619,7 +640,7 @@ uint32_t bin_callx8(uint32_t *values)
 
 uint32_t bin_retw_n(uint32_t *values) { return 0xf01d; }
 
-operandeType op_global[1] = {operandeType::label};
+const operandeType op_global[1] = {operandeType::label};
 operandeType op_callExt[2] = {operandeType::registers, operandeType::label};
 operandeType op_movExt[2] = {operandeType::registers, operandeType::label};
 uint32_t bin_movExt(uint32_t *values) { return values[0]; }

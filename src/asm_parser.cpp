@@ -98,6 +98,13 @@ static void addInstr(result_parse_line operande, parsedLines *asm_parsed)
             }
             operande.address += add_size;
         }
+        else if (operande.loopStart && (_address_instr % ALIGN_INSTR == 0 || _address_instr % ALIGN_INSTR == 3))
+        {
+            // the body starts 3 bytes on: at +3 or +2 it would straddle
+            uint32_t nop_n = 0xF03D;
+            memcpy(tmp_exec + operande.address, &nop_n, 2);
+            operande.address += 2;
+        }
         else if (operande.noCross && _address_instr % ALIGN_INSTR >= 2)
         {
             // at +2 or +3 a 3-byte instruction straddles the word; a nop.n
@@ -243,7 +250,10 @@ static result_parse_operande operandeParse(char *s, operandeType optype)
     case operandeType::lm128_127:
         return parseNumberRange(s, -128, 127);
     case operandeType::lm32768_32512:
-        return parseNumberRange(s, -32768, 35512);
+        // -32768..32512: ADDMI's range (imm8 << 8). 35512 here was a typo --
+        // it let 32513..35512 through to a wrong encoding (latent: nothing
+        // emits addmi today).
+        return parseNumberRange(s, -32768, 32512);
     case operandeType::l1_31:
         return parseNumberRange(s, 1, 31);
     case operandeType::l1_16:
@@ -273,11 +283,12 @@ static result_parse_operande operandeParse(char *s, operandeType optype)
     return res;
 }
 
-static result_parse_line parseOperandes(char *str, int nboperande, operandeType *optypes, int size,
-                                         uint32_t (*createbin)(uint32_t *val))
+static result_parse_line parseOperandesV(char *str, int nboperande, const operandeType *optypes, int size,
+                                          uint32_t (*createbin)(uint32_t *val), uint32_t *outValues)
 {
     result_parse_line result;
-    uint32_t values[4] = {0, 0, 0, 0};
+    uint32_t *values = outValues;
+    values[0] = values[1] = values[2] = values[3] = 0;
     asm_Error.error = 0;
     result.align = false;
     result.size = size;
@@ -320,19 +331,184 @@ static result_parse_line parseOperandes(char *str, int nboperande, operandeType 
     return result;
 }
 
+static result_parse_line parseOperandes(char *str, int nboperande, const operandeType *optypes, int size,
+                                        uint32_t (*createbin)(uint32_t *val))
+{
+    uint32_t values[4];
+    return parseOperandesV(str, nboperande, optypes, size, createbin, values);
+}
+
+// The narrow (16-bit) form of an instruction whose fields fit, the wide
+// one otherwise: the same line of text either way, so nothing upstream
+// changes -- the codegen and the optimizer keep writing "add a5,a6,a7",
+// and the assembler packs it in 2 bytes. fits() sees the parsed operand
+// values (fits == NULL: always). The jump offsets and the alignment
+// padding both work from each line's size, so they follow along.
+static result_parse_line parseOperandesNarrow(char *str, int nboperande, const operandeType *optypes,
+                                              uint32_t (*wide)(uint32_t *), uint32_t (*narrow)(uint32_t *),
+                                              bool (*fits)(uint32_t *))
+{
+    uint32_t values[4];
+    result_parse_line res = parseOperandesV(str, nboperande, optypes, 3, NULL, values);
+    if (asm_Error.error != 0)
+        return res;
+    if (fits == NULL || fits(values))
+    {
+        res.size = 2;
+        res.bincode = narrow(values);
+    }
+    else
+        res.bincode = wide(values);
+    return res;
+}
+
+static bool fitsAddiN(uint32_t *v)
+{
+    int32_t imm = (int32_t)v[2];
+    return imm == -1 || (imm >= 1 && imm <= 15);
+}
+
+static bool fitsMoviN(uint32_t *v)
+{
+    int32_t imm = (int32_t)v[1];
+    return imm >= -32 && imm <= 95;
+}
+
+static bool fitsL32iN(uint32_t *v)
+{
+    return v[2] <= 60 && (v[2] & 3) == 0;
+}
+
+
+// trim() without the mutation: the trimmed text of src in dst. The
+// labels findLabel() reads are pooled (asm_text) -- trimming them in
+// place would change a pooled string under its hash key.
+static const char *trimCopy(char *dst, size_t n, const char *src)
+{
+    while (*src == ' ' || *src == '\n' || *src == '\r' || *src == '\t')
+        src++;
+    size_t len = 0;
+    while (src[len] && len < n - 1)
+    {
+        if (src[len] == '/' && src[len + 1] == '/')
+            break;
+        dst[len] = src[len];
+        len++;
+    }
+    while (len > 0 && (dst[len - 1] == ' ' || dst[len - 1] == '\n' || dst[len - 1] == '\r' || dst[len - 1] == '\t'))
+        len--;
+    dst[len] = 0;
+    return dst;
+}
+
+static bool isLabelKind(opCodeType op)
+{
+    return op == opCodeType::label || op == opCodeType::data_label || op == opCodeType::number_label ||
+           op == opCodeType::external_var_label || op == opCodeType::external_call;
+}
+
+// The labels seen so far, hashed (FNV-1a, linear probing): what
+// findLabel() scanned every parsed line for, per jump and per label's
+// duplicate check. Grown as the parse appends lines (the labels a call
+// could see are exactly the ones parsed before it, as the scan's were),
+// and rebuilt whenever the parsedLines it mirrors changes or starts over.
+static struct
+{
+    parsedLines *owner;
+    int scanned;
+    uint32_t cap;   // a power of two, or 0
+    uint32_t used;
+    // 4 bytes a slot: the hash's top 8 bits, and the line number + 1 in
+    // the low 24 (0 is an empty slot). The labels' text stays in the
+    // parsed lines, which a hit is checked against.
+    uint32_t *e;
+} _labels = {NULL, 0, 0, 0, NULL};
+
+static uint32_t labelHash(const char *s)
+{
+    uint32_t h = 2166136261u;
+    while (*s)
+    {
+        h ^= (uint8_t)*s++;
+        h *= 16777619u;
+    }
+    return h == 0 ? 1 : h;
+}
+
+static void labelCacheReset()
+{
+    free(_labels.e);
+    _labels.e = NULL;
+    _labels.owner = NULL;
+    _labels.scanned = 0;
+    _labels.cap = 0;
+    _labels.used = 0;
+}
+
+static void labelCacheInsert(uint32_t h, int idx)
+{
+    assert(idx >= 0 && idx < 0xFFFFFF);
+    if (_labels.cap == 0 || _labels.used * 4 >= _labels.cap * 3)
+    {
+        uint32_t newCap = _labels.cap == 0 ? 256 : _labels.cap * 2;
+        uint32_t *old = _labels.e;
+        uint32_t oldCap = _labels.cap;
+        _labels.e = (uint32_t *)calloc(newCap, sizeof(uint32_t));
+        assert(_labels.e != NULL);
+        _labels.cap = newCap;
+        char stored[128];
+        for (uint32_t i = 0; i < oldCap; i++)
+            if (old[i] != 0)
+            {
+                // the hash is not kept: from the label's own text
+                int at = (int)(old[i] & 0xFFFFFF) - 1;
+                uint32_t oh = labelHash(trimCopy(stored, sizeof(stored), _labels.owner->getChildAtPos(at)->getText()));
+                uint32_t j = oh & (newCap - 1);
+                while (_labels.e[j] != 0)
+                    j = (j + 1) & (newCap - 1);
+                _labels.e[j] = old[i];
+            }
+        free(old);
+    }
+    uint32_t j = h & (_labels.cap - 1);
+    while (_labels.e[j] != 0)
+        j = (j + 1) & (_labels.cap - 1);
+    _labels.e[j] = (h & 0xFF000000u) | (uint32_t)(idx + 1);
+    _labels.used++;
+}
+
 static int findLabel(char *s, parsedLines *asm_parsed)
 {
-    char *strimmed = trim(s);
-    for (int i = 0; i < asm_parsed->size(); i++)
+    char name[128];
+    char stored[128];
+    trimCopy(name, sizeof(name), s);
+    if (_labels.owner != asm_parsed || _labels.scanned > asm_parsed->size())
+    {
+        labelCacheReset();
+        _labels.owner = asm_parsed;
+    }
+    // the lines parsed since the last call: their labels into the table
+    for (int i = _labels.scanned; i < asm_parsed->size(); i++)
     {
         result_parse_line *it = asm_parsed->getChildAtPos(i);
-        if (it->op == opCodeType::label || it->op == opCodeType::data_label ||
-            it->op == opCodeType::number_label || it->op == opCodeType::external_var_label ||
-            it->op == opCodeType::external_call)
+        if (isLabelKind(it->op))
+            labelCacheInsert(labelHash(trimCopy(stored, sizeof(stored), it->getText())), i);
+    }
+    _labels.scanned = asm_parsed->size();
+    if (_labels.cap == 0)
+        return -1;
+    uint32_t h = labelHash(name);
+    uint32_t j = h & (_labels.cap - 1);
+    while (_labels.e[j] != 0)
+    {
+        if ((_labels.e[j] & 0xFF000000u) == (h & 0xFF000000u))
         {
-            if (strcmp(trim(it->getText()), strimmed) == 0)
-                return i;
+            int at = (int)(_labels.e[j] & 0xFFFFFF) - 1;
+            result_parse_line *it = asm_parsed->getChildAtPos(at);
+            if (strcmp(trimCopy(stored, sizeof(stored), it->getText()), name) == 0)
+                return at;
         }
+        j = (j + 1) & (_labels.cap - 1);
     }
     return -1;
 }
@@ -374,8 +550,11 @@ static asm_line splitOpcodeOperande(char *s)
 // are the loop heads (some later branch or jump goes back to them: taken
 // on every iteration, while the padding before them runs once, on entry)
 // and the targets of unconditional jumps (`j` lands there every time; the
-// padding only runs on the path falling into the label). A nop.n before
-// the label is enough: a target at +0 or +1 doesn't straddle.
+// padding only runs on the path falling into the label), and a forward
+// branch's target right after a `j` or `ret`, where nothing falls into
+// the padding at all -- an if's else, taken every time the test fails.
+// A nop.n before the label is enough: a target at +0 or +1 doesn't
+// straddle.
 // Filled by parseASM() before assembling.
 static vect<char *> _loopHeads;
 
@@ -450,7 +629,15 @@ static void findLoopHeads(Text *t)
             _loopHeads.push_back(strdup(name));
             continue;
         }
-        for (int j = i + 1; j < t->size(); j++)
+        // the instruction before the label, past the other labels there
+        int prev = i - 1;
+        while (prev >= 0 && strchr(t->getText(prev), ':') != NULL)
+            prev--;
+        const char *before = prev >= 0 ? t->getText(prev) : "";
+        while (*before == ' ')
+            before++;
+        bool unreachable = strncmp(before, "j ", 2) == 0 || strncmp(before, "ret", 3) == 0;
+        for (int j = unreachable ? 0 : i + 1; j < t->size(); j++)
         {
             const char *tg = branchTarget(t->getText(j), target, sizeof(target));
             if (tg != NULL && strcmp(tg, name) == 0)
@@ -494,7 +681,7 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
 
     char *op = sp.opcde;
     if (strcmp(op, "add") == 0)
-        return parseOperandes(sp.operandes, 3, op_add, 3, bin_add);
+        return parseOperandesNarrow(sp.operandes, 3, op_add, bin_add, bin_add_n, NULL);
     if (strcmp(op, "sub") == 0)
         return parseOperandes(sp.operandes, 3, op_sub, 3, bin_sub);
     if (strcmp(op, "quou") == 0)
@@ -514,7 +701,7 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
     if (strcmp(op, "subx8") == 0)
         return parseOperandes(sp.operandes, 3, op_subx8, 3, bin_subx8);
     if (strcmp(op, "addi") == 0)
-        return parseOperandes(sp.operandes, 3, op_addi, 3, bin_addi);
+        return parseOperandesNarrow(sp.operandes, 3, op_addi, bin_addi, bin_addi_n, fitsAddiN);
     if (strcmp(op, "and") == 0)
         return parseOperandes(sp.operandes, 3, op_and, 3, bin_and);
     if (strcmp(op, "or") == 0)
@@ -555,6 +742,15 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         return parseOperandes(sp.operandes, 3, op_and, 3, bin_xor);
     if (strcmp(op, "mulsh") == 0)
         return parseOperandes(sp.operandes, 3, op_and, 3, bin_mulsh);
+    if (strcmp(op, "loop") == 0 || strcmp(op, "loopnez") == 0 || strcmp(op, "loopgtz") == 0)
+    {
+        result_parse_line ps = parseOperandes(sp.operandes, 2, op_bnez, 3,
+                                              op[4] == 0 ? bin_loop : op[4] == 'n' ? bin_loopnez : bin_loopgtz);
+        ps.op = opCodeType::jump;
+        ps.calculateOfssetJump = jump_loop;
+        ps.loopStart = true;
+        return ps;
+    }
     if (strcmp(op, "j") == 0)
     {
         result_parse_line ps = parseOperandes(sp.operandes, 1, op_j, 3, bin_j);
@@ -664,7 +860,7 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
     }
 
     if (strcmp(op, "l32i") == 0)
-        return parseOperandes(sp.operandes, 3, op_l32i, 3, bin_l32i);
+        return parseOperandesNarrow(sp.operandes, 3, op_l32i, bin_l32i, bin_l32i_n, fitsL32iN);
     if (strcmp(op, "l32r") == 0)
     {
         result_parse_line ps = parseOperandes(sp.operandes, 2, op_l32r, 3, bin_l32r);
@@ -738,9 +934,9 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
     if (strcmp(op, "sext") == 0)
         return parseOperandes(sp.operandes, 3, op_rr_imm7_22, 3, bin_sext);
     if (strcmp(op, "mov") == 0)
-        return parseOperandes(sp.operandes, 2, op_mov, 3, bin_mov);
+        return parseOperandesNarrow(sp.operandes, 2, op_mov, bin_mov, bin_mov_n, NULL);
     if (strcmp(op, "movr") == 0)
-        return parseOperandes(sp.operandes, 2, op_mov, 3, bin_mov);
+        return parseOperandesNarrow(sp.operandes, 2, op_mov, bin_mov, bin_mov_n, NULL);
     if (strcmp(op, "abs") == 0)
         return parseOperandes(sp.operandes, 2, op_mov, 3, bin_abs);
     if (strcmp(op, "sll") == 0)
@@ -756,9 +952,9 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
     if (strcmp(op, "neg") == 0)
         return parseOperandes(sp.operandes, 2, op_mov, 3, bin_neg);
     if (strcmp(op, "movi") == 0)
-        return parseOperandes(sp.operandes, 2, op_movi, 3, bin_movi);
+        return parseOperandesNarrow(sp.operandes, 2, op_movi, bin_movi, bin_movi_n, fitsMoviN);
     if (strcmp(op, "s32i") == 0)
-        return parseOperandes(sp.operandes, 3, op_l32i, 3, bin_s32i);
+        return parseOperandesNarrow(sp.operandes, 3, op_l32i, bin_s32i, bin_s32i_n, fitsL32iN);
     if (strcmp(op, "s8i") == 0)
         return parseOperandes(sp.operandes, 3, op_l8ui, 3, bin_s8i);
     if (strcmp(op, "l8ui") == 0)
@@ -1109,7 +1305,9 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
     // function's tail -- up to and including its own retw.n, so execution
     // runs off the end of the copied buffer into whatever memory follows.
     int nb_callExt = 0;
+    int nb_loops = 0;
     freeLoopHeads();
+    labelCacheReset();
     findLoopHeads(_content);
     findLoopHeads(_footer);
     for (int pass = 0; pass < 2; pass++)
@@ -1124,6 +1322,8 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
                 nb_not_aligned_label++;
             else if (strncmp(str, "callExt", 7) == 0)
                 nb_callExt++;
+            else if (strncmp(str, "loop", 4) == 0)
+                nb_loops++; // up to a nop.n before it
         }
     }
 
@@ -1164,7 +1364,7 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
 
     _instr_size = (uint32_t)((nb_align_label + 1) * ALIGN_INSTR +
                               (_content->size() + _footer->size() - nb_not_aligned_label) * 3 +
-                              header_reservations * 4 + nb_callExt * 3 + _loopHeads.size() * 2);
+                              header_reservations * 4 + nb_callExt * 3 + _loopHeads.size() * 2 + nb_loops * 2);
     _instr_size = (_instr_size / 8) * 8 + 8;
     tmp_instr_size = (uint32_t)(_instr_size + (tmp_data_size / 4) * 4 + 4);
 
@@ -1195,6 +1395,9 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
         // the loader's data buffer needs to be at least this big.
         _data_size = _address_data;
 
+    // the label lookup is not needed past the assembling: its table goes
+    // now, not at the next compile
+    labelCacheReset();
     return main_error;
 }
 
@@ -1472,6 +1675,8 @@ static int maxLineBytes(const char *line)
         return strncmp(line, "@_", 2) == 0 ? 5 : 2;
     if (strncmp(line, "callExt", 7) == 0)
         return 6;
+    if (strncmp(line, "loop", 4) == 0)
+        return 5;
     if (*line == '.')
         return 64;
     return 3;
@@ -1570,12 +1775,23 @@ static asm_error_message_struct parseASMRelaxed(Text *_footer, Text *_header, Te
     for (int i = 0; i < asm_parsed->size(); i++)
     {
         result_parse_line *pl = asm_parsed->getChildAtPos(i);
-        if (pl->op != opCodeType::jump || pl->calculateOfssetJump == NULL || pl->branchBits == 0)
+        if (pl->op != opCodeType::jump || pl->calculateOfssetJump == NULL || (pl->branchBits == 0 && !pl->loopStart))
             continue;
         int index = findLabel(pl->getText(), asm_parsed);
         if (index < 0)
             continue;
         int32_t dif = (int32_t)getInstrAtPos(index)->address - (int32_t)pl->address - 4;
+        if (pl->loopStart)
+        {
+            // the optimizer keeps loop bodies well inside this
+            if (dif < 0 || dif > 255)
+            {
+                err.error = 1;
+                err.error_message = string_format("line %d: loop body to %s out of range\n", pl->line, pl->getText());
+                return err;
+            }
+            continue;
+        }
         int32_t limit = 1 << (pl->branchBits - 1);
         if (dif < -limit || dif >= limit)
         {

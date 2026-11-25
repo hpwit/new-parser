@@ -1,5 +1,6 @@
 #include "parser_enum.h"
-const char * asmInstructionsName[] =
+// const pointers too: the whole table lives in flash, not .data
+const char *const asmInstructionsName[] =
     {
         "s8i a%d,a%d,%d",
         "l8ui a%d,a%d,%d",

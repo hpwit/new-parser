@@ -3,7 +3,8 @@
 // compiler emits for straight-line arithmetic + if/while/for control flow
 // in a single, non-recursive, call-free function: movi/mov/movr, add/sub/
 // mull/quou/quos/remu/and/or/neg/abs, addi, l32i/s32i/l16ui/l16si/s16i/
-// l8ui/s8i, ssl/sll/srl, extui, blt/bge/beq/bne, beqz/bnez/bltz/bgez, j,
+// l8ui/s8i, rems, ssl/sll/srl, slli/srli/srai, addx2/4/8, subx2/4/8, extui,
+// blt/bge/beq/bne, beqz/bnez/bltz/bgez, j,
 // retw.n, entry (a no-op
 // here), and bare "label:" markers.
 //
@@ -82,8 +83,20 @@ struct MiniXtensa
         bool ok = true;
         int pc = startPc;
         int guard = 0;
+        // the zero-overhead loop registers (lines, not addresses): when an
+        // instruction falls through to LEND with LCOUNT not 0, LCOUNT goes
+        // down and the body starts again at LBEG. A taken branch to LEND
+        // does not loop back.
+        int lbeg = -1, lend = -1;
+        uint32_t lcount = 0;
+        bool sequential = false;
         while (true)
         {
+            if (sequential && pc == lend && lcount != 0)
+            {
+                lcount--;
+                pc = lbeg;
+            }
             if (++guard > 100000)
             {
                 *error = "step limit exceeded (probable infinite loop)";
@@ -106,6 +119,7 @@ struct MiniXtensa
                 pc++;
                 continue;
             }
+            sequential = true;
 
             vect<char *> tok;
             str_split(&tok, line, (char *)" ");
@@ -131,6 +145,7 @@ struct MiniXtensa
 
             if (strcmp(op, "j") == 0)
             {
+                sequential = false;
                 pc = findLabel(labelNames, labelPos, tok.get(1));
                 if (pc < 0)
                 {
@@ -154,7 +169,31 @@ struct MiniXtensa
             vect<char *> args;
             str_split(&args, tok.get(1), (char *)",");
 
+            if (strcmp(op, "loop") == 0 || strcmp(op, "loopnez") == 0 || strcmp(op, "loopgtz") == 0)
+            {
+                int32_t count = readReg(args.get(0));
+                int target = findLabel(labelNames, labelPos, args.get(1));
+                bool skip = (op[4] == 'n' && count == 0) || (op[4] == 'g' && count <= 0);
+                args.empty();
+                tok.empty();
+                if (target < 0)
+                {
+                    *error = "unresolved loop end";
+                    ok = false;
+                    break;
+                }
+                lbeg = pc + 1;
+                lend = target;
+                lcount = (uint32_t)count - 1;
+                pc = skip ? target : pc + 1;
+                sequential = !skip;
+                if (skip)
+                    lcount = 0;
+                continue;
+            }
+            int before = pc;
             bool handled = execOne(op, args, labelNames, labelPos, &pc, error);
+            sequential = pc == before + 1;
             args.empty();
             tok.empty();
             if (!handled)
@@ -246,6 +285,11 @@ struct MiniXtensa
             int32_t b = readReg(args.get(2));
             regs[regNum(args.get(0))] = (b == 0) ? 0 : readReg(args.get(1)) / b;
         }
+        else if (strcmp(op, "rems") == 0)
+        {
+            int32_t d = readReg(args.get(2));
+            regs[regNum(args.get(0))] = d == 0 ? 0 : readReg(args.get(1)) % d;
+        }
         else if (strcmp(op, "remu") == 0)
         {
             int32_t b = readReg(args.get(2));
@@ -270,6 +314,24 @@ struct MiniXtensa
             regs[regNum(args.get(0))] = readReg(args.get(1)) << sar;
         else if (strcmp(op, "srl") == 0)
             regs[regNum(args.get(0))] = (int32_t)(((uint32_t)readReg(args.get(1))) >> sar);
+        else if (strcmp(op, "addx2") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 1) + readReg(args.get(2));
+        else if (strcmp(op, "addx4") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 2) + readReg(args.get(2));
+        else if (strcmp(op, "addx8") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 3) + readReg(args.get(2));
+        else if (strcmp(op, "subx2") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 1) - readReg(args.get(2));
+        else if (strcmp(op, "subx4") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 2) - readReg(args.get(2));
+        else if (strcmp(op, "subx8") == 0)
+            regs[regNum(args.get(0))] = (readReg(args.get(1)) << 3) - readReg(args.get(2));
+        else if (strcmp(op, "srli") == 0)
+            regs[regNum(args.get(0))] = (int32_t)(((uint32_t)readReg(args.get(1))) >> (toI32(args.get(2)) & 31));
+        else if (strcmp(op, "slli") == 0)
+            regs[regNum(args.get(0))] = readReg(args.get(1)) << (toI32(args.get(2)) & 31);
+        else if (strcmp(op, "srai") == 0)
+            regs[regNum(args.get(0))] = readReg(args.get(1)) >> (toI32(args.get(2)) & 31);
         else if (strcmp(op, "extui") == 0)
         {
             int shift = (int)toI32(args.get(2));
@@ -359,7 +421,11 @@ struct MiniXtensa
         }
         else
         {
-            *error = op; // caller's error string just names the unsupported mnemonic
+            // op points into tok, freed before the caller reads the error:
+            // a copy that outlives this call
+            static char unsupported[48];
+            snprintf(unsupported, sizeof(unsupported), "%s", op);
+            *error = unsupported;
             return false;
         }
 

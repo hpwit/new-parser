@@ -4213,6 +4213,106 @@ int main()
         "for (i=0;i<n;i++) { int t; t=a+b; a=b; b=t; } int fib; fib=a;}";
     runCorrectnessTest("fibonacci: fib(10) == 55", fibonacciScript, 60, 55);
 
+    // Unsigned / and % by a constant power of two strength-reduce to
+    // srli/extui (visitnode's movi peek); signed stays on quos/rems (a
+    // shift would round toward minus infinity). Constants stay inside
+    // movi's range: MiniXtensa has no l32r. r (second local, offset 60
+    // as ternaryValueScript's) collects:
+    //   u=1000: u/8 = 125, u%256 = 232, u/1 = 1000, u%1 = 0, u%16 = 8
+    //   s=-1000: s/4 = -250 (toward zero), s%8 = 0
+    // r = 125 + 232*2 + 1000*3 + 0 + 8 - 250 + 0 = 3347
+    static const char *divPow2Script =
+        "void main(){uint32_t u; u=1000; int r; r=0; int s; s=0-1000; "
+        "r = r + u/8; "
+        "r = r + (u%256)*2; "
+        "r = r + (u/1)*3; "
+        "r = r + u%1; "
+        "r = r + u%16; "
+        "r = r + s/4; "
+        "r = r + s%8; "
+        "int t; t=0-7; "
+        "r = r + t/2; "
+        "r = r + s/8; "
+        "r = r + s/1; }";
+    // the signed additions: -7/2 = -3 (toward zero, not -4), -1000/8 =
+    // -125, -1000/1 = -1000 -> 3347 - 3 - 125 - 1000 = 2219
+    runCorrectnessTest("/ and % by a power of two, signed and unsigned: r == 2219", divPow2Script, 60, 2219);
+
+    // Zero-overhead loops (optimize.cpp's zeroOverheadLoops()): counted
+    // for and while loops without a call become `loop`, run here by
+    // MiniXtensa's LBEG/LEND/LCOUNT. main's result comes back in a2:
+    //   for 0..9: 45; while j=3..15 (the s<1000 test never ends it): +117;
+    //   a for that runs 0 times: +0; a for left by break at m=7: +7;
+    //   for i=2..n-1 with n=12, a continue on even i: 3+5+7+9+11 = 35;
+    //   for q=1..4 (<=): +10; for q=9..8 (<=, none): +0
+    // = 214. At least five loops have to be converted.
+    {
+        printf("RUNNING: %s\n", "zero-overhead loops: for, while, <=, none, break, continue == 214");
+        fflush(stdout);
+        pid_t pid = fork();
+        if (pid == 0)
+        {
+            Parser p;
+            p.clean();
+            content.clear();
+            header.clear();
+            footer.clear();
+            Script sc;
+            sc.addContent(strdup("int main(){ int s=0; int n=12; "
+                                 "for (int i=0;i<10;i++) { s=s+i; } "
+                                 "int j=3; while (j<16 && s<1000) { s=s+j; j++; } "
+                                 "for (int k=5;k<3;k++) { s=s+100; } "
+                                 "for (int m=0;m<20;m++) { if (m==7) break; s=s+1; } "
+                                 "for (int i=2;i<n;i++) { if ((i & 1)==0) continue; s=s+i; } "
+                                 "for (int q=1;q<=4;q++) { s=s+q; } "
+                                 "for (int q=9;q<=8;q++) { s=s+1000; } "
+                                 "return s; }"));
+            sc.init();
+            p.parse(&sc, &__allTokens);
+            bool ok = Error.error == 0;
+            int loops = 0;
+            for (int i = 0; ok && i < content.size(); i++)
+                if (strncmp(content.getText(i), "loop ", 5) == 0)
+                    loops++;
+            if (ok && loops < 5)
+            {
+                printf("       %d loops converted, expected at least 5\n", loops);
+                ok = false;
+            }
+            if (ok)
+            {
+                vect<char *> lines = snapshotText(content);
+                const char *err = NULL;
+                MiniXtensa vm;
+                if (!vm.run(lines, &err))
+                {
+                    printf("       could not interpret (unsupported: %s)\n", err ? err : "?");
+                    ok = false;
+                }
+                else if (vm.regs[2] != 214)
+                {
+                    printf("       expected 214 in a2, got %d\n", vm.regs[2]);
+                    ok = false;
+                }
+                lines.empty();
+            }
+            fflush(stdout);
+            _exit(ok ? 0 : 1);
+        }
+        int status = 0;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+        {
+            passed++;
+            printf("[PASS] zero-overhead loops\n");
+        }
+        else
+        {
+            failed++;
+            printf("[FAIL] zero-overhead loops\n");
+        }
+    }
+
     // `?:` and bare comparisons as values, as in v1: in an assignment, an
     // initializer, a return value or a call argument, the right-hand side
     // is a full expression (comparisons, && ||, ?:), not only arithmetic --

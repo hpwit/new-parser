@@ -10,6 +10,13 @@
 
 
 void * p_realloc(void *original,int new_size);
+
+// Compile-time allocations (the vects' storage, the line pool): on an
+// ESP32 with PSRAM they go there, so compiling never squeezes the
+// sketch's internal heap; without PSRAM, and on a host, they are plain
+// malloc. free() takes either kind on the IDF.
+void *compile_alloc(size_t n);
+void *compile_realloc(void *p, size_t n);
 template <class T>
 class vect
 {
@@ -106,7 +113,7 @@ T *vect<T>::push_back(T asset)
     if (_size >= _capacity)
     {
         int new_capacity = (_capacity == 0) ? 1 : (int)_capacity * 2;
-        T *point2 = (point == NULL) ? (T *)malloc((size_t)new_capacity * size_item)
+        T *point2 = (point == NULL) ? (T *)compile_alloc((size_t)new_capacity * size_item)
                                      : (T *)p_realloc(point, new_capacity * size_item);
         if (point2 == NULL)
         {

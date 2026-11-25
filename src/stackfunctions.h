@@ -174,6 +174,44 @@ int addTextNoDelete(char* str);
     vect<char *> _texts;
 
 private:
+    // The line pool: every string a slot of _texts points at is owned by
+    // this open-addressing hash (content -> one canonical copy), with a
+    // use count in 4 bytes in front of the characters. addText()/
+    // addAfter()/addBefore()/replaceText() all share through it (what
+    // findText()'s linear scan used to give in O(n) a line), and the
+    // destructive paths (eraseLine, pop, pop_front, replaceText,
+    // blankCurrent) put a use back and free the copy with the last one
+    // (what isReused()'s O(n) scan was for). _poolIdx in an entry is the
+    // slot addText() first gave that content -- only meaningful in
+    // append-only buffers (the tokenizer's all_text), which are the only
+    // callers of addText()'s dedup return.
+    // The table: 4 bytes a slot (NULL empty, (char *)1 a tombstone, else
+    // the string), found by FNV-1a and linear probing, compared with
+    // strcmp; the hash is not kept, a growth recomputes it. Each string
+    // is [use count:4][slot index:4][characters], p pointing at the
+    // characters. The table was 12 bytes a slot (hash and index kept in
+    // it): on a big script it cost three times the strings themselves.
+    char **_pool = NULL;
+    uint32_t _poolCap = 0;     // a power of two, or 0
+    uint32_t _poolUsed = 0;    // live + tombstones
+    uint32_t _poolLive = 0;
+    // The strings are separate heap blocks, as they always were: a line
+    // the optimizer rewrites gives its block back to the heap at once,
+    // for anything to use. (Bump arenas were tried here: a released
+    // line's bytes could only serve a line of the same size, so most of
+    // them stayed dead until the pool was cleared, and a big script's
+    // compile peaked 25-56% above the plain heap's.)
+    static uint32_t poolHash(const char *s);
+    char **poolLookup(const char *s, uint32_t h);
+    char **poolSlotFor(uint32_t h);   // insert position (empty or tombstone)
+    void poolGrow();
+    // takes ownership of m (a plain malloc'd string): returns the pooled
+    // copy, its use count raised, and frees m when it was a duplicate
+    char *poolAcquire(char *m);
+    // one use less; the block goes on its free list on the last
+    void poolRelease(char *p);
+    void poolReset();
+
     int position;
     char **_it;
     // Set by putIteratorAtPos(-1): the next addAfter() inserts in front

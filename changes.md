@@ -4,6 +4,23 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### ⚡ A faster compiler, smaller and faster code
+
+The compiler's line store is a hash instead of lists it scanned for every line it added or removed: compiling takes 2.2 to 3.2 times less time on a computer (Wickwire 3.2 s -> 1.0 s), and `MultiEffectController` compiles on an esp32 without PSRAM in 8.1 s instead of 10.6 s. On a board with PSRAM the compiler's working memory goes there, so a compile no longer competes with the sketch for internal RAM.
+
+The generated code:
+
+- `add`, `mov`, small `addi`/`movi` and `l32i`/`s32i` use their 16-bit forms: 9 to 17% less code (Wickwire 75 KB -> 64 KB);
+- `a[i]` with 2, 4 or 8-byte elements is one `addx2`/`addx4`/`addx8` instead of two or three instructions;
+- `/` and `%` by a power of two are shifts and masks instead of the divider (signed ones still round toward zero, as in C);
+- a load and the instruction using it are moved apart when an independent instruction can sit between them (the one-cycle load-use stall);
+- a number the code reads from memory (`4.0`, `2.0`, a constant over 2047) is read once before a loop instead of at each iteration;
+- the first instruction of a branch target after a jump no longer straddles a 4-byte word (a cycle each time the branch is taken);
+- counted loops without a call inside, `for` and `while` alike, become the Xtensa zero-overhead loop (`loop`): the processor counts the iterations and jumps back by itself, so the limit is not reloaded, compared and branched on at each iteration;
+- on the ESP32-S3, a script's globals are kept out of the 64 KB block of internal RAM its code runs from: a loop reading them from there lost up to two cycles an iteration, depending on the address the script happened to load at (6% on a Mandelbrot).
+
+On an esp32 at 240 MHz, against 2.0.0: `fib(40)` 21.72 s -> 20.37 s, Game of Life 7.15 -> 6.20 ms per generation, Mandelbrot 41.9 -> 39.1 ms (`float`) and 31.5 -> 27.1 ms (`ffloat`, now faster than fixed point written in C); the balls, the rainbow and the GPIO speed are within 0.5% (their loops call the host). On the ESP32-S3: `fib(40)` -7.5%, Mandelbrot 800x480 1753 -> 1614 ms, Game of Life 800x480 204 -> 171 ms. Every frame and checksum is the same as before. Host suite, QEMU frame-exact effects and the fuzzer (49 regressions, 800 new programs, every one of them with converted loops) pass.
+
 ### ⏳ `setCompileProgress()`: how far a compile has got
 
 ```cpp

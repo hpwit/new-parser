@@ -10,7 +10,7 @@
 ![Compiled](https://img.shields.io/badge/compiled%20to-Xtensa%20machine%20code-orange)
 ![Tested](https://img.shields.io/badge/tested-host%20%C2%B7%20QEMU%20%C2%B7%20fuzzer%20%C2%B7%20real%20board-brightgreen)
 
-[Quick start](#first-light-) · [The language](#what-you-can-do-with-the-language) · [More than leds](#more-than-a-led-language) · [Performance](#performance) · [Examples](#examples) · [Testing](#testing) · [Changes](changes.md)
+[Quick start](#first-light-) · [The language](#what-you-can-do-with-the-language) · [More than leds](#more-than-a-led-language) · [Performance](#performance) · [Examples](#examples) · [Changes](changes.md)
 
 </div>
 
@@ -18,19 +18,11 @@
 
 ## 📖 The story
 
-A while back I got tired of loading code onto the esp32 through an IDE every time I wanted to try a new led animation, so I wrote [ESPLiveScript](https://github.com/hpwit/asmparser): a small C-like language that compiles straight to real Xtensa machine code on the esp32 itself. No interpreter, no re-flash.
+A while back I got tired of loading code onto the esp32 through an IDE every time I wanted to try a new led animation, so I wrote [ESPLiveScript](https://github.com/hpwit/asmparser): a small C-like language that compiles straight to Xtensa machine code on the esp32 itself. No interpreter, no re-flash.
 
-It worked, people used it and [StarLight](https://github.com/MoonModules/StarLight) picked it up. But I wrote v1 the way most first compilers are written: fast, by hand, no grammar, and with no real way to check that a fix hadn't broken something else. Every fix was "works on my board".
+It worked, people used it and [StarLight](https://github.com/MoonModules/StarLight) picked it up. This is v2: same idea, same language, rewritten from scratch, and this time checked by a test suite instead of "works on my board". I started the rewrite by hand, without any help from AI: [this commit](https://github.com/hpwit/new-parser/tree/162cedb50e240d6bd2b18e7f1c54c5674d9dde89) (May 2025) is the last version written that way. Then I used AI to complete the work: finishing the compiler, the tests, the examples and this documentation. The first version, v1, is still there: [hpwit/asmparser](https://github.com/hpwit/asmparser).
 
-**So I rewrote it.** This is v2: same idea, same language, written from scratch. The first version, v1, is still there: [hpwit/asmparser](https://github.com/hpwit/asmparser). I started the rewrite by hand, without any help from AI: [this commit](https://github.com/hpwit/new-parser/tree/162cedb50e240d6bd2b18e7f1c54c5674d9dde89) (May 2025) is the last version written that way. Then I used AI to complete the work: finishing the compiler, the tests, the examples and this documentation. This time the compiler can be checked, not just trusted:
-- the whole compiler (tokenizer, parser, assembler, loader) also runs as a normal program on my laptop, no esp32 needed (`test/host/`);
-- the compiled machine code runs for real on Espressif's QEMU esp32 emulator and the results are checked (`test/qemu/`);
-- random programs are run both through the compiler and as plain C, and the results compared (`test/fuzz/`);
-- every script from v1's `sc_examples` directory is compiled by the test suite (`test/sc_examples/`).
-
-None of this changes what you write in a script, but it is why I can say that something works instead of hoping it does.
-
-**If you know v1:** the language is very close, so most of what you know still applies. The C++ side you call from your sketch is new (`ScriptExecutable`, `parseScript()`, `bindFunction()`, `bindVariable()`), some v1 features are not there yet (see [Known limitations](#known-limitations)) and a few things changed on purpose. I point out the differences as we go.
+**If you know v1:** the language is very close, so most of what you know still applies. The C++ side you call from your sketch is new (`ScriptExecutable`, `parseScript()`, `bindFunction()`, `bindVariable()`), some v1 features are not there yet (see [Known limitations](#known-limitations)) and a few things changed on purpose. The differences are pointed out as we go.
 
 ---
 
@@ -38,19 +30,18 @@ None of this changes what you write in a script, but it is why I can say that so
 
 | | |
 |:--|:--|
-| 🚀 **Native speed** | No interpreter: the script becomes Xtensa machine code on the chip. Loops and floats run at 1 to 1.3 times the time of the same code compiled by gcc, the Mandelbrot set at 24fps on 128x96 ([numbers](#performance)). |
+| 🚀 **Native speed** | No interpreter: the script becomes machine code on the chip. Loops and floats run at 0.9 to 1.2 times the time of the same code compiled by gcc, the Mandelbrot set at 25fps on 128x96 ([numbers](#performance)). |
 | 🧱 **A real language** | Structs with methods and constructors, `switch`, pointers, strings, recursion, `float` and built-in fixed point (`ffloat`), multidimensional arrays ([more than leds](#more-than-a-led-language)). |
-| 🔌 **Talks to your C++** | Call your own functions and use your variables (FastLED, WiFi, sensors...) with `bindFunction()` / `bindVariable()`. |
+| 🔌 **Talks to your C++** | Call your own functions and use your variables (FastLED, WiFi, sensors...) with `bindFunction()` / `bindVariable()`, and share your structures. |
 | 🧵 **Runs alongside your sketch** | Several scripts at once, each on its own FreeRTOS task, listed with their CPU use and paused, restarted or killed by name; GPIO interrupts calling back into the script; direct register access (a pin switched at 10MHz). |
-| 📜 **Large programs too** | Not only effects: whole programs of thousands of lines compile on the board, like [Valmora](README_GAMES.md#valmora-an-adventure-in-the-style-of-the-early-role-playing-games), a top-down adventure of about 2600 lines (a world map, towns, dungeons, its art in a WAD file), [Ironforge](README_GAMES.md#ironforge-a-shooter-with-mid-90s-technology), a 3200-line shooter, or [Wickwire](README_GAMES.md#wickwire-a-3d-platform-game-rendered-by-the-script), a 3D platform game rendered by the script, 4800 lines and 71 KB of code; `setCompileProgress()` shows how far a long compile has got ([games](README_GAMES.md)). |
+| 📜 **Large programs too** | Whole programs of thousands of lines compile on the board, like [Valmora](README_GAMES.md#valmora-an-adventure-in-the-style-of-the-early-role-playing-games), a top-down adventure, [Ironforge](README_GAMES.md#ironforge-a-shooter-with-mid-90s-technology), a first-person shooter, or [Wickwire](README_GAMES.md#wickwire-a-3d-platform-game-rendered-by-the-script), a 3D platform game of 5200 lines ([games](README_GAMES.md)). |
 | 💾 **Compile once, run anywhere** | Save the compiled binary to flash or SD and load it later, without the source, even from another sketch. |
-| 🛡️ **Checked, not just trusted** | The whole compiler also runs on a computer; the generated code is executed under QEMU, compared frame by frame with C, and fuzzed against C. |
 
 ---
 
 ## 🆕 What's new
 
-Structures shared with your sketch and passed by pointer, a script scheduler, compile errors you can show, much faster code: the latest changes, with what they bring and the measurements, are in **[changes.md](changes.md)**.
+Faster code (zero-overhead loops, smaller instructions), a compiler 2 to 3 times faster, structures shared with your sketch, a script scheduler, compile errors you can show: the latest changes and their measurements are in **[changes.md](changes.md)**.
 
 ---
 
@@ -59,111 +50,51 @@ Structures shared with your sketch and passed by pointer, a script scheduler, co
 <!-- TOC start -->
 
 - [Which language?](#which-language)
-  * [C like language](#c-like-language)
-  * [DIY parser and compiler](#diy-parser-and-compiler)
-  * [Not a development environment](#not-a-development-environment)
-
 - [More than a led language](#more-than-a-led-language)
-
 - [First light](#first-light-)
   * [Checking for errors](#checking-for-errors)
   * [Watching a long compile](#watching-a-long-compile)
   * [Freeing an executable](#freeing-an-executable)
   * [Where the code goes](#where-the-code-goes)
-
 - [The function you call can have input parameters](#the-function-you-call-can-have-input-parameters)
   * [Fewer values than parameters: `argc`](#fewer-values-than-parameters-argc)
-
 - [Filling variables from JSON](#filling-variables-from-json)
   * [Changing the settings of a running script](#changing-the-settings-of-a-running-script)
-
 - [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions)
   * [Access to pre-compiled variables](#access-to-pre-compiled-variables)
   * [Binding an array or a pointer](#binding-an-array-or-a-pointer)
   * [Calling pre-compiled functions](#calling-pre-compiled-functions)
-
 - [Arguments, JSON variables or bound variables?](#arguments-json-variables-or-bound-variables)
   * [Changing a bound variable from your C++ code](#changing-a-bound-variable-from-your-c-code)
-
 - [CRGB and the hue function](#crgb-and-the-hue-function)
-  * [A v1 script: the display icon](#a-v1-script-the-display-icon)
-
 - [Safe mode and arrays](#safe-mode-and-arrays)
-
 - [Variable types](#variable-types)
   * [Fixed point: ffloat](#fixed-point-ffloat)
   * [Arrays and multidimensional arrays](#arrays-and-multidimensional-arrays)
-
 - [Structures](#structures)
-  * [Defining a structure](#defining-a-structure)
-  * [Memory layout](#memory-layout)
-  * [Structures as function arguments](#structures-as-function-arguments)
-  * [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch)
-  * [A structure from a library](#a-structure-from-a-library)
-  * [The sketch calling a script with a structure](#the-sketch-calling-a-script-with-a-structure)
-  * [Limits and error messages](#limits-and-error-messages)
-  * [Structure examples](#structure-examples)
-
 - [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script)
-  * [How a key reaches the script](#how-a-key-reaches-the-script)
-  * [The sketch, part by part](#the-sketch-part-by-part)
-  * [The script](#the-script)
-
 - [Saving executables](#saving-executables)
-  * [Binded functions](#binded-functions)
-
 - [What you can do with the language](#what-you-can-do-with-the-language)
   * [Use of define](#use-of-define)
   * [Assembly functions: `__ASM__`](#assembly-functions-__asm__)
-
 - [Running scripts in the background](#running-scripts-in-the-background)
   * [Parameters for a task](#parameters-for-a-task)
   * [The script scheduler](#the-script-scheduler)
-
+- [Interrupts](#interrupts)
 - [Performance](#performance)
-  * [Summary](#summary)
-  * [Function calls: fib(40)](#function-calls-fib40)
-  * [Loops and arrays: Game of Life](#loops-and-arrays-game-of-life)
-  * [Floating point: Mandelbrot](#floating-point-mandelbrot)
-  * [Structs and methods: bouncing balls](#structs-and-methods-bouncing-balls)
-  * [Calling a host function per pixel: rainbow](#calling-a-host-function-per-pixel-rainbow)
-  * [A real script: MultiEffectController](#a-real-script-multieffectcontroller)
-  * [GPIO switching speed](#gpio-switching-speed)
-  * [Constant indexes and structure copies](#constant-indexes-and-structure-copies)
-  * [Compiling](#compiling)
-
-- [Advanced stuff](#advanced-stuff)
-  * [Pointer to the executable and interrupts](#pointer-to-the-executable-and-interrupts)
-
-- [Testing](#testing)
-
 - [Examples](#examples)
-  * [Games](#games): on their own page, [README_GAMES.md](README_GAMES.md)
-
+- [Testing](#testing)
 - [Known limitations](#known-limitations)
-
 - [Conclusion](#conclusion)
-
 - [API reference](#api-reference)
-  * [Compiling and running](#compiling-and-running-script_executableh)
-  * [Arguments](#arguments-argumentsh)
-  * [Running as a task](#running-as-a-task-script_executableh)
-  * [Compile errors](#compile-errors-script_executableh)
-  * [Saving and loading compiled scripts](#saving-and-loading-compiled-scripts-script_executableh)
-  * [Binding your C++ functions, variables and structures](#binding-your-c-functions-variables-and-structures-bindingh)
-  * [Runtime errors](#runtime-errors-runtime_functionsh)
-  * [The script scheduler](#the-script-scheduler-script_schedulerh)
-  * [Built into every script](#built-into-every-script)
 
 <!-- TOC end -->
-
 
 ---
 
 # Which language?
 
-## C like language
-Same choice as v1: a C like syntax, close to JavaScript with stronger typing. It is a loose adaptation of C, not a strict subset, but you can write programs like this:
+A C like syntax, close to JavaScript with stronger typing. It is a loose adaptation of C, not a strict subset, but you can write programs like this:
 
 ```c
 void main()
@@ -184,17 +115,13 @@ void main()
 }
 ```
 
-## DIY parser and compiler
-Still written by hand, still no grammar tool, and I am still not a compiler specialist :). The difference with v1 is that every change now goes through the tests described in [Testing](#testing).
-
-## Not a development environment
-This library compiles and runs scripts; it doesn't give you a place to write them. [LedOS](https://github.com/hpwit/LedOS) (a console terminal to edit, save and run programs) and [StarLight](https://github.com/MoonModules/StarLight) (a web-enabled esp32 application) both use v1. Neither has been ported to v2 yet.
+This library compiles and runs scripts; it doesn't give you a place to write them. SolarOS has a terminal with an editor and `asm run` / `asm save`; [LedOS](https://github.com/hpwit/LedOS) and [StarLight](https://github.com/MoonModules/StarLight) use v1.
 
 ---
 
 # More than a led language
 
-ESPLiveScript started as a way to try led animations without re-flashing, and the led side is still where it shines. But the language has grown into something much more **general purpose**: what you write is plain C-like code that has nothing to do with leds, compiled to machine code like any other function of your sketch.
+ESPLiveScript started as a way to try led animations without re-flashing, and the led side is still where it shines. But what you write is plain C-like code that has nothing to do with leds:
 
 ```c
 struct Account
@@ -251,11 +178,11 @@ account 1: 24 (standard)
 account 2: 120 (gold)
 ```
 
-What you get today, led or no led:
+What you get, led or no led:
 
 | | |
 |:--|:--|
-| 🧮 **Numbers** | `int`, `uint8_t`... `uint32_t`, `float` on the hardware FPU, `ffloat` fixed point, `^` power, `<<` `>>`, bitwise `&` / `\|` |
+| 🧮 **Numbers** | `int`, `uint8_t`... `uint32_t`, `float`, `ffloat` fixed point, `^` power, `<<` `>>`, bitwise `&` / `\|` |
 | 🧱 **Data** | structs with methods and constructors, arrays of structs, structs by value and by pointer, 1D/2D/3D arrays, pointers, `char *` strings |
 | 🔀 **Control flow** | `if`/`else`, `while`, `for`, `break`/`continue`, `switch`/`case`/`default`, the ternary operator, short-circuit `&&` / `\|\|`, recursion |
 | 🧠 **Memory** | `alloc()` / `free()` with `writeInt()` / `readInt()`, `safe_mode` bounds checking |
@@ -263,7 +190,6 @@ What you get today, led or no led:
 | 🧵 **System** | background FreeRTOS tasks, GPIO interrupts, direct register access, binaries saved and loaded |
 
 Examples that have nothing to do with leds: [Factorial](examples/Factorial), [SwitchCase](examples/SwitchCase), [StringFunctions](examples/StringFunctions), [MemoryAllocator](examples/MemoryAllocator), [PinInterrupt](examples/PinInterrupt), [DirectGPIO](examples/DirectGPIO), [ExecuteAsTask](examples/ExecuteAsTask), [SaveScriptBinary](examples/SaveScriptBinary).
-
 
 ---
 
@@ -315,14 +241,11 @@ i:19 3*i:57
 ```
 
 > [!NOTE]
-> `printf` and `printfln` are built into the compiler, there is nothing to bind. Same for `alloc`, `free`, `writeInt` and `readInt` (see [What you can do with the language](#what-you-can-do-with-the-language)).
-
-> [!NOTE]
-> You can call any function of the script, not only `main`, and unlike v1 you get its return value back (see the next section).
+> `printf` and `printfln` are built in, there is nothing to bind. Same for `alloc`, `free`, `writeInt` and `readInt` (see [What you can do with the language](#what-you-can-do-with-the-language)). You can call any function of the script, not only `main`, and you get its return value back (see the next section).
 
 ## Checking for errors
 
-`exec.isExeExists()` is `true` when parsing, assembling and loading all worked. When it is `false` the script didn't compile: don't run it, and show why with `showCompileError()`:
+`exec.isExeExists()` is `true` when the script compiled and loaded. When it is `false`, don't run it, and show why with `showCompileError()`:
 
 ```cpp
 ScriptExecutable exec = parseScript(script);
@@ -336,11 +259,7 @@ else
 }
 ```
 
-`showCompileError()` prints the error of the last compile as a report: the message, the line of the script, and a `^` under the place where the problem was found. It prints nothing if the last compile worked.
-
-### Two common mistakes
-
-Take two broken scripts ([CompileErrors](examples/CompileErrors)), one using a variable that was never declared, the other missing a `;` at the end of a line:
+`showCompileError()` prints the message, the line of the script, and a `^` under the place where the problem was found. Two broken scripts from [CompileErrors](examples/CompileErrors), one using a variable that was never declared, the other missing a `;`:
 
 ```c
 void main()
@@ -360,7 +279,7 @@ void main()
 }
 ```
 
-`showCompileError()` gives:
+give:
 
 ```
 error   : Impossible to find variable declaration
@@ -377,19 +296,11 @@ line 5  :    a = a + 1;
 > [!NOTE]
 > A missing `;` is noticed where the next statement starts, so the error points at the line after the one that lacks it. Lines count from the first line of the script text: with `R"EOF(` followed by a new line, the script's first line is an empty line 1.
 
-`parseScript()` also prints the error by itself when it happens, in a shorter form:
-
-```
-Expecting ;
-line:  5 position:  4 "   a = a + 1;"
-                          ^
-```
-
-so you see it in the console even without calling anything. `showCompileError()` is for printing it again, later or in a clearer form.
+`parseScript()` also prints the error by itself, in a shorter form, so you see it in the console even without calling anything.
 
 ### Calling a function the wrong way
 
-When a call matches no function, the message says what the call asked for and which functions of that name exist, with their parameter types:
+When a call matches no function, the message says what the call asked for and which functions of that name exist:
 
 ```
 error   : Function not found: setTag(P *, number); there is setTag(P *, char)
@@ -397,7 +308,7 @@ error   : Function not found: blink(number); no function has that name
 error   : Function not found: make() can't give a structure: functions can't return one yet
 ```
 
-`number` is any of `int`, `float`, `uint8_t`..., which all travel the same way; `char` and pointers must match.
+`number` is any of `int`, `float`, `uint8_t`...; `char` and pointers must match.
 
 ### Showing the error your own way
 
@@ -412,15 +323,15 @@ if (e.failed)
 |`CompileError` field|What it holds|
 |:----|:----|
 |`failed`|`true` if the last compile failed|
-|`message`|the error, e.g. `Expecting ;`, `Impossible to find variable declaration`|
-|`line`, `position`|where it was noticed, both from 1 (`line` is 0 for an assembler error)|
+|`message`|the error, e.g. `Expecting ;`|
+|`line`, `position`|where it was noticed, both from 1|
 |`sourceLine`|that line of the script, as written|
 
-A failed compile leaves nothing behind: fix the script and compile it again (a live-coding loop, a script edited on the device) and its functions and structures are declared afresh. `lastCompileError()` keeps the error until the next compile.
+A failed compile leaves nothing behind: fix the script and compile it again.
 
 ## Watching a long compile
 
-A short script compiles in a moment, but a long one takes a while on an esp32: Ironforge's 3200 lines need about five minutes. `setCompileProgress()` lets your sketch show that it is working: give it a function, and the compiler calls it as it goes, with how far it is.
+A short script compiles in a moment, but a long one takes a while on an esp32 (Wickwire's 5200 lines: five and a half minutes). `setCompileProgress()` lets your sketch show that it is working:
 
 ```cpp
 void showProgress(int percent, const char *stage, void *ctx)
@@ -433,22 +344,16 @@ ScriptExecutable exec = parseScript(script);
 setCompileProgress(NULL, NULL);            // optional: no more calls
 ```
 
-What your function receives:
-
 |Parameter|What it holds|
 |:----|:----|
 |`percent`|0 to 100, never going back; 100 only once the compile succeeded|
-|`stage`|what the compiler is doing: `"reading"` (the text into words), `"parsing"`, `"generating"` (the machine instructions), `"optimizing"`, `"assembling"` (into bytes), then `"done"` with 100|
-|`ctx`|the second argument of `setCompileProgress()`, passed back unchanged: a display, a progress bar object, anything your function needs (`NULL` if nothing)|
+|`stage`|`"reading"`, `"parsing"`, `"generating"`, `"optimizing"`, `"assembling"`, then `"done"` with 100|
+|`ctx`|the second argument of `setCompileProgress()`, passed back unchanged: a display, a progress bar object... (`NULL` if nothing)|
 
-When it is called:
-
-- for every compile (`parseScript()`, `parseScriptToBinary()`), until you call `setCompileProgress(NULL, NULL)`;
-- only when the percentage moves on, and once more when the stage changes: about 70 to 100 calls for a whole compile, so drawing a bar or printing a line in it doesn't slow the compile down;
-- the percentage follows the time: each stage gets the share of the 100 it takes on real scripts (parsing about 20, optimizing about 55, assembling about 25), and the long stages report as they go, so 50% is about half the time;
-- a script with an error stops where the error is found: there is no `"done"`, and `parseScript()` reports the error as usual (see [Checking for errors](#checking-for-errors)).
-
-Two rules: your function runs **inside the compiler**, on the task that compiles, so it must not compile, load or free a script itself; and it should return quickly (print a line, draw a bar, toggle a LED).
+- It is called for every compile (`parseScript()`, `parseScriptToBinary()`) until you call `setCompileProgress(NULL, NULL)`, about 70 to 100 times per compile, so printing a line or drawing a bar costs nothing noticeable.
+- The percentage follows the clock: 50% is about half the time.
+- A script with an error stops where the error is found: there is no `"done"`.
+- Your function runs inside the compiler: it must not compile, load or free a script itself, and it should return quickly.
 
 A bar on a screen, using `ctx` to reach it:
 
@@ -464,10 +369,11 @@ void drawBar(int percent, const char *stage, void *ctx)
 setCompileProgress(drawBar, &lcd);
 ```
 
-The example [CompileProgress](examples/CompileProgress) prints a bar on the Serial Monitor while a script compiles. SolarOS's `asm run` / `asm save` show the same progress on their terminal line.
+See [CompileProgress](examples/CompileProgress).
 
 ## Freeing an executable
-A `ScriptExecutable` frees its memory by itself when it goes out of scope, so most of the time you have nothing to do. If you want the memory back sooner, for instance before compiling a second script, use `exec.free()`:
+
+A `ScriptExecutable` frees its memory by itself when it goes out of scope. To get the memory back sooner, for instance before compiling a second script, use `exec.free()`:
 
 ```cpp
 ScriptExecutable exec1 = parseScript(script1);
@@ -487,11 +393,13 @@ if (exec2.isExeExists())
 > [!WARNING]
 > A `ScriptExecutable` can't be copied or reassigned. For a second script, create a second `ScriptExecutable` as above.
 
-`free()` can be called several times without harm. See [TwoScripts](examples/TwoScripts) for the complete sketch.
+`free()` can be called several times without harm. See [TwoScripts](examples/TwoScripts).
 
 ## Where the code goes
 
-A script's machine code goes into **one contiguous block of executable internal RAM** (`heap_caps_malloc(size, MALLOC_CAP_EXEC)`); its global variables go into the ordinary heap (PSRAM when there is some). A large script's code is tens of KB (Ironforge: 40.5 KB), and a firmware that has been running a while may have no free piece that big left, even with plenty of RAM free in total. Such a program can set a block aside at start, before anything breaks the internal RAM up, and give it to the loader:
+By default a script's code goes into executable internal RAM and its global variables into the ordinary heap. A large script's code is tens of KB, and a firmware that has been running a while may have no free piece that big left. Two ways out:
+
+**Hand the loader a block of your own**, set aside at start:
 
 ```cpp
 #include "asm_execute.h"
@@ -520,9 +428,9 @@ void codeFree(void *code)
 setExecutableAllocator(codeAlloc, codeFree);   // before loading a script
 ```
 
-`release` gets every pointer `alloc` returned, when the script is freed. `setExecutableAllocator(NULL, NULL)` goes back to `MALLOC_CAP_EXEC`. When the code doesn't fit, the load error gives its size and the largest executable block there was.
+`setExecutableAllocator(NULL, NULL)` goes back to the default. When the code doesn't fit, the load error gives its size and the largest block there was.
 
-**Code in PSRAM.** On an ESP32-S3 with PSRAM the code can also run from PSRAM, leaving the internal RAM alone:
+**Run the code from PSRAM** (ESP32-S3 with PSRAM):
 
 ```cpp
 #include "asm_execute.h"
@@ -533,9 +441,7 @@ ScriptExecutable exec = parseScript(script);    // this one's code is in PSRAM
 setScriptCodeMemory(SCRIPT_CODE_IRAM);          // back to the default
 ```
 
-The S3's data and instruction buses share one MMU table, so PSRAM seen as data at `0x3C000000 + n` is also code at `0x42000000 + n`: the loader writes and relocates the code through the first address and runs it through the second, the way ESP-IDF's ELF loader runs code from PSRAM. The code is then fetched through the 16 or 32 KB instruction cache, which the firmware's own flash code shares: a small script runs about as fast, a large one (tens of KB in its main loop) may be slower. A script keeps the memory it was loaded into; `executableCodeMemory(&exe)` says which.
-
-`SCRIPT_CODE_AUTO` puts the code in internal RAM when a block that big is free and in PSRAM otherwise: once a busy firmware has broken up its internal RAM, a large script still loads.
+`SCRIPT_CODE_AUTO` puts the code in internal RAM when a block that big is free and in PSRAM otherwise. A small script runs about as fast from PSRAM; a large one may be slower. `executableCodeMemory(&exe)` says where a loaded script went.
 
 ---
 
@@ -549,9 +455,9 @@ exec.execute("fact", &args, &result);
 ```
 
 > [!NOTE]
-> For now arguments can only be `int` or `float`, same as v1.
+> Arguments can be `int` or `float` (and pointers, given as an `int`).
 
-In this example we calculate a factorial in the script and read the result back in the sketch ([Factorial](examples/Factorial)):
+A factorial computed in the script and read back in the sketch ([Factorial](examples/Factorial)):
 
 ```cpp
 #include "script_executable.h"
@@ -597,25 +503,17 @@ void loop()
 }
 ```
 
-result:
-
 ```
 factorial of 5 is 120
 factorial of 6 is 720
 factorial of 7 is 5040
 ```
 
-> [!NOTE]
-> `execute()` calls the function directly, like one script function calling another, which is why you get the return value. `main()` is no exception: `exec.execute("main", &result)` works too.
+`main()` is no exception: `exec.execute("main", &result)` gives its return value too.
 
 ## Fewer values than parameters: `argc`
 
-You don't have to give a function a value for every parameter. A call carries up to 6 values, and they fill the parameters in order:
-
-- a parameter with no value gets **0**: `0` for an `int`, `0.0` for a `float`, `NULL` for a pointer or a `char *`;
-- values beyond the parameters are ignored.
-
-So a function can have optional parameters. But a parameter that received `0` looks exactly like one that received nothing. When the difference matters, have the sketch say how many values it gave: bind a variable, conventionally `argc`, and set it before each call.
+A call carries up to 6 values, and they fill the parameters in order: a parameter with no value gets **0** (`0`, `0.0`, or `NULL` for a pointer), and values beyond the parameters are ignored. So a function can have optional parameters. When "0" and "nothing" must be told apart, bind a variable, conventionally `argc`, and set it before each call:
 
 ```cpp
 int argc = 0;    // how many values the sketch gives main()
@@ -655,7 +553,7 @@ int main(int n)
 }
 ```
 
-A script can then work like a command-line program: SolarOS's `asm run fib.sc 40` passes the `40` to `main` this way, binds `argc`, and adds `arg(i)`, `argf(i)` and `argstr(i)` to read any of the values anywhere in the script (bound host functions returning the values the sketch keeps). `Arguments` lists and `executeAsTask(name, args, nargs, ...)` behave the same: missing parameters are 0.
+A script then works like a command-line program: SolarOS's `asm run fib.sc 40` passes the `40` to `main` this way.
 
 ---
 
@@ -696,28 +594,23 @@ Each returns `false` when the JSON can't be read, and says why on the console.
 
 | In the script | Meaning |
 |---|---|
-| `json a.b.c as int v;` | The value at key `a`, then `b`, then `c`. v1's unquoted form. |
+| `json a.b.c as int v;` | The value at key `a`, then `b`, then `c`. |
 | `json "a.b" as int v;` | The same, quoted: needed when a key isn't a plain name, or for an array index (`"list.1"`, the second element). |
 | `json "p" as int v = 50;` | An initial value, used until a JSON sets it. |
 
 > [!NOTE]
-> - The types are `int`, `uint32_t`, `uint16_t`, `s_int`, `uint8_t`, `bool`, `char`, `float` and `ffloat`, each written at its own size. A `char` array takes a string, cut to its size and always ended by a 0; any other array takes a JSON array, as many elements as both have.
+> - The types are `int`, `uint32_t`, `uint16_t`, `s_int`, `uint8_t`, `bool`, `char`, `float` and `ffloat`. A `char` array takes a string, cut to its size; any other array takes a JSON array.
 > - A key the document doesn't have leaves its variable as it was, so a JSON can change only some of the settings.
-> - The JSON support needs the [ArduinoJson](https://arduinojson.org) library (version 6 or 7) and comes on when the sketch includes `<ArduinoJson.h>`. Without it, scripts using `json` still compile, and `execute(name, json)` says what to add.
-> - A compiled script saved with [parseScriptToBinary()](#saving-executables) keeps its `json` variables.
+> - The JSON support needs the [ArduinoJson](https://arduinojson.org) library (version 6 or 7) and comes on when the sketch includes `<ArduinoJson.h>`.
+> - A script saved with [parseScriptToBinary()](#saving-executables) keeps its `json` variables.
 
-See the [JsonInput](examples/JsonInput) example (v1's `jsonexample`, with strings and arrays added), and [Arguments, JSON variables or bound variables?](#arguments-json-variables-or-bound-variables) for when to use JSON rather than arguments or bound variables.
+See [JsonInput](examples/JsonInput).
 
 ## Changing the settings of a running script
 
-A script running on its own task (`executeAsTask()`) can get new settings while it runs. `updateJson()` writes the values straight into the script's variables, from whichever task calls it, and the script reads each variable from memory every time it uses it: it sees the new value at its next read, even from the other core.
+A script running on its own task (`executeAsTask()`) can get new settings while it runs: `updateJson()` writes the values into the script's variables, from any task, and the script sees them at its next read. A value the script copied into a local variable stays old, and the values change one after another, so a frame can mix old and new settings.
 
-Two things to keep in mind:
-
-- A value the script copied into a local variable stays old: `int s = speed;` before a loop keeps the first speed. Read the `json` variable where you need the current value.
-- The values change one after another. Each number is written in one go, so the script never sees half a number, but it can use some old and some new settings in the same frame, or half of a string.
-
-When the settings must change together, let the script pick them up itself, at a point it chooses: give it a function to call at the top of its loop, which applies the waiting JSON on the script's own task.
+When the settings must change together, let the script pick them up at a point it chooses, through a function it calls at the top of its loop:
 
 ```cpp
 static ScriptExecutable *script = NULL;
@@ -743,13 +636,13 @@ void main()
 }
 ```
 
-Running script code from another task at the same time, with `executeOnly(name, json)` say, would run it twice at once over the same variables: on a running script, use `updateJson()` only. See the [JsonLiveSettings](examples/JsonLiveSettings) example (run on an esp32: new settings every 2 seconds, applied between two frames).
+On a running script, use `updateJson()` only, not `execute()`/`executeOnly()` from another task. See [JsonLiveSettings](examples/JsonLiveSettings).
 
 ---
 
 # Interaction with pre-compiled functions
 
-A script can't do everything the Espressif compiler can: no WiFi, no SPI or I2C, and you don't want to rewrite FastLED in a script. So a script can call your pre-compiled C++ functions and read/write your C++ variables. In v2 this is done with `bindFunction()` and `bindVariable()` (`binding.h`), called **before** `parseScript()`.
+A script can't do everything the Espressif compiler can: no WiFi, no SPI or I2C, and you don't want to rewrite FastLED in a script. So a script can call your pre-compiled C++ functions and read/write your C++ variables, bound by name with `bindFunction()` and `bindVariable()` (`binding.h`), called **before** `parseScript()`.
 
 ## Access to pre-compiled variables
 
@@ -757,9 +650,7 @@ A script can't do everything the Espressif compiler can: no WiFi, no SPI or I2C,
 bindVariable((char *)"type", (char *)"name_in_the_script", arraySizeOrNull, (void *)&variable);
 ```
 
-The script also needs to declare the variable `external`. The script works on your variable itself, not a copy: what happens when your code changes it while the script runs is in [Changing a bound variable from your C++ code](#changing-a-bound-variable-from-your-c-code).
-
-Example:
+The script declares the variable `external` and works on your variable itself, not a copy:
 
 ```cpp
 #include "script_executable.h"
@@ -822,11 +713,6 @@ void loop()
 }
 ```
 
-> [!NOTE]
-> Here we call three different functions, all defined in the script.
-
-Result:
-
 ```
 value: 5
 value: 240
@@ -840,10 +726,10 @@ old value:15 new value:17
 
 ## Binding an array or a pointer
 
-An array and a pointer are bound differently, because they are different things in C:
+An array and a pointer are bound differently, as in C:
 
-- an **array**, `CRGB leds[64];`, *is* the pixels: you give the array's own address, and its size (or `"[]"` to leave it out);
-- a **pointer**, `CRGB *frame;`, is a variable that *holds* the address of the pixels: you give the address of that variable, and the script reads the pointer each time before going to the pixels.
+- an **array**, `CRGB leds[64];`, *is* the pixels: give the array's address and its size (or `"[]"`);
+- a **pointer**, `CRGB *frame;`, *holds* the address of the pixels: give the address of the pointer variable, and the script follows it each time, so you can point it elsewhere while the script runs (double buffering).
 
 ```cpp
 #include "script_executable.h"
@@ -876,43 +762,23 @@ void setup()
 }
 ```
 
-On an esp32 it prints `leds[3].red = 255, bufferA[3].green = 255`, then `bufferB[3].green = 255`.
-
 | | Array | Pointer |
 |---|---|---|
 | Type | `"CRGB"` | `"CRGB *"` |
 | Size | `"[64]"`, or `"[]"` | `NULL` |
 | Address | `(void *)leds` | `(void *)&frame` |
-| The script, for `x[i]` | goes straight to element `i` | loads the pointer, then goes to element `i` |
-| Use it for | a buffer that stays where it is | a buffer you change while the script runs (double buffering) |
+| Use it for | a buffer that stays where it is | a buffer you change while the script runs |
 
 > [!WARNING]
-> Mixing them up crashes the board. `bindVariable("CRGB *", "leds", "", (void *)leds)` says that a pointer is stored at the array's address: the script reads the first pixels' bytes as an address and writes there (`StoreProhibited`, with a small `EXCVADDR` such as `0x00007a34`). Before 2.0.0 that binding happened to work, because the script didn't read pointers; it broke every real pointer instead. Give the array type with `"[]"`, or bind a pointer variable with `&`.
+> Mixing them up crashes the board: `bindVariable("CRGB *", "leds", "", (void *)leds)` tells the script that a pointer is stored where the pixels are. Give the array type with `"[]"`, or bind a pointer variable with `&`.
 
-### What the script declares
-
-A script can use the bound variable as it is, or declare it itself, to give it dimensions:
-
-| Binding | Script declares | `leds[i]` | `leds[y, x]` |
-|---|---|---|---|
-| array (`"CRGB"`, `"[]"`) | nothing | the array | no: no dimensions |
-| array | `external CRGB leds[96, 128];` | the array | the array |
-| pointer (`"CRGB *"`, `&ptr`) | nothing | where `ptr` points | no: no dimensions |
-| pointer | `external CRGB leds[96, 128];` | where `ptr` points | where `ptr` points, row `y`, column `x` |
-
-So with a pointer binding, a script declaring `external CRGB leds[96, 128];` reads the pointer each time and uses the dimensions it declares: `leds[y, x]` and `leds[i]` both work, and both follow the pointer when you move it.
-
-> [!NOTE]
-> - Without dimensions, `leds[y, x]` is an error that says to declare them.
-> - A single value can't be indexed: with `bindVariable("CRGB", "leds", "", leds)` (no `"[]"`), `leds` is one `CRGB`, and `leds[i]` in a script that doesn't declare it is an error. It used to write that one value whatever `i` was.
+A script can give a bound variable dimensions by declaring it: with `external CRGB leds[96, 128];`, both `leds[y, x]` and `leds[i]` work, for an array binding as for a pointer binding.
 
 ## Calling pre-compiled functions
 
 ```cpp
 bindFunction((char *)"return_type", (char *)"name_in_the_script", (char *)"argument_types", (void *)function);
 ```
-
-Example:
 
 ```cpp
 #include "script_executable.h"
@@ -964,22 +830,18 @@ void loop()
 }
 ```
 
-Result:
-
 ```
 from pre-compiled 1.529412
 from other function
 ```
 
-For bigger sketches built the same way, see [StructsAndHostBindings](examples/StructsAndHostBindings) and [BouncingBalls](examples/BouncingBalls).
-
-A variable can also have the type of one of your sketch's structures: see [Sharing a structure with the sketch](#sharing-a-structure-with-the-sketch).
+For bigger sketches built the same way, see [StructsAndHostBindings](examples/StructsAndHostBindings) and [BouncingBalls](examples/BouncingBalls). A variable or a parameter can also have the type of one of your sketch's structures: see [Structures](#structures).
 
 ---
 
 # Arguments, JSON variables or bound variables?
 
-There are three ways to give values to a script. They differ in where the value lives, when a change reaches the script, and what it costs.
+There are three ways to give values to a script:
 
 ```c
 void run(int speed) { ... }                  // 1. an argument
@@ -990,19 +852,17 @@ external int speed;                          // 3. a bound variable (bindVariabl
 | | Argument | JSON variable | Bound variable |
 |---|---|---|---|
 | The sketch gives it with | `execute(name, args)`, at each call | a JSON text: `execute(name, json)` or `updateJson(json)` | nothing: the script uses the sketch's variable itself |
-| Where the value is | a register, for that call only | a variable of the script (a copy) | the sketch's own variable (no copy) |
-| A change reaches the script | at the next call | when `updateJson()` runs, at the script's next read | at once: the script's next read |
+| A change reaches the script | at the next call | when `updateJson()` runs | at once |
 | What the script writes | stays in the function | stays in the script | goes straight into the sketch's variable |
-| Cost per call | 6.1 µs with 3 values (4.2 µs with none) | 112 µs with a 3-key JSON, mostly ArduinoJson reading the text | nothing to pass |
-| Cost per read in the script | none: it is in a register | one load | two loads (the address, then the value) |
+| Cost per call | 6.1 µs with 3 values (4.2 µs with none) | 112 µs with a 3-key JSON | nothing to pass |
 | Types | numbers, `char *`, structures and pointers | numbers, `char` strings, arrays | any: arrays, structures, pointers |
 | Best for | values that change at every call | settings that arrive as text (web page, MQTT, file) | data both sides use while the script runs (a sensor, a led buffer) |
 
-Costs measured on an esp32 at 240MHz, 1000 calls each. A JSON document costs about 100 µs to read whatever the function does with it: give JSON when settings change, not at every frame.
+Costs measured on an esp32 at 240MHz. Reading a JSON document takes about 100 µs: give JSON when settings change, not at every frame.
 
 ## Changing a bound variable from your C++ code
 
-The script reads a bound variable from your variable's memory every time it uses it, and writes go straight there too. So when your code changes the variable, the script sees the new value at its next read, even while it runs on its own task, even on the other core; and what the script writes, your code sees at once.
+The script reads and writes a bound variable in your variable's own memory. When your code changes it, the script sees the new value at its next read, even while it runs on its own task on the other core:
 
 ```cpp
 volatile int brightness = 100;                // shared with a running script
@@ -1016,32 +876,21 @@ void loop()
 }
 ```
 
-On an esp32, with `loop()` halving `brightness` every 1.5 s while the script prints it every 10 frames:
-
-```
-script: frame 30, brightness 100
-sketch: brightness = 50 (frames counted by the script: 31)
-script: frame 40, brightness 50
-sketch: brightness = 25 (frames counted by the script: 61)
-script: frame 70, brightness 25
-```
-
 > [!NOTE]
-> - Declare a variable `volatile` when your code and a running script both use it: the C++ compiler otherwise keeps it in a register in a loop and doesn't see the script's writes, or writes yours late.
-> - A copy stays old: `int b = brightness;` in the script keeps the value of that moment. Read the bound variable where you need the current one.
-> - Each number is read and written in one go, so neither side ever sees half a number. But several variables change one after another, and an array, a string or a structure can be read half old, half new. When several values must change together, let the script take them at a point it chooses, through a function it calls (as in [Changing the settings of a running script](#changing-the-settings-of-a-running-script)), or use a FreeRTOS mutex in a function both call.
-> - Between two calls from the same task, as in the example of [Access to pre-compiled variables](#access-to-pre-compiled-variables), none of this matters: each call sees the variable as it is when it starts.
+> - Declare a variable `volatile` when your code and a running script both use it.
+> - A copy stays old: `int b = brightness;` in the script keeps the value of that moment.
+> - Each number changes in one go, but several variables change one after another. When several values must change together, let the script take them through a function it calls (as in [Changing the settings of a running script](#changing-the-settings-of-a-running-script)), or use a mutex in a function both call.
 
 ---
 
 # CRGB and the hue function
 
-If you are playing with leds, `CRGB` is part of the language, nothing to bind:
+If you are playing with leds, `CRGB` (and `CRGBW`) is part of the language, nothing to bind:
 ```c
 CRGB color = CRGB(red, green, blue);
 ```
 
-**Unlike v1 there is no built-in `hsv()` and no `USE_FASTLED` switch.** If you want `hsv()` or a `leds` array shown by your driver, bind them like any other function or variable:
+**Unlike v1 there is no built-in `hsv()` and no `USE_FASTLED` switch.** Bind `hsv()`, your `leds` array and your driver's `show()` like any other function or variable:
 
 ```cpp
 #include "script_executable.h"
@@ -1062,8 +911,8 @@ void main()
    int k = 0;
    while (true)
    {
-      for (int i = 0; i < 128; i++)
-         for (int j = 0; j < 96; j++)
+      for (int i = 0; i < 16; i++)
+         for (int j = 0; j < 16; j++)
             leds[j * 16 + i] = hsv(i + j + k, 255, 255);
       k++;
       show();
@@ -1092,47 +941,15 @@ void loop()
 }
 ```
 
-See [BouncingBalls](examples/BouncingBalls) for a complete working version.
-
-## A v1 script: the display icon
-
-[DisplayIcon](examples/DisplayIcon) runs v1's `sc_examples/dsiplayicon.sc` without changing a line: a ghost, Mario and a cherry moving over a scrolling rainbow on a 128x96 matrix. The sketch gives it what v1's runtime did: the `leds` buffer, `hsv()`, `sin()`, and `sync()`, called after each frame, which is where your display's `show()` goes.
-
-The sprites are pixel maps with a palette, drawn by a script function:
-
-```c
-void displaypic(int x, int y, char *pic, CRGB *palette, int h, int w)
-{
-   for (int i = 0; i < w; i++)
-      for (int j = 0; j < h; j++)
-         if (pic[i + j * w] < 9)
-            leds[(i + x) % 128 + ((j + y) % 96) * 128] = palette[pic[i + j * w]];
-}
-
-displaypic(m, 15, mario, palm, 14, 17);   // mario is a uint8_t[], palm a CRGB[]
-```
-
-v1 itself refused this script (*function displaypic not found*): it passes `uint8_t` arrays to `char *pic` and `CRGB` arrays to `CRGB *palette`. v2 accepts both, as C does.
-
-Its first 100 frames, compiled by v2 and rendered on an emulated esp32:
+See [BouncingBalls](examples/BouncingBalls) for a complete working version, and [DisplayIcon](examples/DisplayIcon), which runs v1's `dsiplayicon.sc` without changing a line: a ghost, Mario and a cherry moving over a scrolling rainbow on a 128x96 matrix.
 
 ![The first 100 frames of dsiplayicon.sc](examples/DisplayIcon/dsiplayicon.gif)
-
-The same frames computed on a real esp32 give the same checksums:
-
-```
-frame 1: checksum 0bc698dc
-frame 25: checksum 88153e63
-frame 50: checksum f62becc9
-frame 75: checksum 7b7c5ed4
-frame 100: checksum 8a884127
-```
 
 ---
 
 # Safe mode and arrays
 
-Let's consider this script:
+This script writes past the end of its array, with unintended consequences:
 
 ```c
 external uint16_t array[10];
@@ -1146,30 +963,21 @@ void main()
 }
 ```
 
-It will write past the end of the array, with unintended consequences.
-
-To avoid this, put `safe_mode` in the script (no `#`, same as v1):
+Put `safe_mode` in the script (no `#`, same as v1):
 
 ```c
 safe_mode
 external uint16_t array[10];
-
-void main()
-{
-   for (int i = 0; i < 200; i++)
-   {
-      array[i] = 200;
-   }
-}
+...
 ```
 
-you will get
+and you get
 
 ```
 Execution error: index 10 is out of bounds for array 'array' (size 10)
 ```
 
-The write doesn't happen and the whole script stops: you are back in your sketch and `execute()` returns `false`. The details stay available until the next call:
+The write doesn't happen and the script stops: you are back in your sketch and `execute()` returns `false`. The details stay available until the next call:
 
 ```cpp
 ScriptExecutable exec = parseScript(script);
@@ -1180,7 +988,7 @@ if (!exec.execute("main") && exec.hasRuntimeError())
 }
 ```
 
-To report the error your own way (on a display, in a log...), install a handler. It is called instead of the console message:
+To report the error your own way, install a handler, called instead of the console message:
 
 ```cpp
 #include "runtime_functions.h"
@@ -1193,25 +1001,20 @@ void onBoundsError(const runtime_error_struct *e)
 onScriptRuntimeError = onBoundsError;
 ```
 
-What is checked: writes to global and `external` arrays declared with a size (`int buf[10];`, `external CRGB leds[96, 128];`), negative indexes included. For a multidimensional array the flattened index is checked against the total size.
-
-What is not checked: reads, plain pointers and arrays declared without a size (`external uint8_t raw[];`).
-
-`safe_mode` only applies to the script it is written in.
+Checked: writes to global and `external` arrays declared with a size, negative indexes included. Not checked: reads, plain pointers, and arrays declared without a size. `safe_mode` applies to the script it is written in.
 
 > [!TIP]
-> Every checked write costs three extra instructions, so it will slow the script down. Use it when you are hunting an indexing bug. See [SafeMode](examples/SafeMode).
+> Checked writes are slower: use `safe_mode` when you are hunting an indexing bug. See [SafeMode](examples/SafeMode).
 
 ---
 
 # Variable types
 
-Here are the types:
 * `uint8_t`
 * `char`
 * `bool`: `true`, `false`
-* `int`: int over 4 bytes
-* `s_int`: int over 2 bytes
+* `int`: 4 bytes
+* `s_int`: 2 bytes
 * `uint16_t`
 * `uint32_t`
 * `float`
@@ -1221,29 +1024,27 @@ Here are the types:
 
 ## Fixed point: ffloat
 
-`ffloat` is a 32-bit fixed-point number: 16 integer bits and 16 fraction bits, so about ±32768 in steps of 1/65536. You write it exactly like a float, and the compiler does the fixed-point arithmetic with integer instructions:
+`ffloat` is a 32-bit fixed-point number, about ±32768 in steps of 1/65536. You write it exactly like a float, and it is computed with integer instructions:
 
 ```c
 ffloat m = 2.3 / 4 + 2;     // computed at compile time: 2.575
-ffloat k = m * 0.5;         // fixed-point multiply, no float instruction
-if (k > 1.25)               // integer comparison
+ffloat k = m * 0.5;
+if (k > 1.25)
    k = k / 3;
 int i = m;                  // 2 (toward zero, like a float)
 ```
 
 What you need to know:
-- constants are computed at compile time;
-- `+`, `-`, `%`, comparisons, `++`/`--` and `abs` are plain integer instructions;
-- `*` is a 64-bit multiply shifted back by 16. Multiplying or dividing by an integer (`x * 3`, `x / n`) is a plain integer multiply or divide. Dividing by zero gives the largest value with the result's sign; it doesn't crash;
 - an `int` meeting an `ffloat` is converted for you, and `int i = x;` truncates toward zero like a float;
-- as for every type of the language, the type you assign to decides how the expression is computed: `ffloat r = 7 / 2;` is 3.5, `int k = m * 2;` converts `m` to an int first;
-- results outside ±32768 wrap around like an int. Watch squares and powers: [BouncingBallsFfloat](examples/BouncingBallsFfloat) computes `(distance / r²)²` instead of `distance² / r⁴`, which goes up to ~72000;
-- `printfln("%f", x)` reads a `float`: for an `ffloat`, convert it first, `printfln("%f", (float)x)`.
+- the type you assign to decides how the expression is computed: `ffloat r = 7 / 2;` is 3.5, `int k = m * 2;` converts `m` to an int first;
+- dividing by zero gives the largest value with the result's sign; it doesn't crash;
+- results outside ±32768 wrap around like an int. Watch squares and powers: [BouncingBallsFfloat](examples/BouncingBallsFfloat) computes `(distance / r²)²` instead of `distance² / r⁴`;
+- `printfln("%f", x)` reads a `float`: convert first, `printfln("%f", (float)x)`.
 
 > [!TIP]
-> The esp32 has a hardware single-precision FPU, so `float` is already fast. `ffloat` wins when there are a lot of conversions, divisions and integer mixing (see [Performance](#performance)).
+> The esp32 has a hardware FPU, so `float` is already fast. `ffloat` wins where there are many conversions, divisions and integer mixing: the Mandelbrot runs 31% faster in `ffloat` (see [Performance](#performance)).
 
-See [MandelbrotFfloat](examples/MandelbrotFfloat) (the float Mandelbrot with `float` replaced by `ffloat`) next to [MandelbrotFixedPoint](examples/MandelbrotFixedPoint) (the same picture with the scaling done by hand), and [FloatVsFfloat](examples/FloatVsFfloat) for a side-by-side timing.
+See [MandelbrotFfloat](examples/MandelbrotFfloat), [MandelbrotFixedPoint](examples/MandelbrotFixedPoint) (the same picture with the scaling done by hand) and [FloatVsFfloat](examples/FloatVsFfloat).
 
 ## Arrays and multidimensional arrays
 
@@ -1257,13 +1058,11 @@ int array3D[depth, height, width];
 int h = array3D[2, 12, 23];
 ```
 
-Structures have a chapter of their own: [Structures](#structures).
-
 ---
 
 # Structures
 
-A structure groups fields, and optionally methods and a constructor, into a type of its own. In v2 they behave like C's: same memory layout, passed to functions by value or by pointer, and shared with your sketch's own C++ structures.
+A structure groups fields, and optionally methods and a constructor, into a type of its own. They behave like C's: same memory layout, passed to functions by value or by pointer, and shared with your sketch's C++ structures.
 
 ## Defining a structure
 
@@ -1295,23 +1094,11 @@ void main()
 ```
 
 > [!NOTE]
-> - A definition ends with `};` as in C (v1 didn't need the `;`).
-> - `varname d;` is the same as `varname d = varname();`, and a constructor can take arguments: `varname d2 = varname(23);`.
-> - A function or method must be defined before it is called (for the moment).
+> - A definition ends with `};` as in C.
+> - A constructor can take arguments: `varname d2 = varname(23);`.
+> - A function or method must be defined before it is called.
 
-## Memory layout
-
-Fields are laid out exactly as the ESP32's C compiler lays them out: each field starts at a multiple of its own alignment, and the structure's size is rounded up to a multiple of its largest alignment.
-
-```c
-struct particle
-{
-   char tag;        // offset 0, then 3 bytes of padding
-   int x;           // offset 4
-   uint16_t life;   // offset 8, then 2 bytes of padding
-   float speed;     // offset 12
-};                  // size 16, same as sizeof(particle) in C
-```
+The fields are laid out as the ESP32's C compiler lays them out (each at a multiple of its own alignment), so a script and your sketch can read the same bytes:
 
 | Type | Size | Aligned on |
 |---|---|---|
@@ -1320,14 +1107,9 @@ struct particle
 | `int`, `uint32_t`, `float`, `ffloat` | 4 | 4 |
 | `CRGB` / `CRGBW` | 3 / 4 | 1 |
 
-That is what lets a script and your sketch read the same bytes, and the fields can be written in any order.
-
-> [!NOTE]
-> Before this release, fields were packed with no padding: in `struct { char a; int b; }`, `b` was at offset 1, an unaligned address the esp32 can't load an `int` from. If you ordered your fields from the biggest to the smallest to avoid that, it still works; it is just not needed any more.
-
 ## Structures as function arguments
 
-As in C, a structure can be passed **by value**, and the function works on its own copy, or **by pointer**, and the function works on the caller's structure:
+**By value**, the function works on its own copy; **by pointer**, on the caller's structure:
 
 ```c
 struct ball
@@ -1356,7 +1138,7 @@ void step(ball *b)                    // by pointer: changes the caller's ball
 void stepAll(ball *b, int n)          // a pointer to the first of n balls
 {
    for (int i = 0; i < n; i++)
-      step(&b[i]);                    // or work on b[i].x directly
+      step(&b[i]);
 }
 
 void main()
@@ -1380,21 +1162,9 @@ void main()
 
 Pointers to numbers work the same way: `int *q = &arr[2]; *q = 9;`.
 
-**How it works.** A structure passed by value travels as its address, and the called function copies it into its own frame before running, so the caller's copy can't change. A field read through a pointer, `b[i].x`, is computed as an ordinary indexed access, `((int *)b)[(i * sizeof(ball) + offset of x) / 4]`; C's alignment rules make that division exact, and the code is the same as for any `int *`.
-
 ## Sharing a structure with the sketch
 
-A variable of one of your sketch's structures can be bound like any other. The script needs to know the structure: `bindStruct()` gives it the definition, once for every script compiled afterwards.
-
-```cpp
-void bindStruct(const char *definition);
-```
-
-| Parameter | What it is |
-|---|---|
-| `definition` | The structure's definition as text, e.g. `"struct key_event { char key; char code; };"`. The same text as in C for plain fields. |
-
-To write the structure only once, `SCRIPT_STRUCT(name, { fields })` (`binding.h`) declares the C++ struct and keeps its text in `name_definition`:
+`bindStruct()` gives the script the definition of one of your sketch's structures, once for every script compiled afterwards. `SCRIPT_STRUCT(name, { fields })` declares the C++ struct and keeps its text in `name_definition`, so you write it only once:
 
 ```cpp
 #include "script_executable.h"
@@ -1430,20 +1200,15 @@ void setup()
 }
 ```
 
-> [!NOTE]
-> - Call `bindStruct()` before `parseScript()`, like `bindVariable()`.
-> - A script can still define the structure itself (scripts written before `bindStruct()` keep working), as long as the definition is identical; a different one is an error.
-> - Bound structures work everywhere a script structure does: as arguments by value, with `&probe` or `&probes[i]`, through pointers.
-
-See the [HostStructs](examples/HostStructs) example.
+Call `bindStruct()` before `parseScript()`. Bound structures work everywhere a script structure does: by value, with `&probe`, through pointers. See [HostStructs](examples/HostStructs).
 
 ## A structure from a library
 
-`SCRIPT_STRUCT` declares the structure, so it only fits structures you write. When the structure comes from a library's header, like the USB keyboard library's `key_return`, use `BIND_STRUCT` with the type and its fields:
+When the structure comes from a library's header, like the USB keyboard library's `key_return`, use `BIND_STRUCT` with the type and every field in order:
 
 ```cpp
 #include "binding.h"
-#include "keyboard.h"          // the library: struct key_return { unsigned char key_char; unsigned char key_code; };
+#include "keyboard.h"          // struct key_return { unsigned char key_char; unsigned char key_code; };
 
 key_return key_char;           // the library fills it
 
@@ -1455,8 +1220,6 @@ void setup()
 }
 ```
 
-and the script uses it without defining it:
-
 ```c
 void keyboard()
 {
@@ -1464,25 +1227,11 @@ void keyboard()
 }
 ```
 
-`BIND_STRUCT` writes the script's definition from the C type itself (`unsigned char` becomes `uint8_t`, a 16-bit signed number `s_int`, and so on), then checks that the script would put every field at the same byte as C, and give the structure the same size, before binding it. If not, nothing is bound and it says why:
-
-```
-BIND_STRUCT(LibMix): 20 bytes in C, 16 from the fields listed; a field is missing
-BIND_STRUCT(LibMix): field b is at byte 4 in C but would be at byte 0 in the script; list every field, in order
-```
-
-| Rule | Why |
-|---|---|
-| List every field, in the order of the header | The script needs all of them to find the same offsets. |
-| Fields are numbers, `char` or `bool` of 1, 2 or 4 bytes | A field of another type (an array, a pointer, a `double`, a nested structure) stops the sketch's compilation with a message. |
-| At most 16 fields | |
-| It returns `true` once bound | Check it if the script can't work without the structure. |
-
-The C library's own `struct tm` works the same way: `BIND_STRUCT(tm, tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday, tm_isdst);`. See the [LibraryStruct](examples/LibraryStruct) example, which uses both.
+`BIND_STRUCT` checks that the script would see every field where C has it; if not, nothing is bound and it says why (`BIND_STRUCT(LibMix): 20 bytes in C, 16 from the fields listed; a field is missing`). Fields can be numbers, `char` or `bool` of 1, 2 or 4 bytes, 16 at most. `struct tm` works too: `BIND_STRUCT(tm, tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday, tm_isdst);`. See [LibraryStruct](examples/LibraryStruct).
 
 ## The sketch calling a script with a structure
 
-The arguments of `execute()` are 32-bit values, so a structure goes as its address. The script function takes a pointer:
+A structure goes as its address; the script function takes a pointer:
 
 ```cpp
 SCRIPT_STRUCT(key_event, {
@@ -1506,143 +1255,57 @@ void onKey(char key, char code)          // your event handler
 }
 ```
 
-Remember `bindStruct(key_event_definition);` before compiling. Writes through `k` change your sketch's structure, which is a way to hand values back.
+Remember `bindStruct(key_event_definition);` before compiling.
 
 ## Limits and error messages
 
-| Message | Why | What to do |
-|---|---|---|
-| *A structure passed by value must be one of the first 6 arguments* | The first 6 arguments travel in registers; the copy is made from there. | Move it earlier, or pass a pointer. |
-| *This member can't be used through a pointer (only plain numbers and char)* | Through a pointer, a field must be a number or a `char`. A `CRGB` field isn't supported there yet. | Read it through the variable itself, or pass the structure by value. |
-| *Can't take the address of this variable* | A local number may live in a register, and fields of local structures aren't addressable yet. | Use a global, or take the address of the whole local structure. |
-| *\* needs a pointer variable* | `*x` on something that isn't a pointer. | Use `x` itself, or declare it `T *x`. |
-| *Structure already defined differently (bindStruct)* | The script defines a structure the sketch bound, with other fields. | Remove the script's definition, or make it identical. |
-| *Too many fields in the structure* | A structure holds at most 20 slots: one per number field, three per `CRGB`, one or two per padding gap. | Split it into two structures. |
-| *Function not found: setTag(P \*, number); there is setTag(P \*, char)* | A `char` parameter wants a `char` argument; `90` is an `int`. | Give the function an `int` parameter. |
+| Message | What to do |
+|---|---|
+| *A structure passed by value must be one of the first 6 arguments* | Move it earlier, or pass a pointer. |
+| *This member can't be used through a pointer (only plain numbers and char)* | Read a `CRGB` field through the variable itself, or pass the structure by value. |
+| *Can't take the address of this variable* | Use a global, or take the address of the whole local structure. |
+| *\* needs a pointer variable* | Use `x` itself, or declare it `T *x`. |
+| *Structure already defined differently (bindStruct)* | Remove the script's definition, or make it identical. |
+| *Too many fields in the structure* | Split it into two structures. |
 
-A function can't return a structure yet (the call reports *Function not found: make() can't give a structure*): return a field, or write into a structure passed by pointer.
-
-## Structure examples
+A function can't return a structure yet: return a field, or write into a structure passed by pointer.
 
 | Example | What it shows |
 |---|---|
 | [StructArguments](examples/StructArguments) | By value, by pointer, `->`, `&b[i]`, and the sketch calling `keyboard(key_event *k)` with its own struct. |
 | [HostStructs](examples/HostStructs) | `SCRIPT_STRUCT` and `bindStruct()`: a struct and an array of structs shared with the sketch. |
-| [LibraryStruct](examples/LibraryStruct) | `BIND_STRUCT()`: structures from libraries (the USB keyboard's `key_return`, `struct tm`) used by a script. |
+| [LibraryStruct](examples/LibraryStruct) | `BIND_STRUCT()`: the USB keyboard's `key_return` and `struct tm` used by a script. |
 | [BouncingBalls](examples/BouncingBalls) | Methods, a constructor and an array of structures. |
-| [StructsAndHostBindings](examples/StructsAndHostBindings) | A structure method using bound functions and variables. |
 
 ---
 
 # A USB keyboard driving a script
 
-[KeyboardTest](examples/KeyboardTest) (confirmed on an ESP32-S3 with a real USB keyboard) connects a USB keyboard to a script: every key you press runs the script's `keyboard()` function, which echoes the key, keeps the line being typed and prints it on Enter. It is the keyboard part of a bigger sketch (a 5" screen with a script console) with everything else taken out, so it is a good starting point for your own keyboard-driven scripts.
+[KeyboardTest](examples/KeyboardTest) connects a USB keyboard to a script on an **ESP32-S3** (its USB port can be a host; the plain ESP32 has none): every key you press runs the script's `keyboard()` function, which echoes the key, keeps the line being typed and prints it on Enter. It needs the `ESP32_USB_Host_HID` library in the version with the `hid_keyboard_print_char` hook (the example's comments show the few lines to add to `keyboard.h` if yours doesn't have it; `hid_keyboard_release_char`, optional, reports releases for games that move while a key is held).
 
-## What you need
-
-| | |
-|---|---|
-| Board | An **ESP32-S3**. Its USB OTG port can act as a USB *host*; the plain ESP32 has no USB host. |
-| Keyboard | Any USB keyboard, plugged into the S3's USB host port (with an OTG adapter or a board that has a host socket). The port must power the keyboard. |
-| Library | `ESP32_USB_Host_HID` (a port of Espressif's USB host HID example), in the version with the key hook below. |
-| Serial monitor | 115200 baud, on the port your board prints `Serial` to (on most S3 boards with two sockets, the UART one, since the other is busy with the keyboard). |
-
-### The key hook the library needs
-
-The sketch relies on two things in the library's `keyboard.h`, which the version used here adds to Espressif's example. If your copy doesn't have them, add them:
+The sketch binds the library's key structure and lets the script register itself:
 
 ```cpp
-// the key handed to the sketch
-struct key_return
-{
-     unsigned char key_char;   // the character, 0 for a key that types none
-     unsigned char key_code;   // the USB HID usage code
-};
+key_return lastKey;                                   // the last key
 
-// set by the sketch, called on every key press
-static inline void (*hid_keyboard_print_char)(key_return key_char);
-
-// in key_event_callback(), on KEY_STATE_PRESSED:
-key_return key_char;
-key_char.key_char = 0;
-hid_keyboard_get_char(key_event->modifier, key_event->key_code, &key_char.key_char);
-key_char.key_code = key_event->key_code;
-if (hid_keyboard_print_char != NULL)
-   hid_keyboard_print_char(key_char);
-```
-
-A game that moves something while a key is **held** also needs to know when the key is let go. The library already sees releases (it compares each keyboard report with the previous one) but reports only presses; an optional second hook passes the releases on, and sketches that don't set it see no change:
-
-```cpp
-// set by the sketch if it wants them, called when a key is released
-static inline void (*hid_keyboard_release_char)(key_return key_char);
-
-// in key_event_callback(), after the KEY_STATE_PRESSED branch:
-else if (hid_keyboard_release_char != NULL) {
-  hid_keyboard_get_char(0, key_event->key_code, &key_char.key_char);
-  key_char.key_code = key_event->key_code;
-  hid_keyboard_release_char(key_char);
-}
-```
-
-[XenoWing](examples/matouch/XenoWing) and the [GameLauncher](examples/matouch/GameLauncher) use it: a released direction goes into the key queue as its letter plus 128, and the script stops the ship on that axis.
-
-## How a key reaches the script
-
-```mermaid
-sequenceDiagram
-    participant K as USB keyboard
-    participant L as Keyboard library<br/>(USB host task)
-    participant S as Sketch
-    participant P as Script
-    P->>S: setup_keyboard(_handle_), once, from main()
-    K->>L: key pressed (HID report)
-    L->>S: hid_keyboard_print_char(key) = print_char(key)
-    S->>S: lastKey = key
-    S->>P: executeOnly("keyboard")
-    P->>S: reads key.key_char, key.key_code (bound to lastKey)
-```
-
-1. **The script registers itself.** Its `main()` calls `setup_keyboard(_handle_)`. `_handle_` is the address of the script's own `ScriptExecutable`, filled in by the loader; the sketch keeps it in `keyboardScript`. This is the same pattern as the 5" sketch, and it lets the script decide when it starts receiving keys.
-2. **The library reports a key.** The keyboard library runs its own USB host task. When a key arrives it translates the HID code into a character and calls the function pointer `hid_keyboard_print_char`, which the sketch set to `print_char()`.
-3. **The sketch stores the key and calls the script.** `print_char()` copies the key into `lastKey` and calls `keyboardScript->executeOnly("keyboard")`.
-4. **The script reads the key.** In the script, `key` is bound to the sketch's `lastKey`: `key.key_char` and `key.key_code` are read straight from the sketch's memory, no copy.
-
-## The sketch, part by part
-
-**The key and its structure.** `struct key_return { unsigned char key_char; unsigned char key_code; }` is defined in the keyboard library's header, not in the sketch, so it is bound with [`BIND_STRUCT`](#a-structure-from-a-library), which writes the script's definition from the C type and checks the layout:
-
-```cpp
-key_return lastKey;                                   // the last key, filled by print_char()
-
-BIND_STRUCT(key_return, key_char, key_code);          // the script knows key_return
-bindVariable((char *)"key_return", (char *)"key", NULL, (void *)&lastKey);   // `key` in the script is lastKey
+BIND_STRUCT(key_return, key_char, key_code);
+bindVariable((char *)"key_return", (char *)"key", NULL, (void *)&lastKey);   // `key` in the script
 bindFunction((char *)"void", (char *)"setup_keyboard", (char *)"uint32_t", (void *)setup_keyboard);
-```
 
-**The callback.** It runs on the keyboard library's task, once per key:
-
-```cpp
-void print_char(key_return k)
+void print_char(key_return k)                         // the library calls it on each key
 {
    lastKey = k;
    if (keyboardScript != NULL)
       keyboardScript->executeOnly("keyboard");
 }
+
+static ScriptExecutable exec = parseScript(script);   // static: keys arrive after setup()
+exec.execute("main");                                 // main() calls setup_keyboard(_handle_)
+hid_keyboard_print_char = print_char;
+app_main_keyboard();                                  // start the USB host last
 ```
 
-`executeOnly()` and not `execute()`: `execute()` first runs the script's top-level initialization again (global initializers and constructors), which would reset `len` to 0 and lose the line on every key. `executeOnly()` only calls the function, so the script's globals keep their values between keys.
-
-**`setup()`**, in this order:
-
-| Step | Why there |
-|---|---|
-| `BIND_STRUCT`, `bindVariable`, `bindFunction` | Bindings must exist before compiling. |
-| `static ScriptExecutable exec = parseScript(script);` | `static`: the script must outlive `setup()`, since keys arrive later. A local would be freed when `setup()` returns. |
-| `exec.execute("main");` | Runs the initialization, then `main()`, which calls `setup_keyboard(_handle_)`. |
-| `hid_keyboard_print_char = print_char; app_main_keyboard();` | Only now start the USB host: the script is ready for the first key. |
-
-## The script
+`executeOnly()`, not `execute()`: `execute()` would run the script's initialization again on every key and reset its globals.
 
 ```c
 char line[100];
@@ -1662,19 +1325,13 @@ void keyboard()
    {
       if (len > 0)
          len--;
-      printfln("backspace, %d chars", len);
    }
-   else if (key.key_char != 0)        // a key that types something
+   else if (key.key_char != 0 && len < 99)
    {
-      if (len < 99)
-      {
-         line[len] = key.key_char;
-         len++;
-      }
+      line[len] = key.key_char;
+      len++;
       printfln("key '%c' code %d", key.key_char, key.key_code);
    }
-   else                               // Shift, arrows, F keys...
-      printfln("key code %d (no character)", key.key_code);
 }
 
 void main()
@@ -1684,41 +1341,17 @@ void main()
 }
 ```
 
-`key_code` is the USB HID usage code of the key (40 Enter, 42 Backspace, 41 Escape, 79 to 82 the arrows, 225 left Shift), and `key_char` the character it types, or 0 when it types none. The library already applies Shift: `!` arrives as `key_char` `'!'`.
-
-Typing `hiy`, Backspace, `!` and Enter prints:
-
-```
-ready: type on the USB keyboard, Enter shows the line
-key 'h' code 11
-key 'i' code 12
-key 'y' code 28
-backspace, 2 chars
-key '!' code 30
-key code 225 (no character)
-line (3 chars): hi!
-```
-
-## Going further
-
-- **Change what the keys do without re-flashing.** Edit the script text, recompile it with `parseScript()` (from a file, the serial port, a web page), and keys go to the new script once it has called `setup_keyboard(_handle_)`.
-- **Bind more.** Give the script your display functions and `keyboard()` becomes a text editor or a game controller (the 5" sketch draws the typed line on its screen).
-- **Keep `keyboard()` short.** It runs on the keyboard library's USB task; a long computation there delays the next keys. Store the key and let a script running as a task (see [Running scripts in the background](#running-scripts-in-the-background)) do the heavy work.
-
-> [!NOTE]
-> - Nothing printed when typing: check the keyboard is powered by the S3's host port, and that the serial monitor is on the port `Serial` prints to (`ready: ...` appears at start-up when it is).
-> - `BIND_STRUCT(key_return): ...` at start-up means your `keyboard.h` defines `key_return` differently: list its fields, in order.
+`key_code` is the USB HID code of the key (40 Enter, 42 Backspace, 41 Escape, 79 to 82 the arrows), and `key_char` the character it types, or 0. Keep `keyboard()` short: it runs on the keyboard library's task. The games of [README_GAMES.md](README_GAMES.md) are driven this way.
 
 ---
 
 # Saving executables
 
-You can compile a script once, save the binary to LittleFS or an SD card, and run it later without the source, even from another sketch.
+Compile a script once, save the binary to LittleFS or an SD card, and run it later without the source, even from another sketch.
 
 To compile without loading or running: `parseScriptToBinary()`. It returns `NULL` (and has printed the error) if something went wrong:
 
 ```cpp
-// compiling sketch: never runs the script
 uint32_t size = 0;
 uint8_t *serialized = parseScriptToBinary(script, &size);
 if (serialized != NULL)
@@ -1728,7 +1361,7 @@ if (serialized != NULL)
 }
 ```
 
-To load it back: `createExecutableFromBuffer()`, which gives you a normal `ScriptExecutable`:
+To load it back, `createExecutableFromBuffer()` gives you a normal `ScriptExecutable`:
 
 ```cpp
 // another sketch, later: doesn't need the source
@@ -1747,7 +1380,7 @@ else
 }
 ```
 
-Or straight from the file, without reading it into memory first: `createExecutableFromStream()` takes a function that reads the next bytes, and the code goes from the file into its executable memory a piece at a time (only the binary's relocation table is held, while it loads):
+Or straight from a file, without reading it into memory first:
 
 ```cpp
 File f = FFat.open("/game.bin");   // LittleFS, SD, ...
@@ -1756,36 +1389,23 @@ ScriptExecutable exec = createExecutableFromStream(
 f.close();
 ```
 
-With a `FILE *` from `fopen()`, the reader is `fread(buf, 1, len, (FILE *)ctx)`. Errors are the same as `createExecutableFromBuffer()`'s, and a file cut short is `not a valid binary: ...`.
-
-When the load fails, `lastLoadError()` says why (it is also printed on the console):
+With a `FILE *` from `fopen()`, the reader is `fread(buf, 1, len, (FILE *)ctx)`.
 
 | `lastLoadError()` | Means |
 |---|---|
-| `missing binding: led16, show16()` | the binary uses names this program has not bound: every one is listed, once, functions with `()`. Bind them (`bindVariable()` / `bindFunction()`) before loading, or recompile the script with the names this program has |
+| `missing binding: led16, show16()` | the binary uses names this program has not bound (every one is listed): bind them before loading |
 | `not a valid binary: ...` | the buffer is not what `parseScriptToBinary()` made, or it is cut short |
-| `could not allocate N bytes of executable memory ... (largest MALLOC_CAP_EXEC block: M bytes)` | no free piece of executable internal RAM is as big as the code: see [Where the code goes](#where-the-code-goes) |
+| `could not allocate N bytes of executable memory ...` | no free block of executable memory is that big: see [Where the code goes](#where-the-code-goes) |
 | `could not allocate N bytes for this script's data ...` | no room for its global variables |
 
-It is `""` after a load that worked.
-
-See [SaveScriptBinary](examples/SaveScriptBinary) and [LoadScriptBinary](examples/LoadScriptBinary) for the full pair.
-
-> [!NOTE]
-> If you need the lower-level steps (printing the generated assembly before saving, keeping the raw `executable`...), `Parser`, `createBinary()`, `serializeBinary()`, `deserializeBinary()` and `createExecutableFromBinary()` are all still available. See [LanguageBasics](examples/LanguageBasics) where every step is spelled out.
-
-## Binded functions
-
-Same as v1: the bound functions and variables are not saved with the binary. The sketch that loads it needs to call `bindFunction()`/`bindVariable()` for every `external` name the script uses, **before** loading. They are matched by name, so the two sketches only need to agree on the names.
+It is `""` after a load that worked. The bound functions and variables are not saved with the binary: they are matched by name when it loads, so the two sketches only need to agree on the names. See [SaveScriptBinary](examples/SaveScriptBinary) and [LoadScriptBinary](examples/LoadScriptBinary); the [GameLauncher](README_GAMES.md#gamelauncher-games-from-the-ffat-partition) runs a dozen games this way.
 
 ---
 
 # What you can do with the language
 
-Like any normal language you can have:
-- loops (`while`, `for`)
-- `break`, `continue`
-- testing: `if`, `else`, `(test) ? true_statement : false_statement`
+- loops (`while`, `for`), `break`, `continue`
+- `if`, `else`, `(test) ? true_statement : false_statement`
 - `switch`/`case`/`default`, as in C (see [SwitchCase](examples/SwitchCase)):
 
   ```c
@@ -1807,10 +1427,9 @@ Like any normal language you can have:
   ```
   The case values are integer constants (a number, hex, negative, or a `#define`).
 - blocks `{ ... }` with their own local variables
-- `++`, `--`: for integers and pointers
-- `+=`, `-=`, `/=`, `*=`
+- `++`, `--` for integers and pointers; `+=`, `-=`, `/=`, `*=`
 - pointers
-- strings as `char *`: functions returning one (script or bound host function), `char *` parameters, `%s` in `printfln` (see [StringFunctions](examples/StringFunctions)):
+- strings as `char *`: functions returning one, `char *` parameters, `%s` in `printfln` (see [StringFunctions](examples/StringFunctions)):
 
   ```c
   char *dayName(int d)
@@ -1826,46 +1445,33 @@ Like any normal language you can have:
      printfln("%s / %s", dayName(0), s);   // Sunday / weekday
   }
   ```
-  NB: indexing a `char *` local (`s[0]`) is not supported yet.
+  Indexing a `char *` local (`s[0]`) is not supported yet.
 - `^` for power (`x^2` is x squared, not a xor)
-- `>>` and `<<` (`>>` keeps the sign of an `int`, and shifts in zeros for a `uint32_t`, as in C)
-- bitwise `&` and `|` (`if (bits & 1)`, `(v >> n) & 1`). NB: they bind like `*`, not below `+` and the comparisons as in C: `a + b & 4` is `a + (b & 4)`, so put parentheses around them when mixing
+- `>>` and `<<` (`>>` keeps the sign of an `int`, as in C)
+- bitwise `&` and `|`. They bind like `*`, not as in C: `a + b & 4` is `a + (b & 4)`, so put parentheses around them when mixing
 - `&&`, `||` (or `and`, `or`)
-- type conversion `(float)(expr)`, `(int)(expr)`. The parentheses around `expr` are needed: `(int)x` alone doesn't compile.
-  NB: the conversion float <-> int is automatic. In an expression whose result is a `float`, `/` between ints divides as floats, unlike C: `float f = 57 / 13;` is 4.38 (C: 4). Compute the quotient into an `int` first when you want C's. `%` between ints is the integer remainder there too (`float f = 57 % 13;` is 5).
-- `define`: see below
-- predefined functions:
-  * `printf`, `printfln`
-  * `alloc(size)`, `free(p)`, `writeInt(p, offset, value)`, `readInt(p, offset)`: the language has no `*p` syntax, so a block from `alloc()` is read and written with these (see [MemoryAllocator](examples/MemoryAllocator))
+- type conversion `(float)(expr)`, `(int)(expr)` (the parentheses around `expr` are needed). The conversion float <-> int is automatic, and in an expression whose result is a `float`, `/` between ints divides as floats, unlike C: `float f = 57 / 13;` is 4.38. `%` between ints stays the integer remainder.
+- `#define`: see below
+- built in: `printf`, `printfln`, and `alloc(size)`, `free(p)`, `writeInt(p, offset, value)`, `readInt(p, offset)` for memory blocks (see [MemoryAllocator](examples/MemoryAllocator))
 
 ## Use of define
 
-More or less like in C. **Unlike v1, the `#` is needed:**
+As in C. **Unlike v1, the `#` is needed:**
 
 ```c
 #define TOKEN 25
 
-if (i < TOKEN)
-{
-  ...
-}
-
-will be compiled as
-
-if (i < 25)
+if (i < TOKEN)    // compiled as if (i < 25)
 {
   ...
 }
 ```
 
-> [!NOTE]
-> There are no macros yet.
-
----
+There are no macros with parameters yet.
 
 ## Assembly functions: `__ASM__`
 
-A function can be written in Xtensa assembly instead of C, as in v1: `__ASM__` before its type, and its body is one quoted instruction per line. The script calls it like any other function, and it can call nothing (no `call8` inside).
+A function can be written in Xtensa assembly, as in v1: `__ASM__` before its type, and its body is one quoted instruction per line. The script calls it like any other function.
 
 ```c
 int counter;
@@ -1899,17 +1505,19 @@ void main()
 }
 ```
 
-- **Calling convention**: the script's own (the windowed `call8` ABI). The arguments arrive in `a2`, `a3`, ... `a7`; a `float` argument arrives as its bits in an `a` register (`wfr f0,a2` moves it to a float register). An `int` result goes back in `a2`, a `float` result in `f2`. Start with `entry a1,32` and end with `retw.n`; `a2` to `a15` and the float registers are free to use.
-- **Variables**: a variable of the script is reached with `l32r a4,@_name` (its address in `a4`); a variable bound by the sketch (an `external` one) with `movExt a4,@_ext_name`, which the loader patches with the bound address: a GPIO register bound by its address is then one `s32i` away.
-- **Labels**: anything ending with `:`, unique in the script (two functions can't both have `loop:`).
-- **Instructions**: the assembler knows what the compiler emits (moves, loads and stores of 8/16/32 bits, arithmetic and logic, shifts, branches, `extui`, `quou`/`quos`/`remu`/`rems`, `mull`, the single-precision float instructions...) and, for assembly functions, `min`, `max`, `minu`, `maxu`, `nsau`, `nsa`, `clamps`, `sext`, `mul16u`, `mul16s`, `memw`, `extw`, `isync`, `nop`, and `rsr`/`wsr` with a special register by number or by name (`sar`, `ccount`, `prid`, `ccompare0` to `2`): `rsr a2,ccount` reads the cycle counter. Every encoding added was checked byte for byte against the GNU assembler of the Xtensa toolchain. Not supported: the zero-overhead `loop` instructions and windowed calls from inside.
-- **Errors**: an unknown instruction or a wrong operand is reported with the line as written: `assembler error: "frobnicate a2,a2": Opcode frobnicate not found`.
+- The arguments arrive in `a2` to `a7`, an `int` result goes back in `a2`, a `float` result in `f2`. Start with `entry a1,32` and end with `retw.n`; an assembly function can't call another function.
+- A script variable is reached with `l32r a4,@_name`, a bound one with `movExt a4,@_ext_name`.
+- Labels end with `:` and must be unique in the script.
+- Besides what the compiler itself uses, the assembler knows `min`, `max`, `minu`, `maxu`, `nsau`, `nsa`, `clamps`, `sext`, `mul16u`, `mul16s`, `memw`, `extw`, `isync`, `nop`, `loop`/`loopnez`/`loopgtz`, and `rsr`/`wsr` (`rsr a2,ccount` reads the cycle counter).
+- An unknown instruction is reported with the line as written: `assembler error: "frobnicate a2,a2": Opcode frobnicate not found`.
 
-[AssemblyFunctions](examples/AssemblyFunctions) times C against assembly with the cycle counter and uses `nsau` and `clamps`: on an ESP32 at 240 MHz, adding up 64 values takes 666 cycles in assembly, 865 in C. [AssemblyGPIO](examples/AssemblyGPIO) switches a pin from assembly through the GPIO registers, reads the BOOT button, and packs a colour (`rgb565(r, g, b)`, three values in, one out); its burst of pulses reaches 9.96 MHz, the same as the C loop of DirectGPIOSpeed: the GPIO bus sets the pace, not the code.
+See [AssemblyFunctions](examples/AssemblyFunctions) (C against assembly, timed with the cycle counter) and [AssemblyGPIO](examples/AssemblyGPIO) (a pin switched from assembly).
+
+---
 
 # Running scripts in the background
 
-You can run a script function as a task in the background (esp32 only): it runs on its own FreeRTOS task and `executeAsTask()` returns at once, so your sketch carries on.
+A script function can run on its own FreeRTOS task (esp32 only): `executeAsTask()` returns at once, so your sketch carries on.
 
 ```cpp
 bool executeAsTask(const char *name,
@@ -1922,44 +1530,35 @@ bool executeAsTask(const char *name,
 |Parameter|What it is|Default|
 |:----|:----|:----|
 |`name`|the script function to run, e.g. `"main"`. It must stay valid while the task runs: a string literal is fine|--|
-|`stackSize`|the task's stack, in bytes. Raise it for deep recursion or big local variables in the script|`8192`|
-|`priority`|the FreeRTOS priority of the task. Arduino's `loop()` runs at 1, so with 1 they share the CPU; higher runs first|`1`|
-|`core`|`0` or `1` to pin the task to that core, `tskNO_AFFINITY` to let FreeRTOS choose. Arduino's `loop()` runs on core 1, WiFi and Bluetooth on core 0|`tskNO_AFFINITY`|
-|`taskName`|the name FreeRTOS shows for the task (task lists, statistics); `NULL` uses `name`. Same lifetime rule as `name`|`NULL`|
-
-It returns `false` if the task could not be created (not enough memory for the stack, typically).
+|`stackSize`|the task's stack, in bytes. Raise it for deep recursion or big local variables|`8192`|
+|`priority`|the FreeRTOS priority. Arduino's `loop()` runs at 1|`1`|
+|`core`|`0` or `1` to pin the task to that core, `tskNO_AFFINITY` to let FreeRTOS choose|`tskNO_AFFINITY`|
+|`taskName`|the name FreeRTOS shows for the task; `NULL` uses `name`|`NULL`|
 
 ```cpp
 exec.executeAsTask("main");                          // main() on its own task, defaults
 exec.executeAsTask("main", 16384, 2, 0, "fire");     // 16KB stack, priority 2, core 0, named "fire"
 ```
 
-Then, on that task:
+Then:
 
-|Call|What it does|Returns `false` when|
-|:----|:----|:----|
-|`exec.pause()`|stops the task where it is (`vTaskSuspend()`)|it is not running|
-|`exec.restart()`|carries on from where it stopped (`vTaskResume()`); not a fresh start, call `executeAsTask()` again for that|it is not paused|
-|`exec.kill()`|deletes the task (`vTaskDelete()`), also freeing a task whose function has already returned|it was not running or paused|
-|`exec.state()`|`ScriptState::notStarted`, `running`, `paused` or `stopped` (killed, or the function returned)|--|
-|`exec.isRunning()`, `exec.isPaused()`|shortcuts for the two states|--|
-|`exec.task()`|the FreeRTOS `TaskHandle_t`, for reading its statistics (`vTaskGetInfo()`...); control the task through the calls above|--|
+|Call|What it does|
+|:----|:----|
+|`exec.pause()`|stops the task where it is|
+|`exec.restart()`|carries on from where it stopped (call `executeAsTask()` again for a fresh start)|
+|`exec.kill()`|deletes the task|
+|`exec.state()`|`ScriptState::notStarted`, `running`, `paused` or `stopped`|
+|`exec.isRunning()`, `exec.isPaused()`|shortcuts for the two states|
+|`exec.task()`|the FreeRTOS `TaskHandle_t`, for its statistics|
 
-A control that doesn't apply (pausing a paused script...) does nothing and returns `false`. Calling `executeAsTask()` again kills the previous task first, and `free()` or the end of the `ScriptExecutable` kills it too. See [ExecuteAsTask](examples/ExecuteAsTask).
+Each returns `false` when it doesn't apply (pausing a paused script...). Calling `executeAsTask()` again kills the previous task first, and `free()` kills it too. See [ExecuteAsTask](examples/ExecuteAsTask).
+
+> [!WARNING]
+> A script running as a task must give the CPU back from time to time, by calling a host function that waits (a bound `delay()`...). Otherwise the watchdog resets the board after 5 seconds. You also can't choose where `kill()` stops the task: if that matters, give the script a host function to call in its loop that checks a flag.
 
 ## Parameters for a task
 
-A function run as a task can take parameters, exactly like one called with `execute(name, &args)`: give `executeAsTask()` an `Arguments` list (or a raw `int32_t[]`) before the stack size.
-
-```cpp
-bool executeAsTask(const char *name, Arguments *args,
-                   uint32_t stackSize = 8192, UBaseType_t priority = 1,
-                   BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
-
-bool executeAsTask(const char *name, const int32_t *args, int nargs,
-                   uint32_t stackSize = 8192, UBaseType_t priority = 1,
-                   BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
-```
+A function run as a task can take parameters: give `executeAsTask()` an `Arguments` list (or a raw `int32_t[]`) before the stack size.
 
 ```c
 // in the script
@@ -1982,27 +1581,18 @@ args.add(0.5f);    // pause, a float
 exec.executeAsTask("countTask", &args);   // returns at once, countTask(5, 0.5) runs on its task
 ```
 
-The rest of the call (`stackSize`, `priority`, `core`, `taskName`) and the controls (`pause()`, `restart()`, `kill()`, `state()`) are the same as without parameters.
+|You pass|The script declares|
+|:----|:----|
+|`args.add(40)`|`int`, `uint32_t`, `uint16_t`, `uint8_t`, `bool`...|
+|`args.add(1.5f)`|`float`|
+|`args.add((int)(uintptr_t)text)`|`char *`|
+|the address of a structure or an array, the same way|a pointer: `ball *b`, `uint16_t *buffer`...|
 
-**What a parameter can be**
-
-|You pass|The script declares|How it travels|
-|:----|:----|:----|
-|`args.add(40)` (an `int`)|`int`, `uint32_t`, `uint16_t`, `uint8_t`, `bool`, any 32-bit-or-smaller integer type|as a 32-bit integer; a smaller type uses its low bits|
-|`args.add(1.5f)` (a `float`)|`float`|as the float's 32 bits, read back as a float|
-|`args.add((int)(uintptr_t)text)` (a string's address)|`char *`|the address, 32 bits on the esp32; the script reads the text where it is|
-|the address of a structure or an array, the same way|a pointer: `ball *b`, `uint16_t *buffer`...|the address|
-
-- **6 at most.** Parameters travel in the six registers `a10` to `a15` of the Xtensa calling convention; a 7th and the ones after it are dropped.
-- **Strings, structures and arrays go by address**, as in C: the sketch passes a pointer (cast to `int`), the script declares a pointer parameter and reads the data where it is, nothing is copied. The data must stay valid as long as the task uses it: a string literal, a `static` or global buffer, not a local variable of the function that called `executeAsTask()`. For data both sides keep using, a bound variable is simpler (see [Interaction with pre-compiled functions](#interaction-with-pre-compiled-functions) and [Structures](#structures)).
-- **`ffloat`**: pass a `float` parameter and convert it in the script, or the raw fixed-point value as an `int`.
-- **More values than parameters** is harmless: the function ignores the extra ones. That is why a sketch can always pass its settings, whatever `main()` declares.
-- **Fewer values than parameters** is not checked: the missing ones hold whatever was in the register. Give every parameter a value.
-
-**Lifetime.** The values are copied before `executeAsTask()` returns, so `args` can be a local variable that is gone when the task starts. What a pointer value points to is not copied (see above), and `name` and `taskName` must still stay valid while the task runs (string literals are fine).
+- **6 values at most**; more are dropped, and the function ignores values beyond its parameters.
+- **Strings, structures and arrays go by address**: the data must stay valid as long as the task uses it (a string literal, a `static` or global buffer).
+- The values are copied before `executeAsTask()` returns, so `args` can be a local variable.
 
 ```c
-// a string parameter, in the script
 void helloTask(char *name)
 {
    printfln("hello %s", name);
@@ -2013,11 +1603,11 @@ void helloTask(char *name)
 static char name[32];                   // static: still there while the task runs
 strlcpy(name, "Yves", sizeof(name));
 Arguments args;
-args.add((int)(uintptr_t)name);         // the address, as an int
+args.add((int)(uintptr_t)name);
 exec.executeAsTask("helloTask", &args);
 ```
 
-**The raw form** takes the values as `int32_t`: an `int` as it is, a `float` as its bit pattern (`memcpy()` it into an `int32_t`). It is what a program uses when it gets the values as text, a command line say, and has already worked out their types.
+The raw form takes `int32_t` values, a `float` as its bit pattern:
 
 ```cpp
 int32_t raw[2];
@@ -2027,14 +1617,11 @@ memcpy(&raw[1], &speed, sizeof(raw[1]));
 exec.executeAsTask("main", raw, 2);       // main(int n, float speed)
 ```
 
-See [TaskPointerParameters](examples/TaskPointerParameters) (a string, an array and a structure passed by address; the script writes into the sketch's structure), [TaskParameters](examples/TaskParameters) (commands typed in the Serial Monitor start `fibTask(35)`, `countTask(5, 0.5)` or `helloTask("Yves")`) and [matouch/BouncingBalls](examples/matouch/BouncingBalls) (the number of balls is `main(int n)`'s parameter; typing a number restarts the script with that many balls).
-
-> [!WARNING]
-> You can't choose where the task is stopped. It can be inside a host function the script called, holding `Serial`, a lock or a mutex of yours. If that matters, give the script a host function to call in its loop that checks a flag and returns at a point you choose.
+See [TaskPointerParameters](examples/TaskPointerParameters), [TaskParameters](examples/TaskParameters) (commands typed in the Serial Monitor start `fibTask(35)`, `countTask(5, 0.5)` or `helloTask("Yves")`) and [matouch/BouncingBalls](examples/matouch/BouncingBalls).
 
 ## The script scheduler
 
-To run several scripts at once and manage them by name, as v1's `scriptRuntime` did, use `scriptScheduler` (`script_scheduler.h`, esp32 only). Each running script is a FreeRTOS task of its own, and the scheduler also tells you how much CPU each one uses:
+To run several scripts at once and manage them by name, as v1's `scriptRuntime` did, use `scriptScheduler` (`script_scheduler.h`, esp32 only). Each script runs on its own task, and the scheduler tells you how much CPU each one uses:
 
 ```cpp
 #include "script_scheduler.h"
@@ -2045,13 +1632,11 @@ scriptScheduler.run("busy", "main", 8192, 1, 1); // its own task, pinned to core
 scriptScheduler.run("blink");                    // default: main(), 8KB stack, any core
 
 scriptScheduler.list();                          // the table below
-scriptScheduler.pause("busy");                   // vTaskSuspend()
-scriptScheduler.restart("busy");                 // vTaskResume(): carries on where it stopped
-scriptScheduler.kill("blink");                   // vTaskDelete()
+scriptScheduler.pause("busy");
+scriptScheduler.restart("busy");                 // carries on where it stopped
+scriptScheduler.kill("blink");
 scriptScheduler.remove("blink");                 // kill, free, forget
 ```
-
-`list()` prints:
 
 ```
  #  name             state      CPU%   stack   code   data core prio  function
@@ -2063,175 +1648,31 @@ scriptScheduler.remove("blink");                 // kill, free, forget
 
 |Column|Meaning|
 |:----|:----|
-|`state`|`ready` (added, never run), `running`, `paused`, `stopped` (killed, or its function returned)|
-|`CPU%`|share of one core used since the previous `list()` or `sample()`, from FreeRTOS run-time statistics|
-|`stack`|bytes of its task's stack never used so far (FreeRTOS high water mark)|
+|`state`|`ready` (added, never run), `running`, `paused`, `stopped`|
+|`CPU%`|share of one core used since the previous `list()` or `sample()`|
+|`stack`|bytes of its task's stack never used so far|
 |`code`, `data`|bytes of machine code and of globals|
 |`core`, `prio`|what `run()` asked for|
-|core load|100% minus the time each core's idle task ran|
 
 |Call|What it does|
 |:----|:----|
-|`add(name, source)`|compiles `source` and registers it as `name`, replacing a script of the same name; `false` if it doesn't compile (`showCompileError()` says why)|
-|`run(name, function, stackSize, priority, core)`|runs `function` (default `"main"`) on a new task and returns at once (v1's `executeAsTask`). `stackSize` (default `8192` bytes), `priority` (default `1`) and `core` (default `tskNO_AFFINITY`) mean the same as for `executeAsTask()` above; the task is named after the script|
-|`execute(name, function)`|runs it on the calling task and waits (v1's `execute`)|
+|`add(name, source)`|compiles `source` and registers it as `name`; `false` if it doesn't compile|
+|`run(name, function, stackSize, priority, core)`|runs `function` (default `"main"`) on a new task and returns at once|
+|`execute(name, function)`|runs it on the calling task and waits|
 |`pause(name)`, `restart(name)`, `kill(name)`|stop where it is, carry on, delete the task|
-|`remove(name)`|kill, free the compiled script, forget the name (v1's `deleteExe`)|
+|`remove(name)`|kill, free the compiled script, forget the name|
 |`killAll()`, `removeAll()`|the same for every script|
 |`list()`, `sample()`, `coreLoad(core)`|the table, a CPU measurement, a core's load|
-|`count()`, `info(index or name, &info)`|the same figures in a `ScriptInfo`, to show them your own way|
-|`find(name)`|the script's `ScriptExecutable`, for `executeOnly()`, an interrupt...|
+|`count()`, `info(index or name, &info)`|the same figures in a `ScriptInfo`|
+|`find(name)`|the script's `ScriptExecutable`|
 
-It is all FreeRTOS underneath: `xTaskCreatePinnedToCore()`, `vTaskSuspend()`/`vTaskResume()`/`vTaskDelete()`, a mutex around the registry, `vTaskGetInfo()` for the CPU time and `uxTaskGetStackHighWaterMark()` for the stack. There is no STL in it: the registry is a fixed array of `SCRIPT_SCHEDULER_MAX` scripts (8; `#define` it before including the header for more). See [SchedulerDemo](examples/SchedulerDemo), which pauses, restarts, kills and removes scripts while they run.
-
-> [!WARNING]
-> A script running as a task has to give the CPU back from time to time, by calling a host function that waits (a bound `delay()`...). Otherwise the lower-priority tasks of its core never run, including on core 0 the idle task the task watchdog checks: after 5 seconds the board resets.
-
-What v1 has and v2 doesn't yet: `sync()` to synchronize the frames of several scripts, and pre/post kill. See [Known limitations](#known-limitations).
+Up to 8 scripts (`#define SCRIPT_SCHEDULER_MAX` before including the header for more). See [SchedulerDemo](examples/SchedulerDemo).
 
 ---
 
-# Performance
+# Interrupts
 
-Everything below was measured on a real esp32 (no PSRAM) at 240MHz, with `micros()` around the script's code only: compiling, and sending a frame to the leds (`show()`), are not counted. "Native" is the same code written in C++ and compiled by the Arduino IDE (gcc `-Os`); "v1" is ESPLiveScript 1.2.0. Where a test calls `hsv()`, it is FastLED's `CHSV` to `CRGB` conversion, for the script and the native code alike, as in a sketch driving a real panel. Every script result was checked against the native one: same frames, same checksums.
-
-## Summary
-
-|Test|Native|v1|v2|v2 / native||
-|:----|----:|----:|----:|:----:|:----|
-|`fib(40)`, recursive (331 million calls)|16.96s|22.41s|21.72s|1.28|`█████████████`|
-|Game of Life 128x128, per generation|5.95ms|14.67ms|7.13ms|1.20|`████████████`|
-|Mandelbrot 128x96 `float`, per frame|33.5ms|94.5ms|41.9ms|1.25|`████████████`|
-|Mandelbrot 128x96 `ffloat`, per frame|30.0ms (fixed point)|--|31.5ms|1.05|`██████████`|
-|60 bouncing balls 128x96 `float`, per frame|6.49ms|--|8.38ms|1.29|`█████████████`|
-|60 bouncing balls 128x96 `ffloat`, per frame|7.02ms (fixed point)|--|6.86ms|0.98|`██████████`|
-|Rainbow 128x96, one `hsv()` call per pixel, per frame|7.12ms|--|7.13ms|1.00|`██████████`|
-|GPIO on/off through the registers|9.9MHz|--|9.9MHz|1.00|`██████████`|
-
-<sub>Each █ is a tenth of the native time: ten blocks is exactly as fast as native code, fewer is faster.</sub>
-
-So a script takes 1 to 1.3 times as long as precompiled code, and the same time when calls to the host (`hsv()` here) dominate; the `ffloat` balls are even slightly faster than the fixed point written by hand in C++. Against v1 it is 2 to 2.3 times faster on loops, arrays and floats, and about the same on function calls. The effects of a real multi-effect script are in [A real script: MultiEffectController](#a-real-script-multieffectcontroller).
-
-## Function calls: fib(40)
-
-```C
-int fib(int n)
-{
-   if (n < 2)
-      return n;
-   return fib(n - 1) + fib(n - 2);
-}
-```
-
-`fib(40)` = 102334155 takes 21.7s, about 15.7 cycles per call. At this recursion depth most of a call's cost is the register window overflow and underflow exceptions of the Xtensa windowed ABI, which native code pays too: gcc turns the second call into a loop, so it makes half as many calls. See `examples/FibonacciTiming`.
-
-QEMU does not charge for the window exceptions, so it reads about 5 cycles per call: don't project real hardware times from it.
-
-## Loops and arrays: Game of Life
-
-`examples/GameOfLife`'s script on a 128x128 grid (`uint8_t copy[128, 128]` plus two line buffers, `external CRGB leds[128, 128]`), 50 generations: 357ms in the script, 297ms native, the 51 frames identical. v1 takes 733ms.
-
-What closed most of the gap: array addresses and constants loaded once before a loop instead of at every access, locals kept in registers instead of the stack, 2D indexes computed with shifts, and `a && b` in a condition compiled as one branch per comparison (stopping at the first false one, as in C).
-
-## Floating point: Mandelbrot
-
-The Mandelbrot set on a 128x96 matrix, 50 iterations, `examples/MandelbrotCompare` (which runs all four versions and prints their times and checksums):
-
-|Version|Time per frame|Checksum|
-|:----|----:|:----:|
-|Native `float`|33.5ms|0c584e72|
-|Native fixed point|30.0ms|c026b3cf|
-|Script `float`|41.9ms (24fps)|0c584e72|
-|Script `ffloat`|31.5ms (32fps)|c026b3cf|
-|v1 `float`|94.5ms|0c584e72|
-
-The inner loop (`while (iter < maxIterations && x2 + y2 <= 4)`) is 12 instructions in `float`: the condition is two branches, the constants 2.0 and 4.0 are set once before the loop, and float registers are only saved around a call (the per-pixel divisions, `hsv()`) when their value is still needed after it.
-
-## Structs and methods: bouncing balls
-
-60 balls (a struct with a constructor and two methods, the scripts of `examples/BouncingBalls` and `examples/BouncingBallsFfloat`) drawn on a 128x96 matrix, 100 frames, each clearing the matrix and calling `hsv()` for every pixel lit, `examples/BouncingBallsCompare`:
-
-|Version|Time per frame|Checksum|
-|:----|----:|:----:|
-|Native `float`|6.49ms|d82c6aa0|
-|Native fixed point (16.16)|7.02ms|96c0e39f|
-|Script `float`|8.38ms|d82c6aa0|
-|Script `ffloat`|6.86ms|96c0e39f|
-
-Here `ffloat` is 18% faster than `float` in a script, and slightly faster than fixed point written by hand in C++.
-
-> [!TIP]
-> The esp32 has a single-precision FPU, so `float` is already fast. `ffloat` wins where conversions, divisions and integer mixing dominate, as in the balls; in the Mandelbrot's inner loop it is fixed-point multiplies against single float instructions.
-
-## Calling a host function per pixel: rainbow
-
-`examples/RainbowCompare` draws a scrolling rainbow, 100 frames, the offset `h` going up by one each frame:
-
-```C
-for (int i = 0; i < width; i++)
-   for (int j = 0; j < height; j++)
-      leds[j * width + i] = hsv(i + h + j, 255, 180);
-```
-
-Every pixel is a call to the host's `hsv()` (FastLED's `CHSV`) and a `CRGB` store: 12288 calls per frame.
-
-|Version|Time per frame|
-|:----|----:|
-|Native|7.12ms (140fps)|
-|Script|7.13ms (140fps)|
-
-The 100 frames are identical (same hash). The time is FastLED's colour conversion: around it, the script's loop and call cost the same as native code. With a small integer `hsv()` instead (`USE_FASTLED_HSV 0` in the example), native took 4.25ms and the script 6.77ms (measured on 2026-11-01). The script compiles in 0.12s.
-
-## A real script: MultiEffectController
-
-`examples/MultiEffectController` is a 730-line script: a particle fountain, stars, ripples, comets and a plasma, drawn on a 128x96 matrix with a fading trail, all host functions bound (`hsv()` is the sketch's own integer conversion here). Each effect function below was called 100 times on its own with `executeOnly()`, with `millis()` made to return a fixed sequence so the plasma draws the same frames in every build. Time per call:
-
-|Effect|What it does|Time per call|
-|:----|:----|----:|
-|`fadeTrail()`|fades the 128x96 trail buffer|0.51ms|
-|`renderParticles()`|160 particles (structs with methods): move, sort by life, draw, stamp the trail|1.55ms|
-|`renderStars()`|twinkling stars: update, sort by brightness, draw|2.01ms|
-|`renderRipples()`|expanding rings, restarted when they fade|1.07ms|
-|`renderComets()`|move and draw the comets, stamp the trail|0.21ms|
-|`renderPlasma()`|four `sin()`, one `hypot()` and six float divisions per pixel|28.1ms|
-|`drawModeIndicator()`|the mode bar on the top row|0.06ms|
-
-The plasma's time is the 12288 x 11 calls to `sin()`, `hypot()` and the float division routine. The frames are the same, hash for hash, as with the previous version of the compiler, which took 2.06ms for the particles, 1.18ms for the ripples and 0.37ms for the comets.
-
-## GPIO switching speed
-
-`examples/DirectGPIOSpeed` switches a pin on and off 10000 times by writing the GPIO registers from the script: 1011us, against 1006us for the same loop in C++. That is 9.9MHz on the pin (10MHz on a signal analyser), about 24 cycles per on/off. Both are limited by the peripheral bus, not by the code.
-
-## Constant indexes and structure copies
-
-A constant index is part of the instruction: `arr[3]` is one `l32i a2,a6,12`, and so are `parts[2].h` and `p[2].x` through a pointer. A structure passed by value is copied field by field, without its padding. Each function below called 20000 times on an esp32 at 240MHz, against the version before 2.0.0, which computed `index × size` at run time:
-
-|Code|Before|Now|
-|:----|----:|----:|
-|`p[2].x = p[1].x + p[3].h; p->h = p[2].h + 1;` through `P *p`|6.20ms|**3.10ms**|
-|`table[3] = table[1] + table[2]; table[7] = table[3] + table[5];`|8.29ms|**5.36ms**|
-|`int byValue(P b) { return b.x + b.h; }` with a 16-byte `P`|2.52ms|**2.27ms**|
-
-A variable index (`arr[i]`) is computed as before.
-
-## Compiling
-
-|Script|Lines|Compile time|
-|:----|----:|----:|
-|`fib()`|12|40ms|
-|Rainbow|16|0.12s|
-|Game of Life|55|0.78s|
-|`MultiEffectController`|730|11s|
-
-The compiler and runtime add about 162KB of flash and 8.6KB of RAM to a sketch. The loader alone (to run a saved binary, see [Saving executables](#saving-executables)) adds 10KB of flash and 1KB of RAM. A short script needs around 30-40KB of heap to compile; `MultiEffectController` uses most of a PSRAM-less esp32's heap but fits. Compiling gives back everything it allocates except the compiled script itself, so compiling again and again (a live-coding session, a scheduler replacing scripts) keeps the free heap flat.
-
----
-
-# Advanced stuff
-
-## Pointer to the executable and interrupts
-
-Every script has a variable `_handle_` holding the address of the executable running it (v1 called it `_execaddr_`). You can use it to register an interrupt:
+Every script has a variable `_handle_`, the address of the executable running it (v1's `_execaddr_`). Hand it to the sketch to call the script back, from an interrupt for instance:
 
 ```c
 external void pinInterrupt(uint32_t exec, char *name, int pin);
@@ -2252,21 +1693,141 @@ void main()
 }
 ```
 
-`pinInterrupt` is a normal bound function and the interrupt itself is set up on the C++ side (`gpio_isr_handler_add()`...). See [PinInterrupt](examples/PinInterrupt) for the complete sketch.
+`pinInterrupt` is a bound function of the sketch, which sets up the interrupt (`gpio_isr_handler_add()`...). See [PinInterrupt](examples/PinInterrupt).
 
 > [!WARNING]
-> In the interrupt handler call the script with `callFunction((executable *)handle, name, NULL, 0, NULL)` or `exec.executeOnly(name)`, not `execute()`. `execute()` runs the global initializers first and would reset the script's globals on every interrupt.
+> In the interrupt handler call the script with `exec.executeOnly(name)` (or `callFunction((executable *)handle, name, NULL, 0, NULL)`), not `execute()`, which would reset the script's globals on every interrupt.
 
 ---
 
-# Testing
+# Performance
 
-This is the part that is really new compared to v1:
+Measured on an esp32 (no PSRAM) at 240MHz, with `micros()` around the script's code only. "Native" is the same code written in C++ and compiled by the Arduino IDE; "v1" is ESPLiveScript 1.2.0. Where a test calls `hsv()`, it is FastLED's `CHSV` conversion, for the script and the native code alike. Every script result was checked against the native one: same frames, same checksums.
 
-- `test/host/`: the compiler built as a normal program on a computer. `make run` for the main suite, `make check-optimized` (same suite at `-Os`, the Arduino default), `make check-asan` (AddressSanitizer), `make run-sc` (every script from v1's `sc_examples`), `make run-large` (a size check for an esp32 without PSRAM).
-- `test/qemu/`: the compiled machine code executed on Espressif's QEMU emulator: arithmetic, external calls, recursion, arguments, external variables, save/load, and the `fib()` timing above (run with QEMU's `-icount`, so its cycle counts are exact whatever else the computer is doing). See `test/qemu/README.md`.
-- `test/effects/`: the led effects of the examples (plasma, fire, voronoi, mandala, Mandelbrot...) run under QEMU and compared frame by frame with the same code written in C.
-- `test/fuzz/`: random programs run through the compiler and as plain C, results compared. Every bug found is kept in `test/fuzz/regressions/`. See `test/fuzz/README.md`.
+## Summary
+
+|Test|Native|v1|v2|v2 / native||
+|:----|----:|----:|----:|:----:|:----|
+|`fib(40)`, recursive (331 million calls)|16.96s|22.41s|20.37s|1.20|`████████████`|
+|Game of Life 128x128, per generation|5.95ms|14.67ms|6.20ms|1.04|`██████████`|
+|Mandelbrot 128x96 `float`, per frame|33.5ms|94.5ms|39.1ms|1.17|`████████████`|
+|Mandelbrot 128x96 `ffloat`, per frame|30.0ms (fixed point)|--|27.1ms|0.90|`█████████`|
+|60 bouncing balls 128x96 `float`, per frame|6.49ms|--|7.50ms|1.16|`████████████`|
+|60 bouncing balls 128x96 `ffloat`, per frame|7.02ms (fixed point)|--|6.89ms|0.98|`██████████`|
+|Rainbow 128x96, one `hsv()` call per pixel, per frame|7.12ms|--|7.08ms|0.99|`██████████`|
+|GPIO on/off through the registers|9.9MHz|--|9.9MHz|1.00|`██████████`|
+
+<sub>Each █ is a tenth of the native time: ten blocks is exactly as fast as native code, fewer is faster.</sub>
+
+A script takes 0.9 to 1.2 times as long as precompiled code, and the same time when calls to the host dominate; the `ffloat` Mandelbrot and balls are even faster than fixed point written by hand in C++. Against v1 it is 2.4 times faster on loops, arrays and floats, and 10% faster on function calls.
+
+## Function calls: fib(40)
+
+```C
+int fib(int n)
+{
+   if (n < 2)
+      return n;
+   return fib(n - 1) + fib(n - 2);
+}
+```
+
+`fib(40)` = 102334155 takes 20.4s on an esp32 and 16.6s on an ESP32-S3. See [FibonacciTiming](examples/FibonacciTiming).
+
+## Loops and arrays: Game of Life
+
+[GameOfLife](examples/GameOfLife)'s script on a 128x128 grid, 50 generations: 310ms in the script, 297ms native, the 51 frames identical. v1 takes 733ms. On the 800x480 screen of an ESP32-S3 ([matouch/GameOfLife](examples/matouch/GameOfLife)), a generation takes 171ms.
+
+## Floating point: Mandelbrot
+
+The Mandelbrot set on a 128x96 matrix, 50 iterations, [MandelbrotCompare](examples/MandelbrotCompare) (all four versions, timed, with checksums):
+
+|Version|Time per frame|Checksum|
+|:----|----:|:----:|
+|Native `float`|33.5ms|0c584e72|
+|Native fixed point|30.0ms|c026b3cf|
+|Script `float`|39.1ms (25fps)|0c584e72|
+|Script `ffloat`|27.1ms (37fps)|c026b3cf|
+|v1 `float`|94.5ms|0c584e72|
+
+## Structs and methods: bouncing balls
+
+60 balls (a struct with a constructor and two methods) drawn on a 128x96 matrix, 100 frames, each calling `hsv()` for every pixel lit, [BouncingBallsCompare](examples/BouncingBallsCompare):
+
+|Version|Time per frame|Checksum|
+|:----|----:|:----:|
+|Native `float`|6.49ms|d82c6aa0|
+|Native fixed point (16.16)|7.02ms|96c0e39f|
+|Script `float`|7.50ms|d82c6aa0|
+|Script `ffloat`|6.89ms|96c0e39f|
+
+## Calling a host function per pixel: rainbow
+
+[RainbowCompare](examples/RainbowCompare) draws a scrolling rainbow, one call to the host's `hsv()` per pixel (12288 per frame):
+
+```C
+for (int i = 0; i < width; i++)
+   for (int j = 0; j < height; j++)
+      leds[j * width + i] = hsv(i + h + j, 255, 180);
+```
+
+|Version|Time per frame|
+|:----|----:|
+|Native|7.12ms (140fps)|
+|Script|7.08ms (141fps)|
+
+The 100 frames are identical: around the host's colour conversion, the script's loop and calls cost the same as native code.
+
+## A real script: MultiEffectController
+
+[MultiEffectController](examples/MultiEffectController) is a 730-line script: a particle fountain, stars, ripples, comets and a plasma on a 128x96 matrix with a fading trail. Each effect function called on its own with `executeOnly()`, time per call:
+
+|Effect|What it does|Time per call|
+|:----|:----|----:|
+|`fadeTrail()`|fades the 128x96 trail buffer|0.51ms|
+|`renderParticles()`|160 particles (structs with methods): move, sort by life, draw, stamp the trail|1.55ms|
+|`renderStars()`|twinkling stars: update, sort by brightness, draw|2.01ms|
+|`renderRipples()`|expanding rings, restarted when they fade|1.07ms|
+|`renderComets()`|move and draw the comets, stamp the trail|0.21ms|
+|`renderPlasma()`|four `sin()`, one `hypot()` and six float divisions per pixel|28.1ms|
+|`drawModeIndicator()`|the mode bar on the top row|0.06ms|
+
+## Games
+
+The games of [README_GAMES.md](README_GAMES.md) on an ESP32-S3 with an 800x480 screen, their title screens running (the 3D scene of Wickwire and Driftwing, Lumenfall's parallax), script time per frame and frames shown, and the time to compile them on the board:
+
+|Game|Lines|Compiled on the board in|Script time per frame|Frames shown|
+|:----|----:|----:|----:|----:|
+|Wickwire (3D platform game)|5200|332s|102.5ms|8.8fps|
+|Driftwing (voxel flight)|2800|94s|95.7ms|9.4fps|
+|Lumenfall (parallax platformer)|3400|123s|19.3ms|24.4fps (its own pace)|
+
+Loaded from a saved binary instead, each starts in a fraction of a second.
+
+## GPIO switching speed
+
+[DirectGPIOSpeed](examples/DirectGPIOSpeed) switches a pin on and off 10000 times through the GPIO registers: 1011us, against 1006us in C++, 9.9MHz on the pin. Both are limited by the peripheral bus, not by the code.
+
+## Constant indexes and structure copies
+
+A constant index costs nothing at run time: `arr[3]`, `parts[2].h` and `p[2].x` through a pointer are each a single load. Each function below called 20000 times on an esp32 at 240MHz, against the version before 2.0.0:
+
+|Code|Before|Now|
+|:----|----:|----:|
+|`p[2].x = p[1].x + p[3].h; p->h = p[2].h + 1;` through `P *p`|6.20ms|**3.10ms**|
+|`table[3] = table[1] + table[2]; table[7] = table[3] + table[5];`|8.29ms|**5.36ms**|
+|`int byValue(P b) { return b.x + b.h; }` with a 16-byte `P`|2.52ms|**2.27ms**|
+
+## Compiling
+
+|Script|Lines|Compile time on an esp32|
+|:----|----:|----:|
+|`fib()`|12|40ms|
+|Rainbow|16|0.14s|
+|Game of Life|55|0.78s|
+|`MultiEffectController`|730|8.1s|
+
+The compiler adds about 165KB of flash and 8.6KB of RAM to a sketch; the loader alone (to run a saved binary) 10KB of flash and 1KB of RAM. A short script needs 30-40KB of heap to compile, and compiling gives back everything except the compiled script, so compiling again and again keeps the free heap flat.
 
 ---
 
@@ -2275,57 +1836,63 @@ This is the part that is really new compared to v1:
 | Example | What it shows |
 | --- | --- |
 | `SimpleScript` | The first light example above. |
-| `CompileErrors` | Scripts that don't compile (undeclared variable, missing `;`): the printed error, `showCompileError()`, and `lastCompileError()` to show it your own way. |
+| `CompileErrors` | Scripts that don't compile: the printed error, `showCompileError()`, `lastCompileError()`. |
+| `CompileProgress` | A progress bar while a script compiles, with `setCompileProgress()`. |
 | `ScriptPrintf` | Printing from a script with `printf()`/`printfln()`. |
 | `Factorial` | `Arguments`: calling a function several times with different values. |
 | `CallScriptFunction` | Calling a function with a raw `int32_t[]` and using its return value. |
 | `TwoScripts` | Two scripts one after the other, freeing the first with `exec.free()`. |
 | `FibonacciTiming` | Timing a script with `micros()`. |
-| `DisplayIcon` | v1's `dsiplayicon.sc` unchanged: pixel-art sprites with palettes over a scrolling rainbow, `sync()` as the display's show (see [A v1 script: the display icon](#a-v1-script-the-display-icon)). |
+| `DisplayIcon` | v1's `dsiplayicon.sc` unchanged: pixel-art sprites over a scrolling rainbow. |
 | `BouncingBalls` | Structs with methods and constructors, an array of structs, several bound functions. |
 | `StructsAndHostBindings` | Structs with `bindFunction()`/`bindVariable()`, smaller. |
-| `StructArguments` | Structures by value and by pointer, `->`, `&`, and the sketch calling a script function with a pointer to its own struct (see [Structures](#structures)). |
-| `HostStructs` | A structure defined once in the sketch with `SCRIPT_STRUCT`, shared with the script through `bindStruct()`, as a variable and an array. |
-| `LibraryStruct` | `BIND_STRUCT()`: structures defined in libraries (the USB keyboard's `key_return`, the C library's `struct tm`) bound to a script, layout checked. |
+| `StructArguments` | Structures by value and by pointer, `->`, `&`, and the sketch calling a script function with its own struct. |
+| `HostStructs` | A structure defined once in the sketch with `SCRIPT_STRUCT`, shared through `bindStruct()`. |
+| `LibraryStruct` | `BIND_STRUCT()`: library structures (`key_return`, `struct tm`) bound to a script. |
 | `KeyboardCallback` | An `external` variable, calling a loaded script again from an event handler. |
-| `JsonLiveSettings` | A script on its own task getting new JSON settings every 2 seconds, applied between two frames. esp32 only. |
-| `JsonInput` | Script variables filled from a JSON document given to `execute()`, as in v1's `jsonexample` (needs ArduinoJson). |
-| `KeyboardTest` | A USB keyboard on an ESP32-S3 driving a script: the library's `key_return` bound with `BIND_STRUCT`, `executeOnly()` on every key (see [A USB keyboard driving a script](#a-usb-keyboard-driving-a-script)). Needs the `ESP32_USB_Host_HID` library. |
-| `LanguageBasics` | Every compiling step one by one, printing the AST and the generated assembly. |
+| `KeyboardTest` | A USB keyboard on an ESP32-S3 driving a script. Needs the `ESP32_USB_Host_HID` library. |
+| `JsonInput` | Script variables filled from a JSON document (needs ArduinoJson). |
+| `JsonLiveSettings` | A script on its own task getting new JSON settings every 2 seconds. esp32 only. |
+| `LanguageBasics` | Every compiling step one by one, printing the generated assembly. |
 | `SaveScriptBinary` / `LoadScriptBinary` | Compile once, save to flash, load and run from another sketch. |
-| `PrintBinaryHex` | Hex dump of a compiled script and its relocation header. |
-| `PrintFibonacciAssembly` | The generated Xtensa assembly of a recursive `fib()`, then running `fib(10)`. |
-| `MultiEffectController` | A real multi-effect script of several hundred lines, every binding real. |
+| `PrintBinaryHex` | Hex dump of a compiled script. |
+| `PrintFibonacciAssembly` | The generated Xtensa assembly of a recursive `fib()`. |
+| `MultiEffectController` | A real multi-effect script of several hundred lines. |
 | `GameOfLife` | Conway's Game of Life on a 2D `external CRGB leds[h, w]` matrix. |
-| `ProceduralEffects` | Five effects for a 128x96 matrix: plasma, fire, Voronoi, mandala and spinning squares ([frames](examples/ProceduralEffects/README.md)). |
+| `ProceduralEffects` | Plasma, fire, Voronoi, mandala and spinning squares for a 128x96 matrix ([frames](examples/ProceduralEffects/README.md)). |
 | `FloatVsFfloat` | The same calculations in `float` and in `ffloat`, timed side by side. |
-| `BouncingBallsFfloat` | The bouncing balls with `ffloat`, and how to stay within ±32768. |
+| `BouncingBallsFfloat` | The bouncing balls with `ffloat`. |
 | `MandelbrotFfloat` | The float Mandelbrot with `float` replaced by `ffloat`. |
-| `BouncingBallsCompare` | The bouncing balls four ways -- native C++ float and fixed point, script `float` and `ffloat` -- timed, with checksums (see [Performance](#structs-and-methods-bouncing-balls)). |
-| `MandelbrotCompare` | The Mandelbrot set four ways -- native C++ float and fixed point, script `float` and `ffloat` -- timed, with a checksum showing they draw the same picture. |
-| `MandelbrotFixedPoint` | The Mandelbrot set with integers only, fixed point done by hand. |
-| `SchedulerDemo` | Three scripts on their own tasks, managed by name with `scriptScheduler`: list with CPU %, pause, restart, kill, remove. esp32 only. |
+| `BouncingBallsCompare` | The bouncing balls four ways (native and script, float and fixed point), timed, with checksums. |
+| `MandelbrotCompare` | The Mandelbrot set four ways, timed, with checksums. |
+| `MandelbrotFixedPoint` | The Mandelbrot set with integers only. |
+| `RainbowCompare` | A scrolling rainbow drawn by a script and natively, timed, with a hash. |
+| `SchedulerDemo` | Three scripts managed by name with `scriptScheduler`: list with CPU %, pause, restart, kill, remove. esp32 only. |
 | `ExecuteAsTask` | `main()` on its own FreeRTOS task, with `pause()`/`restart()`/`kill()`/`state()`. esp32 only. |
-| `TaskPointerParameters` | A string, an array and a structure passed to script functions run as tasks, by address: `greet(char *name, int times)`, `sumValues(int *values, int count)`, `moveTarget(target *t, int dx, int dy)` writing into the sketch's own struct. esp32 only. |
-| `TaskParameters` | Script functions run as tasks with parameters (`executeAsTask(name, &args)`): `fib 35`, `count 5 0.5` or `hello Yves` typed in the Serial Monitor starts `fibTask(35)`, `countTask(5, 0.5)` or `helloTask("Yves")`: an int, an int and a float, a string by address. esp32 only. |
+| `TaskParameters` | Script functions run as tasks with parameters, started from the Serial Monitor. esp32 only. |
+| `TaskPointerParameters` | A string, an array and a structure passed by address to script tasks. esp32 only. |
 | `PinInterrupt` | A GPIO interrupt calling back into the running script. esp32 only. |
-| `DirectGPIO` | Driving pins from a script through the GPIO and IO_MUX registers; esp32 and esp32-S3. |
-| `RainbowCompare` | A scrolling rainbow drawn by a script and natively, 100 frames timed, with a hash showing they are identical (see [Performance](#calling-a-host-function-per-pixel-rainbow)). |
-| `AssemblyFunctions` | Functions written in Xtensa assembly (`__ASM__`) next to C ones: the cycle counter, `nsau`, `clamps`, a loop over a global array timed against C (see [Assembly functions](#assembly-functions-__asm__)). |
-| `AssemblyGPIO` | A pin switched from assembly through the GPIO registers, the BOOT button read, and `rgb565(r, g, b)`: three values in, one out. esp32 and esp32-S3. |
-| `DirectGPIOSpeed` | The fastest a script can switch a pin through the registers, timed against native code (see [GPIO switching speed](#gpio-switching-speed)). |
-| `SwitchCase` | `switch`/`case`/`default`: a state machine, shared cases, fall-through, `break` vs `continue`. |
+| `DirectGPIO` | Driving pins from a script through the GPIO registers. |
+| `DirectGPIOSpeed` | The fastest a script can switch a pin, timed against native code. |
+| `AssemblyFunctions` | Functions written in Xtensa assembly (`__ASM__`) next to C ones, timed. |
+| `AssemblyGPIO` | A pin switched from assembly, the BOOT button read, `rgb565(r, g, b)`. |
+| `SwitchCase` | `switch`/`case`/`default`: a state machine, shared cases, fall-through. |
 | `StringFunctions` | `char *` in and out of functions, `%s`. |
 | `MemoryAllocator` | `alloc()`/`free()`/`writeInt()`/`readInt()`. |
 | `SafeMode` | `safe_mode`: an out-of-range write stops the script and reports the array and index. |
 
 ### Games
 
-Whole games written to show the compiler at a larger scale than an LED effect, from 400 to 3200 lines of script each, compiled on the board or loaded as saved binaries, have their own page: **[README_GAMES.md](README_GAMES.md)**.
+Whole games, from 400 to 5200 lines of script each, compiled on the board or loaded as saved binaries, have their own page: **[README_GAMES.md](README_GAMES.md)**.
 
-- [On the ESP32-S3-Touch-LCD-7](README_GAMES.md#on-the-esp32-s3-touch-lcd-7) (800x480, a USB keyboard): Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing, ChromaQuest, Vault13H, Ironforge and Valmora, and the GameLauncher that runs them from the FFat partition.
-- [On the Guition ESP32-4848S040](README_GAMES.md#on-the-guition-esp32-4848s040-the-games-on-a-touch-screen) (480x480, a touch screen): the same games with their controls on the screen, and its own GameLauncher.
-- [Ironforge](README_GAMES.md#ironforge-a-shooter-with-mid-90s-technology), a first-person shooter with mid-90s technology, and [Valmora](README_GAMES.md#valmora-an-adventure-in-the-style-of-the-early-role-playing-games), a top-down adventure in the style of the early role-playing games, each with its art in a WAD file.
+- [On the ESP32-S3-Touch-LCD-7](README_GAMES.md#on-the-esp32-s3-touch-lcd-7) (800x480, a USB keyboard): Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing, ChromaQuest, Vault13H, Ironforge, Valmora, Lumenfall, Wickwire and Driftwing, and the GameLauncher that runs them from the FFat partition.
+- [On the Guition ESP32-4848S040](README_GAMES.md#on-the-guition-esp32-4848s040-the-games-on-a-touch-screen) (480x480, a touch screen): the same games with their controls on the screen.
+
+---
+
+# Testing
+
+Every change to the compiler goes through: the whole compiler built and tested as a program on a computer (`test/host/`), the compiled machine code run on Espressif's QEMU esp32 emulator (`test/qemu/`), the example effects compared frame by frame with the same code in C (`test/effects/`), and random programs run both through the compiler and as plain C, the results compared (`test/fuzz/`). Then the examples run on real boards.
 
 ---
 
@@ -2334,16 +1901,15 @@ Whole games written to show the compiler at a larger scale than an LED effect, f
 - **No `sync()` and no pre/post kill** from v1's `scriptRuntime`. Running, listing, pausing, restarting and killing scripts by name is there: see [The script scheduler](#the-script-scheduler).
 - **`import`** (v1's `import rand`...) **doesn't work yet.** Declare the function `external` and bind a host function instead.
 - **No built-in `hsv()` or led support**: bind them yourself (see [CRGB and the hue function](#crgb-and-the-hue-function)).
+- A function can't return a structure, and a `char *` local can't be indexed yet.
 
 ---
 
 # Conclusion
 
-It all started with led animations. I wanted to try a new effect on my panel without going through the IDE and re-flashing the esp32 every time, and that is still what ESPLiveScript does best: the Mandelbrot, the plasma or the bouncing balls of this page run at close to the speed of precompiled code.
+It all started with led animations. I wanted to try a new effect on my panel without going through the IDE and re-flashing the esp32 every time, and that is still what ESPLiveScript does best: the Mandelbrot, the plasma or the bouncing balls of this page run at the speed of precompiled code.
 
-But along the way the language outgrew the leds. Once you have structs, arrays, recursion, `switch`, strings and interrupts, you are not writing an animation any more, you are writing a program. The best proof is **Tetris** 🎮: the whole game is one script. The board, the seven tetrominoes, rotation, collisions, clearing the full lines, the falling speed and the buttons are all script code, and the leds are only where it shows.
-
-This is its game logic (from v1's `sc_examples`, compiled by v2's test suite; tidied a little, and it runs as is on v2):
+But along the way the language outgrew the leds. Once you have structs, arrays, recursion, `switch`, strings and interrupts, you are not writing an animation any more, you are writing a program. **Tetris** 🎮 is one script: the board, the seven tetrominoes, rotation, collisions, clearing the full lines, the falling speed and the buttons are all script code:
 
 ```c
 #define WIDTH 10
@@ -2390,7 +1956,7 @@ void clearFullLines()
 }
 ```
 
-and the controls are three buttons, each a GPIO interrupt calling back into the running script (see [Pointer to the executable and interrupts](#pointer-to-the-executable-and-interrupts)):
+and the controls are three buttons, each a GPIO interrupt calling back into the running script (see [Interrupts](#interrupts)):
 
 ```c
 pinInterrupt(_handle_, "left", 23);
@@ -2414,7 +1980,7 @@ As always enjoy and have fun.
 
 # API reference
 
-Everything a sketch calls, grouped by header. Strings are plain C strings; a `(char *)` cast in the examples only silences the compiler's warning about string literals. All of it runs on the esp32, esp32-S2 and esp32-S3; the calls marked **esp32 only** need FreeRTOS tasks.
+Everything a sketch calls, grouped by header. A `(char *)` cast in the examples only silences the compiler's warning about string literals. The calls marked **esp32 only** need FreeRTOS tasks.
 
 ## Compiling and running `script_executable.h`
 
@@ -2424,14 +1990,7 @@ Everything a sketch calls, grouped by header. Strings are plain C strings; a `(c
 ScriptExecutable parseScript(const char *script);
 ```
 
-Compiles `script` and loads it, ready to run.
-
-| | |
-|---|---|
-| `script` | The script's source text. Only read during the call. |
-| **Returns** | A `ScriptExecutable`. Check `isExeExists()`: on a compile error it is empty and `showCompileError()` / `lastCompileError()` say why. |
-
-Keep the result alive as long as you run the script, and declare it `static` (or global) when something calls it after the current function returns (a task, an interrupt, a callback). It can't be copied or moved.
+Compiles `script` and loads it, ready to run. Check `isExeExists()`: on a compile error it is empty and `showCompileError()` / `lastCompileError()` say why. Keep the result alive as long as you run the script, and declare it `static` (or global) when something calls it after the current function returns (a task, an interrupt, a callback). It can't be copied or moved.
 
 ```cpp
 static ScriptExecutable exec = parseScript(script);
@@ -2443,19 +2002,37 @@ if (!exec.isExeExists())
 
 | Method | Inputs | Returns | What it does |
 |---|---|---|---|
-| `isExeExists()` | | `bool` | `true` when the script compiled, loaded and has at least one function. |
+| `isExeExists()` | | `bool` | `true` when the script compiled and loaded. |
 | `execute(name, result)` | `const char *name`: the script function; `int32_t *result`: receives its return value, or `NULL` | `bool` | Runs the script's initialization (global initializers, constructors), then `name`. `false` if there is no such function or a runtime error stopped it. |
-| `execute(name, args, result)` | `Arguments *args`: the arguments, up to 6 | `bool` | The same, with arguments. |
+| `execute(name, args, result)` | `Arguments *args`: up to 6 arguments | `bool` | The same, with arguments. |
 | `execute(name, args, nargs, result)` | `const int32_t *args`, `int nargs`: up to 6 raw 32-bit arguments | `bool` | The same, from an array. |
-| `executeOnly(...)` | the same three forms | `bool` | Calls `name` **without** the initialization, so globals keep their values between calls. Use it for callbacks (keys, interrupts) on a script already started. |
-| `execute(name, json, result)` | `const char *json`: a JSON document | `bool` | Initialization, then the `json` variables filled from the document, then `name`. `false` if the JSON can't be read. Needs `<ArduinoJson.h>` included, see [Filling variables from JSON](#filling-variables-from-json). |
+| `executeOnly(...)` | the same three forms | `bool` | Calls `name` **without** the initialization, so globals keep their values. Use it for callbacks (keys, interrupts). |
+| `execute(name, json, result)` | `const char *json`: a JSON document | `bool` | Initialization, then the `json` variables filled, then `name`. See [Filling variables from JSON](#filling-variables-from-json). |
 | `executeOnly(name, json, result)` | the same | `bool` | The same without the initialization. |
 | `updateJson(json)` | `const char *json` | `bool` | Only fills the `json` variables. |
-| `free()` | | | Frees the compiled script now (also kills its task). The destructor does the same. |
+| `free()` | | | Frees the compiled script now (also kills its task). |
 | `hasRuntimeError()` | | `bool` | `true` if the last call was stopped by a `safe_mode` check. |
-| `runtimeError()` | | `const runtime_error_struct &` | Which array, its size and the index, see [Runtime errors](#runtime-errors-runtime_functionsh). |
+| `runtimeError()` | | `const runtime_error_struct &` | Which array, its size and the index. |
 
-A float argument or return value travels as its 32-bit pattern: use `Arguments::add(float)`, and read a float result with `memcpy(&f, &result, 4)`. A structure goes as its address: `args.add((int)(uintptr_t)&myStruct)`, with a script function taking a pointer.
+A float argument or return value travels as its 32-bit pattern: use `Arguments::add(float)`, and read a float result with `memcpy(&f, &result, 4)`. A structure goes as its address: `args.add((int)(uintptr_t)&myStruct)`.
+
+### `setCompileProgress()`
+
+```cpp
+void setCompileProgress(void (*progress)(int percent, const char *stage, void *ctx), void *ctx);
+```
+
+See [Watching a long compile](#watching-a-long-compile).
+
+### Where the code goes `asm_execute.h`
+
+| Function | What it does |
+|---|---|
+| `setExecutableAllocator(alloc, release)` | Your own allocator for the scripts' code; `(NULL, NULL)` for the default. |
+| `setScriptCodeMemory(where)` | `SCRIPT_CODE_IRAM` (default), `SCRIPT_CODE_PSRAM` or `SCRIPT_CODE_AUTO` (ESP32-S3 with PSRAM); `false` on a chip that can't. |
+| `executableCodeMemory(&exe)` | Where a loaded script's code is. |
+
+See [Where the code goes](#where-the-code-goes).
 
 ## Arguments `arguments.h`
 
@@ -2466,12 +2043,12 @@ args.add(1.5f);      // float
 exec.execute("move", &args);
 ```
 
-| Method | Inputs | Returns | What it does |
-|---|---|---|---|
-| `add(int)` | an integer (also a pointer: `(int)(uintptr_t)&x`) | | Appends an argument. |
-| `add(float)` | a float | | Appends a float argument. |
-| `clear()` | | | Empties the list, to reuse it. |
-| `size()` | | `int` | Number of arguments. |
+| Method | What it does |
+|---|---|
+| `add(int)` | Appends an integer (also a pointer: `(int)(uintptr_t)&x`). |
+| `add(float)` | Appends a float. |
+| `clear()` | Empties the list, to reuse it. |
+| `size()` | Number of arguments. |
 
 ## Running as a task `script_executable.h`
 
@@ -2480,48 +2057,31 @@ exec.execute("move", &args);
 ```cpp
 bool executeAsTask(const char *name, uint32_t stackSize = 8192, UBaseType_t priority = 1,
                    BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
-```
-
-| | |
-|---|---|
-| `name` | The script function to run. Must stay valid while the task runs (a string literal is fine). |
-| `stackSize` | The task's stack in bytes. Default `8192`. |
-| `priority` | FreeRTOS priority. Default `1`, the same as `loop()`. |
-| `core` | `0`, `1`, or `tskNO_AFFINITY` (default) to let FreeRTOS choose. |
-| `taskName` | The name FreeRTOS shows; `NULL` uses `name`. |
-| **Returns** | `true` once the task is created, `false` if FreeRTOS couldn't create it (not enough memory). A task this script already had is killed first. |
-
-With parameters for `name` (see [Parameters for a task](#parameters-for-a-task)):
-
-```cpp
 bool executeAsTask(const char *name, Arguments *args, uint32_t stackSize = 8192, UBaseType_t priority = 1,
                    BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
 bool executeAsTask(const char *name, const int32_t *args, int nargs, uint32_t stackSize = 8192,
                    UBaseType_t priority = 1, BaseType_t core = tskNO_AFFINITY, const char *taskName = NULL);
 ```
 
-| | |
-|---|---|
-| `args` | `Arguments` (ints and floats, typed by `add()`), or a raw `int32_t[]` (ints, floats as their bit pattern). Copied before the call returns. |
-| `nargs` | Raw form: how many values. 6 at most, more are dropped. |
+`true` once the task is created; a task this script already had is killed first.
 
 | Method | Returns | What it does |
 |---|---|---|
 | `pause()` | `bool`, `false` if not running | Suspends the task where it is. |
 | `restart()` | `bool`, `false` if not paused | Resumes it from where it stopped. |
 | `kill()` | `bool`, `false` if not running or paused | Deletes the task. |
-| `state()` | `ScriptState` | `notStarted`, `running`, `paused` or `stopped` (killed, or the function returned). |
+| `state()` | `ScriptState` | `notStarted`, `running`, `paused` or `stopped`. |
 | `isRunning()`, `isPaused()` | `bool` | Shortcuts for `state()`. |
 | `task()` | `TaskHandle_t` | The FreeRTOS handle, for statistics. |
 
-The script must give the CPU back regularly (call a bound `delay()`), or the core's lower-priority tasks, the watchdog's idle task included, never run. See [Running scripts in the background](#running-scripts-in-the-background).
+See [Running scripts in the background](#running-scripts-in-the-background).
 
 ## Compile errors `script_executable.h`
 
-| Function | Inputs | Returns | What it does |
-|---|---|---|---|
-| `showCompileError()` | | | Prints the last error: the message, the line and a caret under the position. |
-| `lastCompileError()` | | `const CompileError &` | The last error, to show it your own way. |
+| Function | Returns | What it does |
+|---|---|---|
+| `showCompileError()` | | Prints the last error: the message, the line and a caret under the position. |
+| `lastCompileError()` | `const CompileError &` | The last error, to show it your own way. |
 
 ```cpp
 struct CompileError
@@ -2529,7 +2089,7 @@ struct CompileError
    bool failed;           // false: the last compile succeeded
    int line;              // line in your script, from 1 (0 when unknown)
    int position;          // column, from 1
-   char message[160];     // e.g. "Expecting ;", with details when there are any
+   char message[160];     // e.g. "Expecting ;"
    char sourceLine[120];  // the text of that line
 };
 ```
@@ -2538,16 +2098,16 @@ struct CompileError
 
 | Function | Inputs | Returns | What it does |
 |---|---|---|---|
-| `parseScriptToBinary(script, size)` | `const char *script`; `uint32_t *size`: receives the length in bytes | `uint8_t *`, or `NULL` on a compile error | Compiles without loading and returns the machine code and its relocations as one buffer, to write to a file. You own it: `free()` it. |
-| `createExecutableFromBuffer(buf, size)` | `const uint8_t *buf`, `uint32_t size`: a buffer from `parseScriptToBinary()` | `ScriptExecutable` | Loads a saved script. Bind every `external` name it uses first, with the same names. Check `isExeExists()`. |
-| `createExecutableFromStream(read, ctx)` | `size_t read(void *ctx, uint8_t *buf, size_t len)`, `void *ctx`: the saved bytes in order | `ScriptExecutable` | The same, from a file: the code goes straight into executable memory, the file is never held whole. |
-| `lastLoadError()` | | `const char *` | Why the last load failed (`"missing binding: led16, show16()"`, every missing name), `""` when it worked. See [Saving executables](#saving-executables). |
+| `parseScriptToBinary(script, size)` | `const char *script`; `uint32_t *size`: receives the length | `uint8_t *`, or `NULL` on a compile error | Compiles without loading, as one buffer to write to a file. `free()` it. |
+| `createExecutableFromBuffer(buf, size)` | a buffer from `parseScriptToBinary()` | `ScriptExecutable` | Loads a saved script. Bind every `external` name it uses first. |
+| `createExecutableFromStream(read, ctx)` | `size_t read(void *ctx, uint8_t *buf, size_t len)`, `void *ctx` | `ScriptExecutable` | The same, read from a file a piece at a time. |
+| `lastLoadError()` | | `const char *` | Why the last load failed, `""` when it worked. |
 
 See [Saving executables](#saving-executables).
 
 ## Binding your C++ functions, variables and structures `binding.h`
 
-Call these **before** compiling (and before loading a saved script). A script then uses the names without declaring them.
+Call these **before** compiling (and before loading a saved script).
 
 ### `bindFunction()`
 
@@ -2566,14 +2126,14 @@ void bindFunction(char *returnType, char *name, char *parameterTypes, void *func
 bindFunction((char *)"void", (char *)"setPixel", (char *)"int,int,int", (void *)setPixel);
 ```
 
-A parameter can also be a structure bound with [`bindStruct()`](#sharing-a-structure-with-the-sketch), by value (`"mode"`) or by pointer (`"mode *"`). Either way your function receives the structure's **address**, so declare it with a pointer. Bind the structure before the function:
+A parameter can be a structure bound with `bindStruct()`, by value (`"mode"`) or by pointer (`"mode *"`); either way your function receives its address:
 
 ```cpp
 SCRIPT_STRUCT(mode, { int width; int height; int divx; int divy; })
 
 mode M400x240 = {400, 240, 2, 2};
 
-void setMode(mode *m)                  // the address of the script's argument
+void setMode(mode *m)
 {
    printf("%d x %d\n", m->width, m->height);
 }
@@ -2583,9 +2143,6 @@ bindVariable((char *)"mode", (char *)"M400x240", NULL, (void *)&M400x240);
 bindFunction((char *)"void", (char *)"setMode", (char *)"mode", (void *)setMode);
 // the script: setMode(M400x240);
 ```
-
-> [!NOTE]
-> The argument follows the declared type, as for a script function: `setMode(M400x240)` or `setMode(local)` for `"mode"`, `setMode(&M400x240)` or `setMode(&local)` for `"mode *"`. Your function gets the argument's address in all four cases: with `"mode"`, treat it as read-only, as C would give it a copy.
 
 ### `bindVariable()`
 
@@ -2597,12 +2154,10 @@ void bindVariable(char *type, char *name, char *arraySize, void *address);
 |---|---|
 | `type` | The type in script terms: `"int"`, `"float"`, `"uint8_t"`, `"CRGB"`, a pointer such as `"uint16_t *"`, or a bound structure's name. |
 | `name` | The name the script uses. |
-| `arraySize` | `NULL` for a single variable, `"[10]"` for an array, `"[]"` when the script's own `external` declaration gives the size (a 2D `external CRGB leds[96, 128];`). |
+| `arraySize` | `NULL` for a single variable, `"[10]"` for an array, `"[]"` when the script's own `external` declaration gives the size. |
 | `address` | The variable's address: `(void *)&value`, or `(void *)array` for an array. |
 
-Reads and writes go straight to your variable: nothing is copied.
-
-An array and a pointer are bound differently (`"CRGB"` with `"[]"` and the array's address, or `"CRGB *"` with the pointer variable's address): see [Binding an array or a pointer](#binding-an-array-or-a-pointer).
+See [Binding an array or a pointer](#binding-an-array-or-a-pointer).
 
 ### `replaceExternal()`
 
@@ -2612,41 +2167,17 @@ void replaceExternal(char *name, void *address);
 
 Points an already bound name at another function or variable, for the scripts loaded afterwards.
 
-### `bindStruct()`
+### `bindStruct()`, `SCRIPT_STRUCT()`, `BIND_STRUCT()`
 
-```cpp
-void bindStruct(const char *definition);
-```
-
-| | |
+| | What it does |
 |---|---|
-| `definition` | A structure definition as text: `"struct key_event { char key; char code; };"`. Every script compiled afterwards knows the type. |
+| `bindStruct(definition)` | A structure definition as text (`"struct key_event { char key; char code; };"`), known to every script compiled afterwards. |
+| `SCRIPT_STRUCT(name, { fields })` | Declares the C++ struct `name` and keeps its definition in `name_definition`. At file scope. |
+| `BIND_STRUCT(type, field1, ...)` | Binds a struct defined anywhere, a library's header included, from its fields in order (up to 16); `true` once bound, `false` with the reason printed when the layout wouldn't match. |
 
-### `SCRIPT_STRUCT()`
-
-```cpp
-SCRIPT_STRUCT(name, { fields })
-```
-
-Declares the C++ struct `name` and keeps its definition in `name_definition`, for `bindStruct(name_definition)`. At file scope.
-
-### `BIND_STRUCT()`
-
-```cpp
-bool BIND_STRUCT(type, field1, field2, ...);
-```
-
-| | |
-|---|---|
-| `type` | A struct type defined anywhere, a library's header included. |
-| `field1, ...` | Every field, in order (up to 16), each a number, `char` or `bool` of 1, 2 or 4 bytes. |
-| **Returns** | `true` once bound. `false`, with the reason printed, if the script's layout wouldn't match C's (a field missing or out of order). Other field types stop the compilation of the sketch. |
-
-See [Structures](#structures) for all three.
+See [Structures](#structures).
 
 ## Runtime errors `runtime_functions.h`
-
-A script compiled with `safe_mode` checks its array indexes. An out-of-range write stops it: the call that entered the script returns `false`.
 
 ```cpp
 struct runtime_error_struct
@@ -2660,26 +2191,25 @@ struct runtime_error_struct
 extern void (*onScriptRuntimeError)(const runtime_error_struct *error);
 ```
 
-Set `onScriptRuntimeError` to your own function to report the error your way; otherwise one line is printed. See [Safe mode and arrays](#safe-mode-and-arrays).
+Set `onScriptRuntimeError` to report a `safe_mode` stop your way. See [Safe mode and arrays](#safe-mode-and-arrays).
 
 ## The script scheduler `script_scheduler.h`
 
-**esp32 only.** One global object, `scriptScheduler`, holds up to 8 named scripts (`SCRIPT_SCHEDULER_MAX`), each on its own task.
+**esp32 only.** One global object, `scriptScheduler`, holds up to 8 named scripts, each on its own task.
 
-| Method | Inputs | Returns | What it does |
-|---|---|---|---|
-| `add(name, source)` | `const char *name` (up to 23 characters), `const char *source` | `bool`, `false` on a compile error | Compiles `source` under `name`, replacing a script of that name. |
-| `run(name, function, stackSize, priority, core)` | as `executeAsTask()`; `function` defaults to `"main"` | `bool` | Runs `function` on a new task, named after the script. |
-| `execute(name, function)` | `function` defaults to `"main"` | `bool` | Runs it on the calling task and waits. |
-| `pause(name)`, `restart(name)`, `kill(name)` | | `bool` | As on `ScriptExecutable`. |
-| `remove(name)` | | `bool` | Kills it, frees it, forgets the name. |
-| `killAll()`, `removeAll()` | | | The same for every script. |
-| `count()` | | `int` | Number of scripts. |
-| `info(index, &info)`, `info(name, &info)` | `int index` or `const char *name`, `ScriptInfo *out` | `bool`, `false` if there's no such script | Fills a `ScriptInfo`. |
-| `find(name)` | | `ScriptExecutable *`, or `NULL` | The script itself, e.g. for `executeOnly()`. |
-| `sample()` | | | Measures CPU use since the previous sample. |
-| `coreLoad(core)` | `int core`: `0` or `1` | `float` | The core's load in % at the last sample, `-1` before the first. |
-| `list()` | | | Prints a table of every script and the core loads (it samples first). |
+| Method | Returns | What it does |
+|---|---|---|
+| `add(name, source)` | `bool`, `false` on a compile error | Compiles `source` under `name` (up to 23 characters), replacing a script of that name. |
+| `run(name, function, stackSize, priority, core)` | `bool` | Runs `function` (default `"main"`) on a new task. |
+| `execute(name, function)` | `bool` | Runs it on the calling task and waits. |
+| `pause(name)`, `restart(name)`, `kill(name)` | `bool` | As on `ScriptExecutable`. |
+| `remove(name)` | `bool` | Kills it, frees it, forgets the name. |
+| `killAll()`, `removeAll()` | | The same for every script. |
+| `count()` | `int` | Number of scripts. |
+| `info(index or name, &info)` | `bool` | Fills a `ScriptInfo`. |
+| `find(name)` | `ScriptExecutable *`, or `NULL` | The script itself. |
+| `sample()`, `coreLoad(core)` | | Measures CPU use; a core's load in %. |
+| `list()` | | Prints the table of every script and the core loads. |
 
 ```cpp
 struct ScriptInfo
@@ -2688,7 +2218,7 @@ struct ScriptInfo
    char function[24];     // what run() started
    ScriptState state;
    float cpuPercent;      // % of one core since the previous sample, -1 unknown
-   uint32_t stackFree;    // bytes of its stack never used, 0 without a task
+   uint32_t stackFree;    // bytes of its stack never used
    uint32_t codeSize;     // bytes of machine code
    uint32_t dataSize;     // bytes of globals
    int core;              // core it is pinned to, -1 if none
@@ -2698,17 +2228,15 @@ struct ScriptInfo
 
 ## Built into every script
 
-Available in every script, nothing to bind:
-
 | Name | Signature | What it does |
 |---|---|---|
-| `printf` | `void printf(char *format, ...)` | Prints like C's `printf`: `%d`, `%i`, `%u`, `%x`, `%o`, `%c`, `%s`, `%p`, `%%`, and floats with `%f`, `%e`, `%g` (widths and precisions too: `%8.3f`, `%-6s`). Every argument is 32 bits, so length modifiers (`%ld`, `%lld`) are ignored. |
+| `printf` | `void printf(char *format, ...)` | Prints like C's `printf`: `%d`, `%i`, `%u`, `%x`, `%o`, `%c`, `%s`, `%p`, `%%`, floats with `%f`, `%e`, `%g`, widths and precisions. |
 | `printfln` | `void printfln(char *format, ...)` | The same, followed by a new line. |
-| `alloc` | `uint32_t alloc(int bytes)` | Allocates `bytes` bytes (`malloc`), returns the address, 0 if there isn't enough memory. |
+| `alloc` | `uint32_t alloc(int bytes)` | Allocates `bytes` bytes, returns the address, 0 if there isn't enough memory. |
 | `free` | `void free(uint32_t address)` | Frees memory from `alloc()`. |
-| `writeInt` | `void writeInt(uint32_t address, int offset, int value)` | Writes a 32-bit `value` at `address + offset` (`offset` in bytes, a multiple of 4). |
+| `writeInt` | `void writeInt(uint32_t address, int offset, int value)` | Writes a 32-bit `value` at `address + offset` (bytes, a multiple of 4). |
 | `readInt` | `int readInt(uint32_t address, int offset)` | Reads the 32-bit value at `address + offset`. |
-| `_handle_` | `uint32_t` | The address of the script's own `ScriptExecutable`, to hand to the sketch (`setup_keyboard(_handle_)`, `pinInterrupt(_handle_, "f", 23)`). |
+| `_handle_` | `uint32_t` | The address of the script's own executable, to hand to the sketch (`pinInterrupt(_handle_, "f", 23)`). |
 | `true`, `false` | | `1` and `0`. |
 | `safe_mode` | keyword | Turns on index checks, see [Safe mode and arrays](#safe-mode-and-arrays). |
 | `json path as type name;` | declaration | A global variable the sketch's JSON fills, see [Filling variables from JSON](#filling-variables-from-json). |

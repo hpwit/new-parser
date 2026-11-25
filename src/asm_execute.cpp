@@ -381,6 +381,67 @@ static asm_error_message_struct decodeBinaryHeader(uint8_t *exec, uint8_t *binar
     return error;
 }
 
+#if ASM_EXEC_ON_TARGET && CONFIG_IDF_TARGET_ESP32S3
+#include "soc/soc.h"
+#define ASM_SRAM_BLOCK 0x10000
+// True when the code and the globals sit in the same 64 KB block of the
+// ESP32-S3's internal RAM, which the executable heap (0x4037xxxx up) and
+// the data heap (0x3FC8xxxx up) both map. A loop that reads its globals
+// out of the block it is running from loses a cycle or two an iteration,
+// or none, with the address it happened to load at: measured on the
+// board, the same Mandelbrot loop 6% slower for a load address 4 bytes
+// further, and flat for every address once the two were in different
+// blocks.
+static bool sharesSramBlock(const void *code, size_t codeSize, const void *data, size_t dataSize)
+{
+    uintptr_t c = (uintptr_t)code, d = (uintptr_t)data;
+    if (c < SOC_DIRAM_IRAM_LOW || c >= SOC_DIRAM_IRAM_HIGH)
+        return false;
+    c = MAP_IRAM_TO_DRAM(c);
+    return c / ASM_SRAM_BLOCK <= (d + dataSize - 1) / ASM_SRAM_BLOCK &&
+           d / ASM_SRAM_BLOCK <= (c + codeSize - 1) / ASM_SRAM_BLOCK;
+}
+
+// The globals again, out of the code's blocks: the heap hands out the two
+// one after the other, so they share a block more often than not. Each
+// place that will not do is held, with a pad twice the size of the last
+// one, while the heap is asked again: that uses up the scraps of a small
+// heap in a few rounds, and walks a large one past the 64 KB boundary in
+// ten. Left alone when internal RAM is too short to spend on placement,
+// and given back as they were when no better place turns up.
+static uint8_t *dataAwayFromCode(uint8_t *data, size_t dataSize, const void *code, size_t codeSize)
+{
+    const int rounds = 10;
+    void *held[2 * rounds];
+    int count = 0;
+    uint8_t *first = data;
+    size_t pad = 128;
+    for (int i = 0; i < rounds && sharesSramBlock(code, codeSize, data, dataSize); i++)
+    {
+        if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 2 * ASM_SRAM_BLOCK)
+            break;
+        if (data != first)
+            held[count++] = data;
+        held[count++] = heap_caps_malloc(pad, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        pad *= 2;
+        data = (uint8_t *)calloc(1, dataSize);
+        if (data == NULL)
+            break;
+    }
+    if (data == NULL || sharesSramBlock(code, codeSize, data, dataSize))
+    {
+        if (data != first)
+            free(data);
+        data = first;
+    }
+    else if (data != first)
+        free(first);
+    for (int i = 0; i < count; i++)
+        free(held[i]);
+    return data;
+}
+#endif
+
 // The code's block (setExecutableAllocator()) and the globals' (zeroed);
 // false, with exe's error saying which and how much, when one is missing.
 // *where: the memory the code is in.
@@ -445,6 +506,10 @@ static bool allocScriptMemory(const Binary *bin, executable *exe, uint32_t **cod
             free(binary_data);
         return false;
     }
+#if ASM_EXEC_ON_TARGET && CONFIG_IDF_TARGET_ESP32S3
+    binary_data = dataAwayFromCode(binary_data, bin->data_size > 0 ? bin->data_size : 4, exec,
+                                   bin->instruction_size);
+#endif
     *code = exec;
     *data = binary_data;
     return true;

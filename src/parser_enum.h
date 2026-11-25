@@ -190,6 +190,6 @@ enum tokenType
   TokenKeywordDefault
 
 };
-extern const char *asmInstructionsName[];
+extern const char *const asmInstructionsName[];
 
 #endif
