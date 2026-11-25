@@ -543,8 +543,11 @@ static asm_line splitOpcodeOperande(char *s)
 // are the loop heads (some later branch or jump goes back to them: taken
 // on every iteration, while the padding before them runs once, on entry)
 // and the targets of unconditional jumps (`j` lands there every time; the
-// padding only runs on the path falling into the label). A nop.n before
-// the label is enough: a target at +0 or +1 doesn't straddle.
+// padding only runs on the path falling into the label), and a forward
+// branch's target right after a `j` or `ret`, where nothing falls into
+// the padding at all -- an if's else, taken every time the test fails.
+// A nop.n before the label is enough: a target at +0 or +1 doesn't
+// straddle.
 // Filled by parseASM() before assembling.
 static vect<char *> _loopHeads;
 
@@ -619,7 +622,15 @@ static void findLoopHeads(Text *t)
             _loopHeads.push_back(strdup(name));
             continue;
         }
-        for (int j = i + 1; j < t->size(); j++)
+        // the instruction before the label, past the other labels there
+        int prev = i - 1;
+        while (prev >= 0 && strchr(t->getText(prev), ':') != NULL)
+            prev--;
+        const char *before = prev >= 0 ? t->getText(prev) : "";
+        while (*before == ' ')
+            before++;
+        bool unreachable = strncmp(before, "j ", 2) == 0 || strncmp(before, "ret", 3) == 0;
+        for (int j = unreachable ? 0 : i + 1; j < t->size(); j++)
         {
             const char *tg = branchTarget(t->getText(j), target, sizeof(target));
             if (tg != NULL && strcmp(tg, name) == 0)
