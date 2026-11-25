@@ -2457,6 +2457,13 @@ static bool isHoistableOp(const char *op)
     return false;
 }
 
+// A load of a literal's word: `lsi fX,aB,0` or `l32i aX,aB,0`. Invariant
+// only when aB holds a literal's address, which constantBase() checks.
+static bool isLiteralLoadOp(const char *op)
+{
+    return strcmp(op, "lsi") == 0 || strcmp(op, "l32i") == 0;
+}
+
 static bool loopInvariantLoad(const char *line, char *sym, size_t n, int *kind, char *opOut = NULL)
 {
     char op[12];
@@ -2466,7 +2473,7 @@ static bool loopInvariantLoad(const char *line, char *sym, size_t n, int *kind, 
     memcpy(op, line, opLen);
     op[opLen] = 0;
     *kind = strcmp(op, "movi") == 0 ? HOIST_MOVI : strcmp(op, "l32r") == 0 ? HOIST_L32R : HOIST_OP;
-    if (*kind == HOIST_OP && !isHoistableOp(op))
+    if (*kind == HOIST_OP && !isHoistableOp(op) && !isLiteralLoadOp(op))
         return false;
     if (opOut != NULL)
         strcpy(opOut, op);
@@ -2475,6 +2482,45 @@ static bool loopInvariantLoad(const char *line, char *sym, size_t n, int *kind, 
         return false;
     strcpy(sym, c + 1);
     return true;
+}
+
+// Whether line i (a literal load, see isLiteralLoadOp()) reads offset 0
+// of a number literal the codegen put in the header (@_local_var_N,
+// never written): its base register set by `l32r aB,@_local_var_N` on
+// the straight run of lines just before `at`, the loop's preheader.
+// Such a load gives the same value wherever it runs: the 4.0 and 2.0 of
+// `zr2 + zi2 <= 4.0` and `2.0 * zr * zi`, otherwise read from memory on
+// every iteration.
+static uint32_t regBitOf(const char *name);
+
+static bool constantBase(LineFlow *f, int i, int at)
+{
+    char base[8];
+    const char *c = strchr(f->line[i], ',');
+    if (c == NULL)
+        return false;
+    size_t len = strcspn(c + 1, ",");
+    if (len == 0 || len >= sizeof(base) || strcmp(c + 1 + len, ",0") != 0)
+        return false;
+    memcpy(base, c + 1, len);
+    base[len] = 0;
+    uint32_t bit = regBitOf(base);
+    if (bit == 0)
+        return false;
+    for (int p = at - 1; p >= 0; p--)
+    {
+        const char *q = f->line[p];
+        if (q[0] == 0)
+            continue;
+        if (strchr(q, ':') != NULL || !f->falls[p] || isCallLine(q))
+            return false;
+        if ((f->def[p] & bit) == 0)
+            continue;
+        char want[32];
+        snprintf(want, sizeof(want), "l32r %s,@_local_var_", base);
+        return strncmp(q, want, strlen(want)) == 0;
+    }
+    return false;
 }
 
 static int allocateFunction(Text *text, int start, int end)
@@ -2528,6 +2574,8 @@ static int allocateFunction(Text *text, int start, int end)
             char sym[48], opname[12];
             int kind;
             if (!loopInvariantLoad(f.line[i], sym, sizeof(sym), &kind, opname))
+                continue;
+            if (isLiteralLoadOp(opname) && !constantBase(&f, i, at))
                 continue;
             if (kind == HOIST_OP)
             {
@@ -3112,6 +3160,8 @@ static int hoistInvariantLines(Text *text, int start, int end)
             char sym[48], opname[12];
             int kind;
             if (!loopInvariantLoad(f.line[i], sym, sizeof(sym), &kind, opname))
+                continue;
+            if (isLiteralLoadOp(opname) && !constantBase(&f, i, at))
                 continue;
             uint32_t x = f.def[i];
             if (x == 0 || (x & (x - 1)) != 0 || (f.use[i] & loopDef) != 0 || (f.use[i] & x) != 0 ||
