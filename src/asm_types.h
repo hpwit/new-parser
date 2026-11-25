@@ -114,6 +114,9 @@ public:
     // For a short conditional branch, the bits of its offset (8 or 12), so
     // that the assembler can check it reached; 0 otherwise.
     uint8_t branchBits = 0;
+    // A loop/loopnez/loopgtz: padded with a nop.n when needed so that the
+    // loop body, which starts right after it, doesn't straddle either.
+    bool loopStart = false;
 };
 
 // The assembled lines, in one array (not one heap block each: on the ESP32

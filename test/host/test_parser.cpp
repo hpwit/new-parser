@@ -4238,6 +4238,78 @@ int main()
     // -125, -1000/1 = -1000 -> 3347 - 3 - 125 - 1000 = 2219
     runCorrectnessTest("/ and % by a power of two, signed and unsigned: r == 2219", divPow2Script, 60, 2219);
 
+    // Zero-overhead loops (optimize.cpp's zeroOverheadLoops()): counted
+    // for and while loops without a call become `loop`, run here by
+    // MiniXtensa's LBEG/LEND/LCOUNT. main's result comes back in a2:
+    //   for 0..9: 45; while j=3..15 (the s<1000 test never ends it): +117;
+    //   a for that runs 0 times: +0; a for left by break at m=7: +7;
+    //   for i=2..n-1 with n=12, a continue on even i: 3+5+7+9+11 = 35
+    // = 204. The first four loops have to be converted.
+    {
+        printf("RUNNING: %s\n", "zero-overhead loops: for, while, none, break, continue == 204");
+        fflush(stdout);
+        pid_t pid = fork();
+        if (pid == 0)
+        {
+            Parser p;
+            p.clean();
+            content.clear();
+            header.clear();
+            footer.clear();
+            Script sc;
+            sc.addContent(strdup("int main(){ int s=0; int n=12; "
+                                 "for (int i=0;i<10;i++) { s=s+i; } "
+                                 "int j=3; while (j<16 && s<1000) { s=s+j; j++; } "
+                                 "for (int k=5;k<3;k++) { s=s+100; } "
+                                 "for (int m=0;m<20;m++) { if (m==7) break; s=s+1; } "
+                                 "for (int i=2;i<n;i++) { if ((i & 1)==0) continue; s=s+i; } "
+                                 "return s; }"));
+            sc.init();
+            p.parse(&sc, &__allTokens);
+            bool ok = Error.error == 0;
+            int loops = 0;
+            for (int i = 0; ok && i < content.size(); i++)
+                if (strncmp(content.getText(i), "loop ", 5) == 0)
+                    loops++;
+            if (ok && loops < 4)
+            {
+                printf("       %d loops converted, expected at least 4\n", loops);
+                ok = false;
+            }
+            if (ok)
+            {
+                vect<char *> lines = snapshotText(content);
+                const char *err = NULL;
+                MiniXtensa vm;
+                if (!vm.run(lines, &err))
+                {
+                    printf("       could not interpret (unsupported: %s)\n", err ? err : "?");
+                    ok = false;
+                }
+                else if (vm.regs[2] != 204)
+                {
+                    printf("       expected 204 in a2, got %d\n", vm.regs[2]);
+                    ok = false;
+                }
+                lines.empty();
+            }
+            fflush(stdout);
+            _exit(ok ? 0 : 1);
+        }
+        int status = 0;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+        {
+            passed++;
+            printf("[PASS] zero-overhead loops\n");
+        }
+        else
+        {
+            failed++;
+            printf("[FAIL] zero-overhead loops\n");
+        }
+    }
+
     // `?:` and bare comparisons as values, as in v1: in an assignment, an
     // initializer, a return value or a call argument, the right-hand side
     // is a full expression (comparisons, && ||, ?:), not only arithmetic --

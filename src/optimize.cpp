@@ -3602,3 +3602,471 @@ void scheduleLoadUse(Text *text)
         i = i1;   // the user sits at i1 now as ALU; carry on after the load
     }
 }
+
+// ---- zero-overhead loops: loop ----
+//
+// An innermost counted loop as the codegen leaves it,
+//
+//         j test_L                     <limit lines>
+//     L:                               bge a4,a14,L_zol
+//         <body>                       sub a14,a14,a4
+//     L_continue:                      loop a14,L_zol
+//         addi a4,a4,1         ->  L:
+//     test_L:                          <body>
+//         <limit lines>            L_continue:
+//         blt a4,a14,L                 addi a4,a4,1
+//                                  L_zol:
+//
+// becomes an Xtensa zero-overhead loop: the hardware counts the
+// iterations (LCOUNT) and jumps back from the end of the body (LEND) to
+// its start (LBEG) for nothing, so the limit's reload and the taken
+// branch -- 3 to 6 cycles an iteration -- are gone. The counter is still
+// incremented: the body and the code after the loop read it as before.
+//
+// Only where that is exactly the same program:
+// - no call in the body: a callee may run a loop of its own, and
+//   LBEG/LEND/LCOUNT are not saved across calls;
+// - no loop inside it (one LCOUNT), nothing jumps into it from outside
+//   but the entry, and nothing inside goes to the test lines;
+// - the counter is written by the last addi only, and the limit is the
+//   same on every test: its lines read nothing the loop writes, and a
+//   load among them (a bound global's value) is a 32-bit one where the
+//   loop stores only 8 or 16 bits or none -- the limit lines then run
+//   once, before the loop;
+// - the registers the limit lines write are not read by the body before
+//   it writes them, nor after the loop;
+// - the body is short enough for loop's 8-bit offset, counted the way
+//   the assembler bounds lines (relaxation included).
+// A break (a branch out of the body) leaves LCOUNT as it is: harmless,
+// since only the body's own last instruction ends at LEND.
+
+static int zolCount = 0;
+
+// Whether `op` is a store (writes memory, no register).
+static bool isStoreOp(const char *op)
+{
+    return strcmp(op, "s8i") == 0 || strcmp(op, "s16i") == 0 || strcmp(op, "s32i") == 0 || strcmp(op, "ssi") == 0 ||
+           strcmp(op, "s32i.n") == 0;
+}
+
+// The registers line `l` may write: its first operand for the known
+// one-result instructions, none for stores and branches, and every
+// register it names for anything else (nothing missed).
+static uint32_t mayWrite(const char *l)
+{
+    char op[16];
+    size_t len = strcspn(l, " ");
+    if (len == 0 || len >= sizeof(op))
+        return 0;
+    memcpy(op, l, len);
+    op[len] = 0;
+    uint32_t use = 0, def = 0;
+    registerUseDef(l, &use, &def);
+    if (writesFirstOperandOnly(op))
+        return def;
+    if (isStoreOp(op) || op[0] == 'b' || strcmp(op, "j") == 0 || strcmp(op, "nop") == 0)
+        return 0;
+    return use | def;
+}
+
+// A limit line: something the test can compute once.
+static bool isLimitOp(const char *op)
+{
+    static const char *ops[] = {"movi", "l32r", "movExt", "l32i", "addi", "add", "sub", "mov", "movr", "slli", "srli", "srai", "neg", "mull"};
+    for (size_t i = 0; i < sizeof(ops) / sizeof(ops[0]); i++)
+        if (strcmp(op, ops[i]) == 0)
+            return true;
+    return false;
+}
+
+// Bytes line `l` assembles to at most, counting the 16-bit forms the
+// assembler surely picks (asm_parser.cpp's parseOperandesNarrow()): add,
+// mov and movr always, addi of -1 or 1..15, movi of -32..95, l32i/s32i
+// at 0..60. A label: the nop.n it may get.
+static int bodyLineBytes(const char *l)
+{
+    if (l[0] == 0)
+        return 0;
+    if (strchr(l, ':') != NULL)
+        return 2;
+    char buf[160];
+    snprintf(buf, sizeof(buf), "%s", l);
+    char *op, *ops[4];
+    int m = splitInstruction(buf, &op, ops);
+    if (strcmp(op, "add") == 0 || strcmp(op, "mov") == 0 || strcmp(op, "movr") == 0)
+        return 2;
+    if (strcmp(op, "addi") == 0 && m == 3)
+    {
+        int v = atoi(ops[2]);
+        return v == -1 || (v >= 1 && v <= 15) ? 2 : 3;
+    }
+    if (strcmp(op, "movi") == 0 && m == 2)
+    {
+        int v = atoi(ops[1]);
+        return v >= -32 && v <= 95 ? 2 : 3;
+    }
+    if ((strcmp(op, "l32i") == 0 || strcmp(op, "s32i") == 0) && m == 3)
+    {
+        int v = atoi(ops[2]);
+        return v >= 0 && v <= 60 && v % 4 == 0 ? 2 : 3;
+    }
+    return 3;
+}
+
+// The assembler's upper bound of a line (asm_parser.cpp's
+// maxLineBytes()), which decides which branches it relaxes.
+static int relaxLineBytes(const char *l)
+{
+    if (l[0] == 0)
+        return 0;
+    if (strchr(l, ':') != NULL)
+        return 2;
+    if (strncmp(l, "callExt", 7) == 0)
+        return 6;
+    return strncmp(l, "loop", 4) == 0 ? 5 : 3;
+}
+
+static void lineOp(const char *l, char *op, size_t n)
+{
+    size_t len = strcspn(l, " ");
+    if (len >= n)
+        len = 0;
+    memcpy(op, l, len);
+    op[len] = 0;
+}
+
+// The two shapes zeroOverheadLoop() converts, as found in a function.
+struct ZolShape
+{
+    int k;          // the body's first label (L, or the while's head)
+    int entry;      // a `for`: the `j test_L` before L; a `while`: -1
+    int lim0, lim1; // the limit lines: lim0..lim1-1
+    int test;       // the test branch
+    int c;          // the counter's addi, the body's last line
+    int b;          // the last line that goes (the branch back, or the j)
+    int exitLine;   // the first line after the loop
+    bool exitWhen;  // the test exits (bge...: a while) or loops (blt...: a for)
+};
+
+// `for`: j test_L / L: body / addi / test_L: limit lines / blt aI,aLim,L
+static bool zolFor(LineFlow *f, int b, ZolShape *z)
+{
+    int k = f->target[b];
+    char bop[8];
+    lineOp(f->line[b], bop, sizeof(bop));
+    if (k < 0 || k >= b || (strcmp(bop, "blt") != 0 && strcmp(bop, "bltu") != 0 && strcmp(bop, "blti") != 0))
+        return false;
+    int p = k - 1;
+    while (p >= 0 && f->line[p][0] == 0)
+        p--;
+    if (p < 0 || strncmp(f->line[p], "j ", 2) != 0)
+        return false;
+    int t = f->target[p];
+    if (t <= k || t >= b || strchr(f->line[t], ':') == NULL)
+        return false;
+    int c = t - 1;
+    while (c > k && (f->line[c][0] == 0 || strchr(f->line[c], ':') != NULL))
+        c--;
+    z->k = k;
+    z->entry = p;
+    z->lim0 = t + 1;
+    z->lim1 = b;
+    z->test = b;
+    z->c = c;
+    z->b = b;
+    z->exitLine = b + 1;
+    z->exitWhen = false;
+    return c > k;
+}
+
+// `while`: H: limit lines / bge aI,aLim,E / body / addi / j H / E:
+static bool zolWhile(LineFlow *f, int b, ZolShape *z)
+{
+    int k = f->target[b];
+    if (k < 0 || k >= b || strncmp(f->line[b], "j ", 2) != 0)
+        return false;
+    // entered by falling in only
+    int p = k - 1;
+    while (p >= 0 && (f->line[p][0] == 0 || strchr(f->line[p], ':') != NULL))
+        p--;
+    if (p < 0 || !f->falls[p] || f->target[p] >= 0)
+        return false;
+    int h = k;
+    while (h < b && (f->line[h][0] == 0 || strchr(f->line[h], ':') != NULL))
+        h++;
+    int tb = h;
+    while (tb < b && f->line[tb][0] != 'b')
+        tb++;
+    char bop[8];
+    lineOp(f->line[tb], bop, sizeof(bop));
+    if (tb >= b || (strcmp(bop, "bge") != 0 && strcmp(bop, "bgeu") != 0 && strcmp(bop, "bgei") != 0))
+        return false;
+    // the test leaves to just after the j
+    int e = b + 1;
+    while (e < f->n && f->line[e][0] == 0)
+        e++;
+    if (f->target[tb] < e)
+        return false;
+    for (int q = e; q < f->target[tb]; q++)
+        if (f->line[q][0] != 0 && strchr(f->line[q], ':') == NULL)
+            return false;
+    int c = b - 1;
+    while (c > tb && (f->line[c][0] == 0 || strchr(f->line[c], ':') != NULL))
+        c--;
+    z->k = k;
+    z->entry = -1;
+    z->lim0 = h;
+    z->lim1 = tb;
+    z->test = tb;
+    z->c = c;
+    z->b = b;
+    z->exitLine = b + 1;
+    z->exitWhen = true;
+    return c > tb;
+}
+
+// Converts at most one loop of the function at lines start..end-1;
+// returns the number of lines it added (0: none converted).
+static int zeroOverheadLoop(Text *text, int start, int end)
+{
+    LineFlow f;
+    if (!buildFlow(text, start, end, &f))
+        return 0;
+    int n = f.n;
+    for (int b = 0; b < n; b++)
+    {
+        ZolShape z;
+        if (!zolFor(&f, b, &z) && !zolWhile(&f, b, &z))
+            continue;
+        int k = z.k, c = z.c;
+        char tl[160];
+        snprintf(tl, sizeof(tl), "%s", f.line[z.test]);
+        char *ops[4];
+        char *op;
+        if (splitInstruction(tl, &op, ops) != 3)
+            continue;
+        uint32_t counter = regBitOf(ops[0]);
+        if (counter == 0 || counter >= (1u << 16) || counter <= 2)
+            continue; // a0..a1 never
+        char inc[48];
+        snprintf(inc, sizeof(inc), "addi %s,%s,1", ops[0], ops[0]);
+        if (strcmp(f.line[c], inc) != 0)
+            continue;
+        bool imm = op[strlen(op) - 1] == 'i';
+        bool isUnsigned = op[strlen(op) - 1] == 'u';
+        bool ok = true;
+        // the limit lines
+        uint32_t limDef = 0, limUse = 0;
+        bool limLoad = false;
+        for (int i = z.lim0; i < z.lim1 && ok; i++)
+        {
+            if (f.line[i][0] == 0)
+                continue;
+            char o[16];
+            lineOp(f.line[i], o, sizeof(o));
+            if (!isLimitOp(o) || strchr(f.line[i], ':') != NULL)
+                ok = false;
+            if (strcmp(o, "l32i") == 0)
+                limLoad = true;
+            limUse |= f.use[i] & ~limDef;
+            limDef |= f.def[i];
+        }
+        if (!ok || (limUse & counter) != 0 || (limDef & counter) != 0)
+            continue;
+        // the body: from the first line after the test (a while) or after
+        // L (a for) up to the counter's addi at c
+        int body0 = z.exitWhen ? z.test + 1 : k + 1;
+        uint32_t bodyWrites = 0;
+        int bytes = 0;
+        bool stores32 = false;
+        for (int i = body0; i <= c && ok; i++)
+        {
+            const char *l = f.line[i];
+            if (l[0] == 0)
+                continue;
+            if (strchr(l, ':') != NULL)
+            {
+                bytes += 2;
+                continue;
+            }
+            char o[16];
+            lineOp(l, o, sizeof(o));
+            if (isCallLine(l) || strncmp(l, "call", 4) == 0 || strncmp(l, "loop", 4) == 0 ||
+                strncmp(l, "retw", 4) == 0 || strncmp(l, "entry", 5) == 0)
+                ok = false;
+            // no loop inside, and nothing goes back to the head or the
+            // test (a `continue` of a while), or to the test lines of a for
+            if (f.target[i] >= 0 && f.target[i] <= i)
+                ok = false;
+            if (f.target[i] > c && f.target[i] <= z.b)
+                ok = false;
+            // (the frame, through a1, holds no global)
+            if ((strcmp(o, "s32i") == 0 || strcmp(o, "s32i.n") == 0 || strcmp(o, "ssi") == 0) &&
+                strstr(l, ",a1,") == NULL)
+                stores32 = true;
+            if (i < c)
+                bodyWrites |= mayWrite(l);
+            bytes += bodyLineBytes(l);
+            // a branch the assembler may relax gains a j and a label
+            if (o[0] == 'b' && f.target[i] >= 0)
+            {
+                int lo = i < f.target[i] ? i : f.target[i], hi = i < f.target[i] ? f.target[i] : i, d = 0;
+                for (int q = lo; q < hi; q++)
+                    d += relaxLineBytes(f.line[q]);
+                if (d + 12 + 40 >= 128) // with room for other relaxations
+                    bytes += 5;
+            }
+        }
+        if (!ok || (bodyWrites & counter) != 0 || (limUse & (bodyWrites | counter)) != 0 || bytes > 240 ||
+            (limLoad && stores32))
+            continue;
+        // nothing else enters the loop
+        for (int i = 0; i < n && ok; i++)
+            if ((i < k || i > z.b) && i != z.entry && f.target[i] > k && f.target[i] <= z.b)
+                ok = false;
+        for (int i = 0; i < n && ok; i++)
+            if ((i < k || i > z.b) && i != z.entry && f.target[i] == k)
+                ok = false;
+        if (!ok)
+            continue;
+        // the limit lines' registers: not read by the body before it
+        // writes them, nor after the loop
+        if (limDef != 0 && ((f.liveIn[body0] & limDef) != 0 ||
+                            (z.exitLine < n && (f.liveIn[z.exitLine] & limDef) != 0) ||
+                            (z.exitWhen && (f.liveIn[f.target[z.test]] & limDef) != 0)))
+            continue;
+        // the count: into the limit register when it is the limit lines'
+        // own (dead in the body), else a register free where the body starts
+        int cnt = -1;
+        uint32_t limBit = imm ? 0 : regBitOf(ops[1]);
+        if (limBit != 0 && (limDef & limBit) != 0)
+            cnt = __builtin_ctz(limBit);
+        else
+            for (int r = 15; r >= 2 && cnt < 0; r--)
+            {
+                uint32_t bit = 1u << r;
+                if (bit == counter || bit == limBit || (f.liveIn[body0] & bit) != 0 || (limUse & bit) != 0)
+                    continue;
+                cnt = r;
+            }
+        if (cnt < 0)
+            continue;
+        char label[32];
+        snprintf(label, sizeof(label), "label_zol_%d", zolCount++);
+        char guard[96], count1[64], count2[64], loopLine[64];
+        count1[0] = 0;
+        if (imm)
+        {
+            static const int b4const[16] = {-1, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 32, 64, 128, 256};
+            int idx = atoi(ops[1]);
+            if (idx < 0 || idx > 15)
+                continue;
+            snprintf(guard, sizeof(guard), "bgei %s,%s,%s", ops[0], ops[1], label);
+            snprintf(count1, sizeof(count1), "movi a%d,%d", cnt, b4const[idx]);
+            snprintf(count2, sizeof(count2), "sub a%d,a%d,%s", cnt, cnt, ops[0]);
+        }
+        else
+        {
+            snprintf(guard, sizeof(guard), "%s %s,%s,%s", isUnsigned ? "bgeu" : "bge", ops[0], ops[1], label);
+            snprintf(count2, sizeof(count2), "sub a%d,%s,%s", cnt, ops[1], ops[0]);
+        }
+        snprintf(loopLine, sizeof(loopLine), "loop a%d,%s", cnt, label);
+        // f.line points into the text: copies of the limit lines first
+        int nlim = 0;
+        char *lim[32];
+        for (int i = z.lim0; i < z.lim1 && nlim < 32; i++)
+            if (f.line[i][0] != 0)
+                lim[nlim++] = strdup(f.line[i]);
+        if (nlim == 32)
+        {
+            for (int i = 0; i < nlim; i++)
+                free(lim[i]);
+            continue;
+        }
+        int entry = z.entry, lim0 = z.lim0, test = z.test, zb = z.b;
+        bool isWhile = z.exitWhen;
+        freeFlow(&f);
+        char labelLine[40];
+        snprintf(labelLine, sizeof(labelLine), "%s:", label);
+        int at;
+        if (!isWhile)
+        {
+            // the test label, the limit lines and the branch go; the
+            // loop's end takes the test label's place
+            int t = lim0 - 1;
+            for (int i = t + 1; i <= zb; i++)
+                text->replaceText(start + i, " ");
+            text->replaceText(start + t, (const char *)labelLine);
+            at = start + entry; // the entry jump: replaced below
+        }
+        else
+        {
+            // the limit lines and the test go from the head, the j back
+            // becomes the loop's end
+            for (int i = lim0; i <= test; i++)
+                text->replaceText(start + i, " ");
+            text->replaceText(start + zb, (const char *)labelLine);
+            // before the head: a line to replace (blank)
+            text->addAfter(start + k - 1, strdup(" "));
+            at = start + k;
+        }
+        // that line becomes the limit lines, the guard, the count and the
+        // loop (the Text takes the strings over)
+        int added = isWhile ? 1 : 0;
+        if (nlim > 0)
+        {
+            text->replaceText(at, lim[0]);
+            for (int i = 1; i < nlim; i++)
+            {
+                text->addAfter(at++, lim[i]);
+                added++;
+            }
+            text->addAfter(at++, strdup(guard));
+            added++;
+        }
+        else
+            text->replaceText(at, (const char *)guard);
+        if (count1[0] != 0)
+        {
+            text->addAfter(at++, strdup(count1));
+            added++;
+        }
+        text->addAfter(at++, strdup(count2));
+        text->addAfter(at++, strdup(loopLine));
+        added += 2;
+        return added;
+    }
+    freeFlow(&f);
+    return 0;
+}
+
+void zeroOverheadLoops(Text *text)
+{
+    char line[160];
+    int i = 0;
+    while (i < text->size())
+    {
+        trimmedLine(*text->getChildAtPos(i), line, sizeof(line));
+        if (!isFunctionLabel(line) || strncmp(line, "@___", 4) == 0)
+        {
+            i++;
+            continue;
+        }
+        int end = i + 1;
+        while (end < text->size())
+        {
+            trimmedLine(*text->getChildAtPos(end), line, sizeof(line));
+            if (isFunctionLabel(line))
+                break;
+            end++;
+        }
+        for (int guard = 0; guard < 64; guard++)
+        {
+            int added = zeroOverheadLoop(text, i + 1, end);
+            if (added == 0)
+                break;
+            end += added;
+        }
+        i = end;
+    }
+}

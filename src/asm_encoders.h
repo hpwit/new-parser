@@ -245,6 +245,27 @@ uint32_t jump_bnez(uint32_t value, uint32_t current_address, uint32_t destinatio
     uint32_t dif = destination_address - current_address - 4;
     return value + ((dif << 12) & 0xFFF000);
 }
+// The zero-overhead loops (BRI8, op0 6, m 1, n 3, r 8/9/10 for loop,
+// loopnez, loopgtz), checked against xtensa-esp32-elf-as: `loop a2,L`
+// runs the instructions from the next one up to L, a2 times. The offset
+// is unsigned: LEND = pc + 4 + imm8.
+uint32_t bin_loop(uint32_t *values)
+{
+    return 0x8076 + (((values[0] << 8) & 0xF00));
+}
+uint32_t bin_loopnez(uint32_t *values)
+{
+    return 0x9076 + (((values[0] << 8) & 0xF00));
+}
+uint32_t bin_loopgtz(uint32_t *values)
+{
+    return 0xA076 + (((values[0] << 8) & 0xF00));
+}
+uint32_t jump_loop(uint32_t value, uint32_t current_address, uint32_t destination_address)
+{
+    uint32_t dif = destination_address - current_address - 4;
+    return value + ((dif << 16) & 0xFF0000);
+}
 const operandeType op_blti[3] = {operandeType::registers, operandeType::l0_15, operandeType::label};
 uint32_t bin_blti(uint32_t *values)
 {

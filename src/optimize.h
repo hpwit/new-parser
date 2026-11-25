@@ -105,4 +105,9 @@ void foldAddressScales(Text *text);
 // slides an independent ALU line between a load and its next-line user,
 // hiding the one-cycle load-use stall (see optimize.cpp). Runs last.
 void scheduleLoadUse(Text *text);
+
+// Innermost counted loops with no call inside become Xtensa
+// zero-overhead loops (`loop`): no limit reload, no taken branch per
+// iteration. Runs last. See optimize.cpp.
+void zeroOverheadLoops(Text *text);
 #endif

@@ -98,6 +98,13 @@ static void addInstr(result_parse_line operande, parsedLines *asm_parsed)
             }
             operande.address += add_size;
         }
+        else if (operande.loopStart && (_address_instr % ALIGN_INSTR == 0 || _address_instr % ALIGN_INSTR == 3))
+        {
+            // the body starts 3 bytes on: at +3 or +2 it would straddle
+            uint32_t nop_n = 0xF03D;
+            memcpy(tmp_exec + operande.address, &nop_n, 2);
+            operande.address += 2;
+        }
         else if (operande.noCross && _address_instr % ALIGN_INSTR >= 2)
         {
             // at +2 or +3 a 3-byte instruction straddles the word; a nop.n
@@ -735,6 +742,15 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         return parseOperandes(sp.operandes, 3, op_and, 3, bin_xor);
     if (strcmp(op, "mulsh") == 0)
         return parseOperandes(sp.operandes, 3, op_and, 3, bin_mulsh);
+    if (strcmp(op, "loop") == 0 || strcmp(op, "loopnez") == 0 || strcmp(op, "loopgtz") == 0)
+    {
+        result_parse_line ps = parseOperandes(sp.operandes, 2, op_bnez, 3,
+                                              op[4] == 0 ? bin_loop : op[4] == 'n' ? bin_loopnez : bin_loopgtz);
+        ps.op = opCodeType::jump;
+        ps.calculateOfssetJump = jump_loop;
+        ps.loopStart = true;
+        return ps;
+    }
     if (strcmp(op, "j") == 0)
     {
         result_parse_line ps = parseOperandes(sp.operandes, 1, op_j, 3, bin_j);
@@ -1289,6 +1305,7 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
     // function's tail -- up to and including its own retw.n, so execution
     // runs off the end of the copied buffer into whatever memory follows.
     int nb_callExt = 0;
+    int nb_loops = 0;
     freeLoopHeads();
     labelCacheReset();
     findLoopHeads(_content);
@@ -1305,6 +1322,8 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
                 nb_not_aligned_label++;
             else if (strncmp(str, "callExt", 7) == 0)
                 nb_callExt++;
+            else if (strncmp(str, "loop", 4) == 0)
+                nb_loops++; // up to a nop.n before it
         }
     }
 
@@ -1345,7 +1364,7 @@ static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_co
 
     _instr_size = (uint32_t)((nb_align_label + 1) * ALIGN_INSTR +
                               (_content->size() + _footer->size() - nb_not_aligned_label) * 3 +
-                              header_reservations * 4 + nb_callExt * 3 + _loopHeads.size() * 2);
+                              header_reservations * 4 + nb_callExt * 3 + _loopHeads.size() * 2 + nb_loops * 2);
     _instr_size = (_instr_size / 8) * 8 + 8;
     tmp_instr_size = (uint32_t)(_instr_size + (tmp_data_size / 4) * 4 + 4);
 
@@ -1656,6 +1675,8 @@ static int maxLineBytes(const char *line)
         return strncmp(line, "@_", 2) == 0 ? 5 : 2;
     if (strncmp(line, "callExt", 7) == 0)
         return 6;
+    if (strncmp(line, "loop", 4) == 0)
+        return 5;
     if (*line == '.')
         return 64;
     return 3;
@@ -1754,12 +1775,23 @@ static asm_error_message_struct parseASMRelaxed(Text *_footer, Text *_header, Te
     for (int i = 0; i < asm_parsed->size(); i++)
     {
         result_parse_line *pl = asm_parsed->getChildAtPos(i);
-        if (pl->op != opCodeType::jump || pl->calculateOfssetJump == NULL || pl->branchBits == 0)
+        if (pl->op != opCodeType::jump || pl->calculateOfssetJump == NULL || (pl->branchBits == 0 && !pl->loopStart))
             continue;
         int index = findLabel(pl->getText(), asm_parsed);
         if (index < 0)
             continue;
         int32_t dif = (int32_t)getInstrAtPos(index)->address - (int32_t)pl->address - 4;
+        if (pl->loopStart)
+        {
+            // the optimizer keeps loop bodies well inside this
+            if (dif < 0 || dif > 255)
+            {
+                err.error = 1;
+                err.error_message = string_format("line %d: loop body to %s out of range\n", pl->line, pl->getText());
+                return err;
+            }
+            continue;
+        }
         int32_t limit = 1 << (pl->branchBits - 1);
         if (dif < -limit || dif >= limit)
         {

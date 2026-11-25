@@ -83,8 +83,20 @@ struct MiniXtensa
         bool ok = true;
         int pc = startPc;
         int guard = 0;
+        // the zero-overhead loop registers (lines, not addresses): when an
+        // instruction falls through to LEND with LCOUNT not 0, LCOUNT goes
+        // down and the body starts again at LBEG. A taken branch to LEND
+        // does not loop back.
+        int lbeg = -1, lend = -1;
+        uint32_t lcount = 0;
+        bool sequential = false;
         while (true)
         {
+            if (sequential && pc == lend && lcount != 0)
+            {
+                lcount--;
+                pc = lbeg;
+            }
             if (++guard > 100000)
             {
                 *error = "step limit exceeded (probable infinite loop)";
@@ -107,6 +119,7 @@ struct MiniXtensa
                 pc++;
                 continue;
             }
+            sequential = true;
 
             vect<char *> tok;
             str_split(&tok, line, (char *)" ");
@@ -132,6 +145,7 @@ struct MiniXtensa
 
             if (strcmp(op, "j") == 0)
             {
+                sequential = false;
                 pc = findLabel(labelNames, labelPos, tok.get(1));
                 if (pc < 0)
                 {
@@ -155,7 +169,31 @@ struct MiniXtensa
             vect<char *> args;
             str_split(&args, tok.get(1), (char *)",");
 
+            if (strcmp(op, "loop") == 0 || strcmp(op, "loopnez") == 0 || strcmp(op, "loopgtz") == 0)
+            {
+                int32_t count = readReg(args.get(0));
+                int target = findLabel(labelNames, labelPos, args.get(1));
+                bool skip = (op[4] == 'n' && count == 0) || (op[4] == 'g' && count <= 0);
+                args.empty();
+                tok.empty();
+                if (target < 0)
+                {
+                    *error = "unresolved loop end";
+                    ok = false;
+                    break;
+                }
+                lbeg = pc + 1;
+                lend = target;
+                lcount = (uint32_t)count - 1;
+                pc = skip ? target : pc + 1;
+                sequential = !skip;
+                if (skip)
+                    lcount = 0;
+                continue;
+            }
+            int before = pc;
             bool handled = execOne(op, args, labelNames, labelPos, &pc, error);
+            sequential = pc == before + 1;
             args.empty();
             tok.empty();
             if (!handled)
