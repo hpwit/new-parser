@@ -4243,10 +4243,11 @@ int main()
     // MiniXtensa's LBEG/LEND/LCOUNT. main's result comes back in a2:
     //   for 0..9: 45; while j=3..15 (the s<1000 test never ends it): +117;
     //   a for that runs 0 times: +0; a for left by break at m=7: +7;
-    //   for i=2..n-1 with n=12, a continue on even i: 3+5+7+9+11 = 35
-    // = 204. The first four loops have to be converted.
+    //   for i=2..n-1 with n=12, a continue on even i: 3+5+7+9+11 = 35;
+    //   for q=1..4 (<=): +10; for q=9..8 (<=, none): +0
+    // = 214. At least five loops have to be converted.
     {
-        printf("RUNNING: %s\n", "zero-overhead loops: for, while, none, break, continue == 204");
+        printf("RUNNING: %s\n", "zero-overhead loops: for, while, <=, none, break, continue == 214");
         fflush(stdout);
         pid_t pid = fork();
         if (pid == 0)
@@ -4263,6 +4264,8 @@ int main()
                                  "for (int k=5;k<3;k++) { s=s+100; } "
                                  "for (int m=0;m<20;m++) { if (m==7) break; s=s+1; } "
                                  "for (int i=2;i<n;i++) { if ((i & 1)==0) continue; s=s+i; } "
+                                 "for (int q=1;q<=4;q++) { s=s+q; } "
+                                 "for (int q=9;q<=8;q++) { s=s+1000; } "
                                  "return s; }"));
             sc.init();
             p.parse(&sc, &__allTokens);
@@ -4271,9 +4274,9 @@ int main()
             for (int i = 0; ok && i < content.size(); i++)
                 if (strncmp(content.getText(i), "loop ", 5) == 0)
                     loops++;
-            if (ok && loops < 4)
+            if (ok && loops < 5)
             {
-                printf("       %d loops converted, expected at least 4\n", loops);
+                printf("       %d loops converted, expected at least 5\n", loops);
                 ok = false;
             }
             if (ok)
@@ -4286,9 +4289,9 @@ int main()
                     printf("       could not interpret (unsupported: %s)\n", err ? err : "?");
                     ok = false;
                 }
-                else if (vm.regs[2] != 204)
+                else if (vm.regs[2] != 214)
                 {
-                    printf("       expected 204 in a2, got %d\n", vm.regs[2]);
+                    printf("       expected 214 in a2, got %d\n", vm.regs[2]);
                     ok = false;
                 }
                 lines.empty();

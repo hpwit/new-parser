@@ -3746,15 +3746,19 @@ struct ZolShape
     int b;          // the last line that goes (the branch back, or the j)
     int exitLine;   // the first line after the loop
     bool exitWhen;  // the test exits (bge...: a while) or loops (blt...: a for)
+    bool inclusive; // a for's `i <= lim`: bge lim,i,L (the limit first)
 };
 
 // `for`: j test_L / L: body / addi / test_L: limit lines / blt aI,aLim,L
+// (or bge aLim,aI,L for `i <= lim`)
 static bool zolFor(LineFlow *f, int b, ZolShape *z)
 {
     int k = f->target[b];
     char bop[8];
     lineOp(f->line[b], bop, sizeof(bop));
-    if (k < 0 || k >= b || (strcmp(bop, "blt") != 0 && strcmp(bop, "bltu") != 0 && strcmp(bop, "blti") != 0))
+    bool inclusive = strcmp(bop, "bge") == 0 || strcmp(bop, "bgeu") == 0;
+    if (k < 0 || k >= b ||
+        (strcmp(bop, "blt") != 0 && strcmp(bop, "bltu") != 0 && strcmp(bop, "blti") != 0 && !inclusive))
         return false;
     int p = k - 1;
     while (p >= 0 && f->line[p][0] == 0)
@@ -3776,6 +3780,7 @@ static bool zolFor(LineFlow *f, int b, ZolShape *z)
     z->b = b;
     z->exitLine = b + 1;
     z->exitWhen = false;
+    z->inclusive = inclusive;
     return c > k;
 }
 
@@ -3822,6 +3827,7 @@ static bool zolWhile(LineFlow *f, int b, ZolShape *z)
     z->b = b;
     z->exitLine = b + 1;
     z->exitWhen = true;
+    z->inclusive = false;
     return c > tb;
 }
 
@@ -3845,6 +3851,13 @@ static int zeroOverheadLoop(Text *text, int start, int end)
         char *op;
         if (splitInstruction(tl, &op, ops) != 3)
             continue;
+        if (z.inclusive)
+        {
+            // bge aLim,aI: the counter second
+            char *x = ops[0];
+            ops[0] = ops[1];
+            ops[1] = x;
+        }
         uint32_t counter = regBitOf(ops[0]);
         if (counter == 0 || counter >= (1u << 16) || counter <= 2)
             continue; // a0..a1 never
@@ -3953,8 +3966,9 @@ static int zeroOverheadLoop(Text *text, int start, int end)
             continue;
         char label[32];
         snprintf(label, sizeof(label), "label_zol_%d", zolCount++);
-        char guard[96], count1[64], count2[64], loopLine[64];
+        char guard[96], count1[64], count2[64], count3[64], loopLine[64];
         count1[0] = 0;
+        count3[0] = 0;
         if (imm)
         {
             static const int b4const[16] = {-1, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 32, 64, 128, 256};
@@ -3964,6 +3978,14 @@ static int zeroOverheadLoop(Text *text, int start, int end)
             snprintf(guard, sizeof(guard), "bgei %s,%s,%s", ops[0], ops[1], label);
             snprintf(count1, sizeof(count1), "movi a%d,%d", cnt, b4const[idx]);
             snprintf(count2, sizeof(count2), "sub a%d,a%d,%s", cnt, cnt, ops[0]);
+        }
+        else if (z.inclusive)
+        {
+            // i <= lim: none when lim < i, else lim - i + 1 (2^32 for the
+            // whole range, which loop's 0 is; C's would never end)
+            snprintf(guard, sizeof(guard), "%s %s,%s,%s", isUnsigned ? "bltu" : "blt", ops[1], ops[0], label);
+            snprintf(count2, sizeof(count2), "sub a%d,%s,%s", cnt, ops[1], ops[0]);
+            snprintf(count3, sizeof(count3), "addi a%d,a%d,1", cnt, cnt);
         }
         else
         {
@@ -4032,6 +4054,11 @@ static int zeroOverheadLoop(Text *text, int start, int end)
             added++;
         }
         text->addAfter(at++, strdup(count2));
+        if (count3[0] != 0)
+        {
+            text->addAfter(at++, strdup(count3));
+            added++;
+        }
         text->addAfter(at++, strdup(loopLine));
         added += 2;
         return added;

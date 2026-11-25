@@ -333,7 +333,14 @@ def render_stmt(s, c, ind):
     if k == "callstmt":
         return ["%s%s;" % (p, render_expr(s["call"], c))]
     if k == "for":
-        out = ["%sfor (int %s = 0; %s < %d; %s++)" % (p, s["var"], s["var"], s["count"], s["var"]), p + "{"]
+        # an odd count as `i <= count - 1`: both loop tests (and the
+        # zero-overhead loops made of each), without drawing another
+        # random number, so a seed still makes the same program
+        if s["count"] % 2 == 1:
+            head = "%sfor (int %s = 0; %s <= %d; %s++)" % (p, s["var"], s["var"], s["count"] - 1, s["var"])
+        else:
+            head = "%sfor (int %s = 0; %s < %d; %s++)" % (p, s["var"], s["var"], s["count"], s["var"])
+        out = [head, p + "{"]
         out += render_block(s["body"], c, ind + 1)
         return out + [p + "}"]
     if k == "if":
