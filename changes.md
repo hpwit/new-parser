@@ -22,6 +22,24 @@ Two fixes found on the way: one character of a string passed to a function (`emi
 
 Hex numbers in initializers were stored as 0: `uint8_t font[] = {0x18, 0x3C};`, a structure's `{0x100, 0xA5}` and `CRGB(0xff, 0x80, 0)` all read their values as decimal and stopped at the `x`. So did `case 0x10:`. They now read hex as expressions always did.
 
+### 🧭 Pointers: their value, and arithmetic in elements
+
+```c
+uint16_t *gp = buf;
+uint16_t *d = gp;     // d holds what gp holds
+uint16_t *p = gp + 2; // &buf[2]
+p++; p += 3; p = p - 1;
+int n = p - gp;       // elements between them
+```
+
+- A global or bound pointer (`uint16_t *gp;`, `external uint16_t *led16;`) read as a value gave its own address: `uint16_t *d = gp;` read whatever followed `gp` in memory, and writes through `d` went there too. `gp[i]` was right.
+- `p + n`, `n + p`, `p - n` and `p += n` moved by `n` bytes; they move by `n` elements, as in C (`++` and `--` already did). `p - q` between two pointers is the number of elements between them, an `int`, and can be passed as one.
+- A `float *` computed from an array (`float *f = fl + 2;`) lost the addition.
+- `gs = pts;` with a global structure pointer `pt *gs;` stored the address at the wrong offset: `gs[i].x` then crashed.
+- A global `char *word = "pointer";` held the characters themselves, like `char word[]`: it is now a pointer to them, so `word + 3` and `word = "zz";` work.
+
+Every example, game and SolarOS script compiles to the same code as before, except DisplayIcon (its two `char *` texts), whose frames are unchanged.
+
 ### ⚡ A faster compiler, smaller and faster code
 
 The compiler's line store is a hash instead of lists it scanned for every line it added or removed: compiling takes 2.2 to 3.2 times less time on a computer (Wickwire 3.2 s -> 1.0 s), and `MultiEffectController` compiles on an esp32 without PSRAM in 8.1 s instead of 10.6 s. On a board with PSRAM the compiler's working memory goes there, so a compile no longer competes with the sketch for internal RAM.
