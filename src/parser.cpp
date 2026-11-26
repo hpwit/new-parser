@@ -93,6 +93,14 @@ struct ForInAlias
     Token tokens[4]; // a [ __forinN ]
 };
 static vect<ForInAlias> forInAliases;
+// a for statement's rewrite, kept until its body is parsed; left behind by
+// a compile error, freed by Parser::clean()
+struct ForInPending
+{
+    vect<Token> decl;
+    ForInAlias alias;
+};
+static vect<ForInPending *> forInPending;
 // the current token is an alias rewritten: the original, to put it back
 // when the body ends on it (the token after the loop)
 static bool forInRewritten = false;
@@ -2158,6 +2166,45 @@ void Parser::parseFunctionCall()
     return;
 }
 
+// for (x in a), before the body: the body in a block of its own, behind
+// x = a[__forinN]; for a number, the alias active for a structure (see
+// rewriteForIn()). Out of parseStatement(), whose frame is on the stack
+// once per nested statement.
+__attribute__((noinline)) void Parser::forInBodyStart(ForInPending *forIn)
+{
+    if (forIn->decl.size() > 0)
+    {
+        current_cntx = current_cntx->addChild(NodeToken());
+        block_statement_num++;
+        current_node = current_node->addChild(NodeToken(current(), blockStatementNode));
+        for (int i = 0; i < forIn->decl.size(); i++)
+            _tks->insert(i, forIn->decl[i]);
+        parseStatement();
+        RETURN_IF_ERROR
+    }
+    if (forIn->alias.name != NULL)
+    {
+        forInAliases.push_back(forIn->alias);
+        rewriteForInAlias(_tks, TokenCloseParenthesis);
+    }
+}
+
+// after the body: the token after the loop is the variable's own again
+__attribute__((noinline)) void Parser::forInBodyEnd(ForInPending *forIn)
+{
+    if (forIn->alias.name == NULL)
+        return;
+    if (forInRewritten && strcmp(forInRewrittenFrom.getText(), forIn->alias.name) == 0)
+    {
+        for (int i = 0; i < 4; i++)
+            _tks->remove(0);
+        _tks->insert(0, forInRewrittenFrom);
+        forInRewritten = false;
+    }
+    forInAliases.pop_back();
+    free(forIn->alias.name);
+}
+
 void Parser::parseStatement()
 {
 
@@ -2699,9 +2746,12 @@ void Parser::parseStatement()
     }
     else if (Match(TokenKeywordFor))
     {
-        vect<Token> forInDecl;
-        ForInAlias forInAlias;
-        if (rewriteForIn(&forInDecl, &forInAlias))
+        // on the heap, not in this frame: parseStatement() recurses once
+        // per nested statement, and these took 96 bytes of stack each time
+        // (an on-board compile overflowed the 8 KB Arduino loop task)
+        ForInPending *forIn = new ForInPending;
+        forInPending.push_back(forIn);
+        if (rewriteForIn(&forIn->decl, &forIn->alias))
             RETURN_IF_ERROR
 
         current_cntx = current_cntx->addChild(NodeToken());
@@ -2768,40 +2818,15 @@ void Parser::parseStatement()
             current_node = current_node->parent;
             // for (x in a): the body in a block of its own, behind
             // x = a[__forinN]; (see rewriteForIn())
-            if (forInDecl.size() > 0)
-            {
-                current_cntx = current_cntx->addChild(NodeToken());
-                block_statement_num++;
-                current_node = current_node->addChild(NodeToken(current(), blockStatementNode));
-                for (int i = 0; i < forInDecl.size(); i++)
-                    _tks->insert(i, forInDecl[i]);
-                parseStatement();
-                RETURN_IF_ERROR
-            }
-            if (forInAlias.name != NULL)
-            {
-                forInAliases.push_back(forInAlias);
-                rewriteForInAlias(_tks, TokenCloseParenthesis);
-            }
+            forInBodyStart(forIn);
+            RETURN_IF_ERROR
             if (Match(TokenOpenCurlyBracket))
                 parseBlockStatement();
             else
                 parseUnbracedBody();
-            if (forInAlias.name != NULL)
-            {
-                // the token after the loop is the variable's own again
-                if (forInRewritten && strcmp(forInRewrittenFrom.getText(), forInAlias.name) == 0)
-                {
-                    for (int i = 0; i < 4; i++)
-                        _tks->remove(0);
-                    _tks->insert(0, forInRewrittenFrom);
-                    forInRewritten = false;
-                }
-                forInAliases.pop_back();
-                free(forInAlias.name);
-            }
+            forInBodyEnd(forIn);
             RETURN_IF_ERROR
-            if (forInDecl.size() > 0)
+            if (forIn->decl.size() > 0)
             {
                 current_cntx = current_cntx->parent;
                 current_node = current_node->parent;
@@ -2826,6 +2851,8 @@ void Parser::parseStatement()
             current_node = current_node->parent;
 
             _for_depth_reg.set(savedForDepthReg);
+            forInPending.pop_back();
+            delete forIn;
             return;
         }
         else
@@ -4673,6 +4700,9 @@ void Parser::parseArguments()
 
 void Parser::clean()
 {
+    for (int i = 0; i < forInPending.size(); i++)
+        delete forInPending[i];
+    forInPending.clear();
     // after a failed parse the working stack shares nodes with the tree:
     // free each subtree once (see nodeClearGuardBegin())
     nodeClearGuardBegin();
