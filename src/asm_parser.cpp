@@ -4,6 +4,11 @@
 #include "vect.h"
 #include "parser.h"
 #include "compile_progress.h"
+#include "asm_pie.h"
+#if defined(ESP_PLATFORM) || defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+#include "sdkconfig.h"
+#define ASM_PIE_ON_TARGET 1
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -651,6 +656,78 @@ static void findLoopHeads(Text *t)
         free(jumpTargets.get(k));
 }
 
+// An ee.* line: the ESP32-S3's PIE (see asm_pie.h). Refused when built for
+// another chip, where it would be an illegal instruction; accepted on a
+// computer, for the tests.
+static result_parse_line parsePie(const char *op, char *str)
+{
+    result_parse_line res;
+    asm_Error.error = 0;
+    res.op = opCodeType::standard;
+    res.size = 3;
+    res.align = false;
+    const PieOp *p = findPieOp(op);
+    if (p == NULL)
+    {
+        asm_Error.error = 1;
+        asm_Error.error_message = string_format("Opcode %s not found", op);
+        return res;
+    }
+#if ASM_PIE_ON_TARGET && !CONFIG_IDF_TARGET_ESP32S3
+    asm_Error.error = 1;
+    asm_Error.error_message = string_format("%s needs an ESP32-S3 (PIE instructions)", op);
+    return res;
+#endif
+    int32_t values[3] = {0, 0, 0};
+    SplitResult operandes(str, ",");
+    if (operandes.size() != p->nops)
+    {
+        asm_Error.error = 1;
+        asm_Error.error_message = string_format("asm_Error:expected %d arguments got %d\n", p->nops, operandes.size());
+        return res;
+    }
+    for (int i = 0; i < p->nops; i++)
+    {
+        const PieField &f = p->f[i];
+        result_parse_operande r;
+        if (f.kind == PIE_Q)
+        {
+            r = parseRegisterLike(operandes.get(i), 'q');
+            if (r.error.error == 0 && r.value > 7)
+            {
+                r.error.error = 1;
+                r.error.error_message = string_format("Unknown register %s\n", operandes.get(i));
+            }
+        }
+        else if (f.kind == PIE_A)
+            r = parseRegisterLike(operandes.get(i), 'a');
+        else
+        {
+            r = parseNumberRange(operandes.get(i), f.min, f.max);
+            if (r.error.error == 0 && r.value % f.step != 0)
+            {
+                r.error.error = 1;
+                r.error.error_message = string_format("%s: %d is not a multiple of %d\n", op, r.value, f.step);
+            }
+        }
+        if (r.error.error)
+        {
+            asm_Error.error = 1;
+            asm_Error.error_message = r.error.error_message;
+            return res;
+        }
+        values[i] = r.value;
+    }
+    if (p->distinctQ && values[0] == values[1])
+    {
+        asm_Error.error = 1;
+        asm_Error.error_message = string_format("%s needs two different q registers\n", op);
+        return res;
+    }
+    res.bincode = pieEncode(p, values);
+    return res;
+}
+
 static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
 {
     if (strchr(sp.opcde, ':') != NULL)
@@ -1195,6 +1272,8 @@ static result_parse_line parseline(asm_line sp, parsedLines *asm_parsed)
         return parseOperandes(sp.operandes, 2, op_consts, 3, bin_consts);
     if (strcmp(op, "divn.s") == 0)
         return parseOperandes(sp.operandes, 3, op_divns, 3, bin_divns);
+    if (strncmp(op, "ee.", 3) == 0)
+        return parsePie(op, sp.operandes);
 
     result_parse_line res;
     asm_Error.error = 1;

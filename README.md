@@ -1550,6 +1550,61 @@ void main()
 - Labels end with `:` and must be unique in the script.
 - Besides what the compiler itself uses, the assembler knows `min`, `max`, `minu`, `maxu`, `nsau`, `nsa`, `clamps`, `sext`, `mul16u`, `mul16s`, `memw`, `extw`, `isync`, `nop`, `loop`/`loopnez`/`loopgtz`, and `rsr`/`wsr` (`rsr a2,ccount` reads the cycle counter).
 - An unknown instruction is reported with the line as written: `assembler error: "frobnicate a2,a2": Opcode frobnicate not found`.
+- An assembly function is assembled exactly as written: the optimizer that rewrites the compiled code leaves it alone.
+
+### ESP32-S3 vector instructions (PIE)
+
+On the ESP32-S3, an assembly function can use the chip's vector extension: eight 128-bit registers `q0` to `q7`, each 16 bytes, 8 × 16-bit or 4 × 32-bit integers, and instructions starting with `ee.`. Saturating add of two `s_int` (signed 16-bit) arrays, 8 elements per pass:
+
+```c
+// d[i] = a[i] + b[i], n a multiple of 8, the arrays 16-byte aligned
+__ASM__ void vadds16(s_int *d, s_int *a, s_int *b, int n)
+{
+"entry a1,32"
+"srli a5,a5,3"
+"beqz a5,vadds_end"
+"vadds_loop:"
+"ee.vld.128.ip q0,a3,16"
+"ee.vld.128.ip q1,a4,16"
+"ee.vadds.s16 q2,q0,q1"
+"ee.vst.128.ip q2,a2,16"
+"addi a5,a5,-1"
+"bnez a5,vadds_loop"
+"vadds_end:"
+"retw.n"
+}
+```
+
+- Loads and stores: `ee.vld.128.ip`/`ee.vst.128.ip` (address in the register, then advanced by the immediate, a multiple of 16 from -2048 to 2032), `ee.vld.128.xp`/`ee.vst.128.xp` (advanced by a register), the 64-bit halves `ee.vld.l.64.ip`, `ee.vld.h.64.ip`, `ee.vst.l.64.ip`, `ee.vst.h.64.ip`, and the broadcasts `ee.vldbc.8`/`.16`/`.32` (one value in every lane), also with `.ip`.
+- Arithmetic, for `.s8`, `.s16` and `.s32` lanes: `ee.vadds`, `ee.vsubs` (saturating: they clamp where `+` in a script wraps), `ee.vmin`, `ee.vmax`, `ee.vcmp.eq`/`.lt`/`.gt` (all ones where true). `ee.vmul.s8`/`.s16`/`.u8`/`.u16` multiply and shift right by SAR (`ssai 8` first).
+- Bits and lanes: `ee.andq`, `ee.orq`, `ee.xorq`, `ee.notq`, `ee.zero.q`, `ee.movi.32.a`/`ee.movi.32.q` (one 32-bit lane to or from an `a` register), `ee.vsl.32`/`ee.vsr.32`, `ee.src.q`, `ee.vzip`/`ee.vunzip` (`.8`, `.16`, `.32`).
+- Addresses for the 128-bit loads and stores must be multiples of 16; script arrays aren't aligned that way, so round the address up in assembly first (`addi a2,a2,15`, `movi a3,-16`, `and a2,a2,a3`).
+- Compiling a script with `ee.` instructions for another chip is an error: `ee.vadds.s16 needs an ESP32-S3 (PIE instructions)`.
+
+### Loops vectorized on the ESP32-S3
+
+On the ESP32-S3 the compiler turns loops of this shape into vector code by itself, 16 elements per pass, with no assembly in the script:
+
+```c
+uint8_t copy[128, 128];
+uint8_t hs[3, 128];
+
+void ruleRow(int j, int a, int c, int b)
+{
+   for (int i = 1; i < 128 - 1; i++)
+   {
+      uint8_t n = hs[a, i] + hs[c, i] + hs[b, i];
+      copy[j, i] = (n == 3) | ((n == 4) & copy[j, i]);
+   }
+}
+```
+
+- `for (int i = A; i < B; i++)` with numbers for `A` and `B`.
+- `uint8_t` arrays only, one or two dimensions, read and written at `i` plus or minus a number (up to 64); a row is a variable, a number, or a variable plus or minus a number.
+- `uint8_t` temporaries, then one store; no `if`, no call. The operators: `+`, `-`, `&`, `|`, and the comparisons, which give 0 or 1.
+- The array written is read only at the very element written (`copy[j, i]` above), so no element depends on another.
+
+The result is exactly the same as the loop run one element at a time: bytes still wrap around at 256 (the S3's vector additions saturate, so the code works on 16-bit lanes, where nothing a loop of this shape computes can saturate). A loop of any other shape compiles as before. In the game of life above ([GameOfLifeVec](examples/matouch/GameOfLifeVec), 400x240 cells on the S3), a generation takes 7.2 ms instead of 34.5 ms; with the drawing, a frame takes 18.9 ms, against 41.8 ms for the original [GameOfLife](examples/matouch/GameOfLife) script.
 
 See [AssemblyFunctions](examples/AssemblyFunctions) (C against assembly, timed with the cycle counter) and [AssemblyGPIO](examples/AssemblyGPIO) (a pin switched from assembly).
 
