@@ -4,6 +4,16 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 🧮 ESP32-S3 vector instructions (PIE) in `__ASM__` functions
+
+The assembler knows 55 of the S3's `ee.` instructions: 128-bit loads and stores (`ee.vld.128.ip`, `.xp`, 64-bit halves, broadcasts), saturating add and subtract, min, max, compares and multiply on 8-, 16- and 32-bit lanes, bitwise operations and lane moves, on the registers `q0` to `q7`. Their encodings were taken from GNU as (`xtensa-esp32s3-elf-as`), bit by bit, and 440 of them are checked against it in the host tests; a script using them runs as expected on QEMU's esp32s3. For another chip they are an error.
+
+### 🚀 Byte-array loops vectorized on the ESP32-S3
+
+A loop like a game of life's rule, `for (int i = 1; i < 127; i++) { uint8_t n = hs[a, i] + hs[c, i] + hs[b, i]; copy[j, i] = (n == 3) | ((n == 4) & copy[j, i]); }`, is compiled to PIE code on the S3: 16 elements per pass, loads at any address (`ee.ld.128.usar.ip` + `ee.src.q`), 16-bit lanes so that the result is the scalar one exactly (the S3's vector adds saturate), and element-by-element code for the start, until the stored address is a multiple of 16, and for the end. The shape it takes: numbers as bounds, `uint8_t` arrays at `i` plus a number, `uint8_t` temporaries, one store, `+ - & |` and comparisons, the array written read only where it is written. 5 to 7 times fewer instructions per cell in the game of life; other loops compile as before (of the examples, only ProceduralEffects' row clear is taken). Checked on QEMU's esp32s3 against C: the game of life over 20 generations and 140 random loops, 127 of them vectorized (`test/qemu_s3`). On the board (ESP32-S3, matouch, `GameOfLifeVec`, 400x240 cells): a generation takes 7.2 ms instead of 34.5 ms (800x480: 30.3 instead of 140.2), with the same checksums over 400 generations; with the drawing, 18.9 ms a frame against 41.8 ms for the original `GameOfLife` script.
+
+`__ASM__` functions are now assembled exactly as written: the optimizer, which reads the code's text, used to rewrite them too (it renamed `a5` to `a15` in `AssemblyFunctions`' loop) and would have reordered `ee.` instructions it can't follow.
+
 ### 🔁 `for (x in array)` and `int a[] = {...}`
 
 ```c

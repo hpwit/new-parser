@@ -77,6 +77,11 @@ Faster code (zero-overhead loops, smaller instructions), a compiler 2 to 3 times
 - [What you can do with the language](#what-you-can-do-with-the-language)
   * [Use of define](#use-of-define)
   * [Assembly functions: `__ASM__`](#assembly-functions-__asm__)
+- [ESP32-S3: vector code](#esp32-s3-vector-code)
+  * [Loops the compiler vectorizes](#loops-the-compiler-vectorizes)
+  * [Writing a loop so that it vectorizes: the game of life](#writing-a-loop-so-that-it-vectorizes-the-game-of-life)
+  * [What happens inside](#what-happens-inside)
+  * [Vector instructions in assembly](#vector-instructions-in-assembly)
 - [Running scripts in the background](#running-scripts-in-the-background)
   * [Parameters for a task](#parameters-for-a-task)
   * [The script scheduler](#the-script-scheduler)
@@ -1550,8 +1555,191 @@ void main()
 - Labels end with `:` and must be unique in the script.
 - Besides what the compiler itself uses, the assembler knows `min`, `max`, `minu`, `maxu`, `nsau`, `nsa`, `clamps`, `sext`, `mul16u`, `mul16s`, `memw`, `extw`, `isync`, `nop`, `loop`/`loopnez`/`loopgtz`, and `rsr`/`wsr` (`rsr a2,ccount` reads the cycle counter).
 - An unknown instruction is reported with the line as written: `assembler error: "frobnicate a2,a2": Opcode frobnicate not found`.
+- An assembly function is assembled exactly as written: the optimizer that rewrites the compiled code leaves it alone.
+- On the ESP32-S3 it can also use the chip's vector instructions: see [Vector instructions in assembly](#vector-instructions-in-assembly).
 
 See [AssemblyFunctions](examples/AssemblyFunctions) (C against assembly, timed with the cycle counter) and [AssemblyGPIO](examples/AssemblyGPIO) (a pin switched from assembly).
+
+---
+
+# ESP32-S3: vector code
+
+The ESP32-S3 has a vector extension, PIE: eight 128-bit registers that each hold 16 bytes, and instructions that work on all of them at once. The compiler uses it in two ways:
+
+- **by itself**, for loops over byte arrays written in the shape described below: nothing to change in the script, and the result is exactly the one of the ordinary loop;
+- **in assembly functions**, which can use the vector instructions directly.
+
+On an ESP32 (or any other chip) the same scripts run unchanged: the loops compile as ordinary loops.
+
+## Loops the compiler vectorizes
+
+Each of these loops runs 16 elements per pass on the S3:
+
+```c
+#define width 100
+uint8_t heat[4, width];
+uint8_t front[width], back[width];
+uint8_t level[4, width], mask[4, width];
+uint8_t trail[width];
+uint8_t layerA[width], layerB[width], sum[width];
+
+// clear a row
+for (int x = 0; x < width; x++)
+   heat[y, x] = 0;
+
+// copy one array into another
+for (int x = 0; x < width; x++)
+   back[x] = front[x];
+
+// a mask: 1 where the level is above 128, 0 elsewhere
+for (int x = 0; x < width; x++)
+   mask[y, x] = level[y, x] > 128;
+
+// a trail fading by one step, never below 0
+for (int x = 0; x < width; x++)
+   trail[x] = trail[x] - (trail[x] > 0);
+
+// two layers added (bytes wrap around at 256, as always)
+for (int x = 0; x < width; x++)
+   sum[x] = layerA[x] + layerB[x];
+```
+
+A loop is vectorized when:
+
+- it is `for (int i = A; i < B; i++)` with numbers for `A` and `B` (a `#define` is a number; `width - 1` too);
+- its arrays are `uint8_t`, one or two dimensions, read and written at `i` plus or minus a number (up to 64). A row (the first index of a two-dimensional array) is a variable, a number, or a variable plus or minus a number: `copy[j + 1, i - 1]`;
+- its body is `uint8_t` temporaries, then one store: no `if`, no function call, no other variable written;
+- the operators are `+`, `-`, `&`, `|` and the comparisons `==`, `!=`, `<`, `>`, `<=`, `>=`, which give 0 or 1 as everywhere else in the language;
+- the array written is read only at the element written: `trail[x] = trail[x] - 1` is fine, `level[x] = level[x - 1] + 1` is not (each element would depend on the one before).
+
+Anything else compiles as an ordinary loop, so trying costs nothing. These, for instance, are not vectorized:
+
+| Loop body | Why |
+|:----|:----|
+| `level[x] = level[x - 1] + 1;` | each element depends on the previous one |
+| `out[x] = (a[x] + b[x]) / 2;` | division (and multiplication: `a[x] * 2`) |
+| `if (a[x] > 128) out[x] = 1;` | an `if`: write `out[x] = a[x] > 128;` when 0 is fine elsewhere |
+| `big[x] = a[x] + 1;` with `int big[100]` | not a byte array |
+| `for (int x = 0; x < n; x++)` | the bound is a variable, not a number |
+
+## Writing a loop so that it vectorizes: the game of life
+
+The usual game of life counts the eight neighbours of each cell, decides with an `if` and draws in the same loop ([matouch/GameOfLife](examples/matouch/GameOfLife)):
+
+```c
+for (int i = 1; i < width - 1; i++)
+{
+   int res = linec[i - 1] + linec[i + 1];
+   res = res + line1[i - 1] + line1[i + 1] + line1[i];
+   res = res + copy[j+1,i-1] + copy[j+1,i+1] + copy[j+1,i];
+   bool alive = false;
+   int l = copy[j,i];
+   if (res == 3)
+      alive = true;
+   else
+      alive = (l == 1 && res == 2) ? true : false;
+   if (alive)
+   {
+      led16[j*800+i] = color;
+      copy[j,i] = 1;
+   }
+   else
+   {
+      led16[j*800+i] = 0;
+      copy[j,i] = 0;
+   }
+}
+```
+
+None of it can be vectorized: `int` temporaries, `if`, two arrays written, 16-bit pixels. [GameOfLifeVec](examples/matouch/GameOfLifeVec) computes the same generation in two loops that can, and draws in a third, ordinary one:
+
+```c
+uint8_t copy[height, width];
+uint8_t hs[3, width];   // three line buffers, used in rotation
+
+// hs[s] = the cell to the left + the cell + the cell to the right, for row j
+void sumRow(int j, int s)
+{
+   for (int i = 1; i < width - 1; i++)
+      hs[s, i] = copy[j, i - 1] + copy[j, i] + copy[j, i + 1];
+}
+
+// n is the sum of the 9 cells around and including the cell:
+// it lives if n == 3, or if it is alive and n == 4
+void ruleRow(int j, int a, int c, int b)
+{
+   for (int i = 1; i < width - 1; i++)
+   {
+      uint8_t n = hs[a, i] + hs[c, i] + hs[b, i];
+      copy[j, i] = (n == 3) | ((n == 4) & copy[j, i]);
+   }
+}
+```
+
+The ideas that make a loop fit: a running sum kept in a line buffer instead of eight reads per cell, the `if` replaced by comparisons combined with `&` and `|`, and the drawing moved to a loop of its own. `step()` calls `sumRow()` for the row below and `ruleRow()` for each row, rotating the three buffers.
+
+On the matouch board (ESP32-S3 at 240 MHz, 400x240 cells), per frame:
+
+| | Generation | Drawing | Frame |
+|:----|----:|----:|----:|
+| GameOfLife, the usual script | | | 41.8 ms |
+| GameOfLifeVec, compiled for an ESP32 (ordinary loops) | 34.5 ms | 11.3 ms | 46.0 ms |
+| GameOfLifeVec on the S3 (vectorized) | **7.2 ms** | 11.6 ms | **18.9 ms** |
+
+The generation is 4.8 times faster, the frame 2.2 times faster than the usual script, and the grid is the same at every generation (the example prints a checksum every 50).
+
+## What happens inside
+
+A vectorized loop becomes a call to a small assembly function the compiler writes for it, which takes the rows as arguments and runs in three parts:
+
+1. element by element, until the address it stores to is a multiple of 16;
+2. 16 elements per pass while 16 are left;
+3. element by element for the rest.
+
+The S3's vector additions saturate (200 + 100 gives 255, not 44), where a script's `uint8_t` wraps around. So the 16 bytes are widened to two registers of eight 16-bit values, computed there, where nothing a loop of this shape computes can reach the limits, then narrowed back to their low bytes: exactly what storing into a `uint8_t` does. The compiler checks, for every value of the expression, that 16 bits are enough; when they are not, the loop is not vectorized. One read of `copy[j, i - 1]`, abridged:
+
+```
+add a10,a3,a8                 // the address of copy[j, i - 1]
+addi a10,a10,-1
+ee.ld.128.usar.ip q0,a10,16   // 16 bytes at any address: the aligned block...
+ee.vld.128.ip q1,a10,0        // ...the next one...
+ee.src.q q2,q0,q1             // ...and the 16 bytes between
+ee.zero.q q0
+ee.vzip.8 q2,q0               // q2: elements 0 to 7 as 16-bit values, q0: 8 to 15
+```
+
+and, at the end of each half, `ee.vunzip.8` keeps the low byte of each value and `ee.vst.l.64.ip` stores 8 bytes.
+
+The generated function costs a few hundred bytes of code per loop (GameOfLifeVec: 1656 bytes instead of 944). Vectorizing is on by default when compiling for an ESP32-S3; `setLoopVectorize(false)` (`vectorize.h`) turns it off before `parseScript()`.
+
+## Vector instructions in assembly
+
+On the ESP32-S3, an assembly function can use the chip's vector extension: eight 128-bit registers `q0` to `q7`, each 16 bytes, 8 × 16-bit or 4 × 32-bit integers, and instructions starting with `ee.`. Saturating add of two `s_int` (signed 16-bit) arrays, 8 elements per pass:
+
+```c
+// d[i] = a[i] + b[i], n a multiple of 8, the arrays 16-byte aligned
+__ASM__ void vadds16(s_int *d, s_int *a, s_int *b, int n)
+{
+"entry a1,32"
+"srli a5,a5,3"
+"beqz a5,vadds_end"
+"vadds_loop:"
+"ee.vld.128.ip q0,a3,16"
+"ee.vld.128.ip q1,a4,16"
+"ee.vadds.s16 q2,q0,q1"
+"ee.vst.128.ip q2,a2,16"
+"addi a5,a5,-1"
+"bnez a5,vadds_loop"
+"vadds_end:"
+"retw.n"
+}
+```
+
+- Loads and stores: `ee.vld.128.ip`/`ee.vst.128.ip` (address in the register, then advanced by the immediate, a multiple of 16 from -2048 to 2032), `ee.vld.128.xp`/`ee.vst.128.xp` (advanced by a register), the 64-bit halves `ee.vld.l.64.ip`, `ee.vld.h.64.ip`, `ee.vst.l.64.ip`, `ee.vst.h.64.ip`, and the broadcasts `ee.vldbc.8`/`.16`/`.32` (one value in every lane), also with `.ip`.
+- Arithmetic, for `.s8`, `.s16` and `.s32` lanes: `ee.vadds`, `ee.vsubs` (saturating: they clamp where `+` in a script wraps), `ee.vmin`, `ee.vmax`, `ee.vcmp.eq`/`.lt`/`.gt` (all ones where true). `ee.vmul.s8`/`.s16`/`.u8`/`.u16` multiply and shift right by SAR (`ssai 8` first).
+- Bits and lanes: `ee.andq`, `ee.orq`, `ee.xorq`, `ee.notq`, `ee.zero.q`, `ee.movi.32.a`/`ee.movi.32.q` (one 32-bit lane to or from an `a` register), `ee.vsl.32`/`ee.vsr.32`, `ee.src.q`, `ee.vzip`/`ee.vunzip` (`.8`, `.16`, `.32`).
+- Addresses for the 128-bit loads and stores must be multiples of 16; script arrays aren't aligned that way, so round the address up in assembly first (`addi a2,a2,15`, `movi a3,-16`, `and a2,a2,a3`).
+- Compiling a script with `ee.` instructions for another chip is an error: `ee.vadds.s16 needs an ESP32-S3 (PIE instructions)`.
 
 ---
 
@@ -1891,6 +2079,7 @@ The compiler adds about 165KB of flash and 8.6KB of RAM to a sketch; the loader 
 | `LibraryStruct` | `BIND_STRUCT()`: library structures (`key_return`, `struct tm`) bound to a script. |
 | `KeyboardCallback` | An `external` variable, calling a loaded script again from an event handler. |
 | `KeyboardTest` | A USB keyboard on an ESP32-S3 driving a script. Needs the `ESP32_USB_Host_HID` library. |
+| `matouch/GameOfLifeVec` | The game of life written so that its loops are vectorized on the ESP32-S3 (800x480 panel), timed: see [ESP32-S3: vector code](#esp32-s3-vector-code). |
 | `JsonInput` | Script variables filled from a JSON document (needs ArduinoJson). |
 | `JsonLiveSettings` | A script on its own task getting new JSON settings every 2 seconds. esp32 only. |
 | `LanguageBasics` | Every compiling step one by one, printing the generated assembly. |

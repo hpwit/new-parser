@@ -59,6 +59,8 @@ char * _numToBytes(uint32_t __num);
 extern Stack<int> register_numr ;
 extern Stack<int> register_numl;
 extern Text content,header,footer,*bufferText;
+extern Text asmFunctions;
+void appendAsmFunctions(Text *text);
 extern Stack<varTypeEnum> globalType;
 extern int for_if_num2;
 extern int local_var_num;

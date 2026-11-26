@@ -1,5 +1,6 @@
 
 #include "parser.h"
+#include "vectorize.h"
 #include "compile_progress.h"
 #include "nodetoken.h"
 #include "compiler_error.h"
@@ -267,6 +268,7 @@ void Parser::parse(Script *main_script, Tokens *__tks)
     PARSER_LOG("zero-overhead loops")
     zeroOverheadLoops(&content);
     removeBlankLines(&content);
+    appendAsmFunctions(&content); // hand-written: never optimized
     // Global initializers run as one more function, @__footer.
     compileProgressRange(PROGRESS_OPTIMIZED, PROGRESS_OPTIMIZED, "optimizing");
     preserveAcrossCalls(&footer);
@@ -4700,6 +4702,8 @@ void Parser::parseArguments()
 
 void Parser::clean()
 {
+    asmFunctions.clear(); // a failed compile's __ASM__ bodies
+    resetLoopVectorize();
     for (int i = 0; i < forInPending.size(); i++)
         delete forInPending[i];
     forInPending.clear();

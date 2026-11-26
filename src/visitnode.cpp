@@ -1,4 +1,5 @@
 #include "nodetoken.h"
+#include "vectorize.h"
 #include "parser_define.h"
 #include "binding.h"
 #include "string_constants.h"
@@ -192,6 +193,11 @@ static void emitSafeBoundsCheck(NodeToken *nd, int sizeReg)
 }
 
 Text content, header, footer, *bufferText;
+// __ASM__ functions, kept out of the optimizer: its passes read the code's
+// text and know neither the q registers of the S3's ee.* instructions nor
+// that ee.vld.128.ip q0,a2,16 advances a2. Appended after the last pass
+// (appendAsmFunctions()).
+Text asmFunctions;
 void _visittypeNode(NodeToken *nd) {}
 // ---------------------------------------------------------------------
 // ffloat: 32-bit fixed point with FFLOAT_FRAC_BITS (16) fraction bits,
@@ -256,6 +262,18 @@ static const int _ffdiv_size = sizeof(_ffdiv) / sizeof(_ffdiv[0]);
 // Parser::parse() once the optimizer has run: the routine is hand-written,
 // and Pass 4 copy propagation would otherwise rewrite its last lines
 // across a branch (`mov a2,a5 / bgez / neg a2,a2` lost the mov).
+void appendAsmFunctions(Text *text)
+{
+    text->end();
+    for (int i = 0; i < asmFunctions.size(); i++)
+    {
+        const char *line = *asmFunctions.getChildAtPos(i);
+        if (line != NULL && line[0] != 0)
+            text->addAfter(line);
+    }
+    asmFunctions.clear();
+}
+
 void appendFfloatDivision(Text *text)
 {
     if (!addffloatdivision)
@@ -3419,6 +3437,9 @@ void _visitforConditionRotated(NodeToken *test, char *bodyLabel, int distance)
 
 void _visitforNode(NodeToken *nd)
 {
+    // a loop over byte arrays: ESP32-S3 vector code (see vectorize.cpp)
+    if (vectorizeLoop(nd))
+        return;
     // printf("ente for\n") ;
     point_regnum = 5;
 
@@ -4773,7 +4794,8 @@ void _visitreturnNode(NodeToken *nd)
 
 void _visitdefAsmFunctionNode(NodeToken *nd)
 {
-    bufferText = &content;
+    bufferText = &asmFunctions;
+    asmFunctions.end();
     header.addAfter(string_format(".global @_%s", nd->getText()));
     bufferText->addAfter(string_format("@_%s:", nd->getText()));
     header.addAfter(string_format("@_stack_%s:", nd->getText()));

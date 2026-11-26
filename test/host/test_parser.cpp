@@ -25,6 +25,7 @@
 #include "arguments.h"
 #include "json_binding.h"
 #include "script_executable.h"
+#include "vectorize.h"
 
 struct TestCase
 {
@@ -741,6 +742,197 @@ static void runGenerateBinaryTest(const char *name, const char *script)
         printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
     }
     else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
+#include "fixtures/pie_vectors.h"
+
+// The S3's PIE instructions (src/asm_pie.h): every line of pieVectors in
+// one __ASM__ function, compiled the whole way, must come out as GNU as
+// encoded it, in that order -- the encodings, and also nothing in between
+// (the optimizer never sees an __ASM__ body) touching the ee.* lines.
+// Then the operand checks: out of range, misaligned, wrong register kind.
+static void runPieTest()
+{
+    const char *name = "PIE instructions: ee.* encodings match GNU as";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        int n = sizeof(pieVectors) / sizeof(pieVectors[0]);
+        std::string script = "__ASM__ void vec(){\"entry a1,32\"";
+        for (int i = 0; i < n; i++)
+            script += std::string("\"") + pieVectors[i].line + "\"";
+        script += "\"retw.n\"} void main(){}";
+        Parser p;
+        p.clean();
+        content.clear();
+        header.clear();
+        footer.clear();
+        Script s;
+        s.addContent(strdup(script.c_str()));
+        s.init();
+        p.parse(&s, &__allTokens);
+        if (Error.error)
+        {
+            printf("       parse error=%d (%s)\n", Error.error, error_messages[Error.error]);
+            fflush(stdout), _exit(1);
+        }
+        Binary bin = createBinary(&footer, &header, &content, false);
+        if (bin.error.error)
+        {
+            printf("       assembler error: %s\n", bin.error.error_message ? bin.error.error_message : "?");
+            fflush(stdout), _exit(1);
+        }
+        std::string want;
+        for (int i = 0; i < n; i++)
+            for (int b = 0; b < 3; b++)
+                want += (char)(pieVectors[i].code >> (8 * b) & 0xff);
+        std::string got((const char *)bin.binary_data, bin.instruction_size);
+        size_t at = got.find(want);
+        if (at == std::string::npos)
+        {
+            // where the first line is, then the first difference
+            std::string first = want.substr(0, 3);
+            size_t f = got.find(first);
+            for (int i = 0; f != std::string::npos && i < n; i++)
+                if (got.compare(f + 3 * i, 3, want, 3 * i, 3) != 0)
+                {
+                    printf("       %s: got %02x%02x%02x, GNU as %06x\n", pieVectors[i].line,
+                           (uint8_t)got[f + 3 * i + 2], (uint8_t)got[f + 3 * i + 1], (uint8_t)got[f + 3 * i],
+                           pieVectors[i].code);
+                    break;
+                }
+            if (f == std::string::npos)
+                printf("       the first line's encoding is not in the binary\n");
+            fflush(stdout), _exit(1);
+        }
+        printf("       %d ee.* lines, %d bytes, as GNU as encodes them\n", n, 3 * n);
+        // refused: each must fail to assemble
+        static const char *bad[] = {"ee.vld.128.ip q8,a2,16", "ee.vld.128.ip q0,a2,8", "ee.vld.128.ip q0,a2,2048",
+                                    "ee.vadds.s16 q0,q1,a2", "ee.vzip.8 q1,q1", "ee.vldbc.16.ip q0,a2,3",
+                                    "ee.vadds.s16 q0,q1", "ee.nosuch q0"};
+        for (unsigned k = 0; k < sizeof(bad) / sizeof(bad[0]); k++)
+        {
+            Parser p2;
+            p2.clean();
+            content.clear();
+            header.clear();
+            footer.clear();
+            Script s2;
+            std::string sc = std::string("__ASM__ void f(){\"entry a1,32\" \"") + bad[k] + "\" \"retw.n\"} void main(){}";
+            s2.addContent(strdup(sc.c_str()));
+            s2.init();
+            p2.parse(&s2, &__allTokens);
+            Binary b2 = createBinary(&footer, &header, &content, false);
+            if (!b2.error.error)
+            {
+                printf("       %s was accepted\n", bad[k]);
+                fflush(stdout), _exit(1);
+            }
+        }
+        printf("       %d invalid lines refused\n", (int)(sizeof(bad) / sizeof(bad[0])));
+        fflush(stdout), _exit(0);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
+// The S3 loop vectorizer (src/vectorize.cpp): which loops it takes. What
+// the vector code computes is checked on QEMU's esp32s3 (test/qemu_s3).
+static int vectorizedLoops(const char *script, bool *assembled)
+{
+    Parser p;
+    p.clean();
+    content.clear();
+    header.clear();
+    footer.clear();
+    Script s;
+    s.addContent(strdup(script));
+    s.init();
+    p.parse(&s, &__allTokens);
+    *assembled = false;
+    if (Error.error)
+        return -1;
+    int n = 0;
+    for (int i = 0; i < content.size(); i++)
+    {
+        const char *l = *content.getChildAtPos(i);
+        if (l != NULL && strncmp(l, "call8 @____vec", 14) == 0)
+            n++;
+    }
+    Binary bin = createBinary(&footer, &header, &content, false);
+    *assembled = !bin.error.error;
+    return n;
+}
+
+static void runVectorizeTest()
+{
+    const char *name = "S3 loop vectorizer: the loops it takes";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        setLoopVectorize(true);
+        const char *gol =
+            "uint8_t copy[128, 128]; uint8_t hs[3, 128];"
+            "void sumRow(int j, int s){ for (int i = 1; i < 128 - 1; i++) {"
+            "  hs[s, i] = copy[j, i - 1] + copy[j, i] + copy[j, i + 1]; } }"
+            "void ruleRow(int j, int a, int c, int b){ for (int i = 1; i < 128 - 1; i++) {"
+            "  uint8_t n = hs[a, i] + hs[c, i] + hs[b, i];"
+            "  copy[j, i] = (n == 3) | ((n == 4) & copy[j, i]); } }"
+            "void main(){ sumRow(1, 0); ruleRow(1, 0, 1, 2); }";
+        bool ok;
+        int n = vectorizedLoops(gol, &ok);
+        if (n != 2 || !ok)
+        {
+            printf("       game of life: %d loops vectorized (2 expected), assembled %d\n", n, ok);
+            fflush(stdout), _exit(1);
+        }
+        // not taken: a multiplication, an int array, two stores, the array
+        // written read elsewhere, i read as a value, a non-constant bound
+        static const char *no[] = {
+            "uint8_t a[64]; uint8_t b[64]; void main(){ for (int i = 0; i < 60; i++) { a[i] = b[i] * 3; } }",
+            "int a[64]; uint8_t b[64]; void main(){ for (int i = 0; i < 60; i++) { a[i] = b[i] + 1; } }",
+            "uint8_t a[64]; uint8_t b[64]; void main(){ for (int i = 0; i < 60; i++) { a[i] = 1; b[i] = 2; } }",
+            "uint8_t a[64]; void main(){ for (int i = 1; i < 60; i++) { a[i] = a[i - 1] + 1; } }",
+            "uint8_t a[64]; void main(){ for (int i = 0; i < 60; i++) { a[i] = i; } }",
+            "uint8_t a[64]; void f(int n){ for (int i = 0; i < n; i++) { a[i] = 1; } } void main(){ f(3); }"};
+        for (unsigned k = 0; k < sizeof(no) / sizeof(no[0]); k++)
+        {
+            int m = vectorizedLoops(no[k], &ok);
+            if (m != 0 || !ok)
+            {
+                printf("       vectorized (%d) or not assembled (%d): %s\n", m, ok, no[k]);
+                fflush(stdout), _exit(1);
+            }
+        }
+        printf("       2 game of life loops taken, %d other shapes left alone\n", (int)(sizeof(no) / sizeof(no[0])));
+        fflush(stdout), _exit(0);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
     {
         passed++;
         printf("[PASS] %s\n", name);
@@ -4116,6 +4308,8 @@ int main()
         "bool f(int a){ if (!a) { return 1; } return 0; }"
         "bool g(int a){ if (!a) { return 1; } return 0; }"
         "void main(){ int x; x = f(1); int y; y = g(0); }");
+    runPieTest();
+    runVectorizeTest();
     runLoadAndRelocateTest();
     // Not included here: ballEffectScript (structs + external calls) reliably
     // hits a pre-existing bug in Parser::parse() itself under ASan -- a raw
