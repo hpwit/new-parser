@@ -10,6 +10,7 @@
 #define RETURN_ERROR(x) { Error.error=x;Error.token=current();return;}
 #define RETURN_IF_ERROR if(Error.error!=noError) return;
 struct ForInAlias;
+struct ForInPending;
 class Parser
 {
 public:
@@ -38,6 +39,8 @@ public:
     void parseBlockStatement();
     void parseUnbracedBody();
     bool rewriteForIn(vect<Token> *decl, ForInAlias *alias);
+    void forInBodyStart(ForInPending *forIn);
+    void forInBodyEnd(ForInPending *forIn);
     void parseInitializerValue();
     void parseCreateArguments();
     void parseStatement();
