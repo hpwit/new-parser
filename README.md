@@ -2080,6 +2080,7 @@ The compiler adds about 165KB of flash and 8.6KB of RAM to a sketch; the loader 
 | `KeyboardCallback` | An `external` variable, calling a loaded script again from an event handler. |
 | `KeyboardTest` | A USB keyboard on an ESP32-S3 driving a script. Needs the `ESP32_USB_Host_HID` library. |
 | `matouch/GameOfLifeVec` | The game of life written so that its loops are vectorized on the ESP32-S3 (800x480 panel), timed: see [ESP32-S3: vector code](#esp32-s3-vector-code). |
+| `matouch/CyclicSpirals` | A cyclic cellular automaton (noise, crystals, then turning spirals that glow), five vectorized loops per frame; run without and with the vector code, timed: 65.1 ms -> 19.4 ms of computing per frame. |
 | `JsonInput` | Script variables filled from a JSON document (needs ArduinoJson). |
 | `JsonLiveSettings` | A script on its own task getting new JSON settings every 2 seconds. esp32 only. |
 | `LanguageBasics` | Every compiling step one by one, printing the generated assembly. |
