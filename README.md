@@ -941,9 +941,9 @@ void loop()
 }
 ```
 
-See [BouncingBalls](examples/BouncingBalls) for a complete working version, and [DisplayIcon](examples/DisplayIcon), which runs v1's `dsiplayicon.sc` without changing a line: a ghost, Mario and a cherry moving over a scrolling rainbow on a 128x96 matrix.
+See [BouncingBalls](examples/BouncingBalls) for a complete working version, and [DisplayIcon](examples/DisplayIcon), v1's `dsiplayicon.sc`: a ghost, Mario and a cherry moving over a scrolling rainbow on a 128x96 matrix, with two lines of text scrolling in the Amstrad CPC 464's 8x8 letters.
 
-![The first 100 frames of dsiplayicon.sc](examples/DisplayIcon/dsiplayicon.gif)
+![The first 216 frames of DisplayIcon](examples/DisplayIcon/dsiplayicon.gif)
 
 ---
 
@@ -1883,7 +1883,7 @@ The compiler adds about 165KB of flash and 8.6KB of RAM to a sketch; the loader 
 | `CallScriptFunction` | Calling a function with a raw `int32_t[]` and using its return value. |
 | `TwoScripts` | Two scripts one after the other, freeing the first with `exec.free()`. |
 | `FibonacciTiming` | Timing a script with `micros()`. |
-| `DisplayIcon` | v1's `dsiplayicon.sc` unchanged: pixel-art sprites over a scrolling rainbow. |
+| `DisplayIcon` | v1's `dsiplayicon.sc`: pixel-art sprites over a scrolling rainbow, with scrolling text in the Amstrad CPC 464's letters. |
 | `BouncingBalls` | Structs with methods and constructors, an array of structs, several bound functions. |
 | `StructsAndHostBindings` | Structs with `bindFunction()`/`bindVariable()`, smaller. |
 | `StructArguments` | Structures by value and by pointer, `->`, `&`, and the sketch calling a script function with its own struct. |

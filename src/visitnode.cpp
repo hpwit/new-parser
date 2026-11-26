@@ -3854,8 +3854,9 @@ static uint32_t initializerBits(NodeToken *ndt, varTypeEnum type)
         memcpy(&bits, &__f, 4);
         return bits;
     }
-    uint32_t __num = 0;
-    sscanf(ndt->getText(), "%u", &__num);
+    // hex as in expressions (0x38); %u alone read 0x38 as 0
+    const char *text = ndt->getText();
+    uint32_t __num = text == NULL ? 0 : (uint32_t)strtoul(text, NULL, strchr(text, 'x') || strchr(text, 'X') ? 16 : 10);
     return negative ? 0u - __num : __num;
 }
 
@@ -3962,9 +3963,8 @@ void _visitdefGlobalVariableNode(NodeToken *nd)
                         for (int ndtindex = 0; ndtindex < ndt->children_size(); ndtindex++)
                         {
                             NodeToken *ndtc = ndt->getChildPtr(ndtindex);
-                            int __num = 0;
-                            sscanf(ndtc->getText(), "%d", &__num);
-                            _data_sav = str_concat("%s %02x", _data_sav, __num);
+                            uint32_t __num = initializerBits(ndtc, __uint8_t__);
+                            _data_sav = str_concat("%s %02x", _data_sav, __num & 0xff);
                         }
                     }
                 }
@@ -4782,8 +4782,8 @@ void _visitswitchNode(NodeToken *nd)
             otherwise = c->getTargetText();
             continue;
         }
-        int k = 0;
-        sscanf(c->getChildPtr(0)->getText(), "%d", &k);
+        const char *label = c->getChildPtr(0)->getText();
+        int k = label == NULL ? 0 : (int)strtol(label, NULL, strchr(label, 'x') || strchr(label, 'X') ? 16 : 10);
         if (isBranchImmediate(k, false))
         {
             bufferText->addAfter(string_format(beqi, value, valBranchImmediate(k), c->getTargetText(), ""));

@@ -20,6 +20,8 @@ Strings in arrays and structures: `char *colors[] = {"red", "green"};` is an arr
 
 Two fixes found on the way: one character of a string passed to a function (`emit(s[0])`) found no function, and storing into a `char *` local deep in a large frame gave an `addi` past 127 that the assembler refused.
 
+Hex numbers in initializers were stored as 0: `uint8_t font[] = {0x18, 0x3C};`, a structure's `{0x100, 0xA5}` and `CRGB(0xff, 0x80, 0)` all read their values as decimal and stopped at the `x`. So did `case 0x10:`. They now read hex as expressions always did.
+
 ### ⚡ A faster compiler, smaller and faster code
 
 The compiler's line store is a hash instead of lists it scanned for every line it added or removed: compiling takes 2.2 to 3.2 times less time on a computer (Wickwire 3.2 s -> 1.0 s), and `MultiEffectController` compiles on an esp32 without PSRAM in 8.1 s instead of 10.6 s. On a board with PSRAM the compiler's working memory goes there, so a compile no longer competes with the sketch for internal RAM.
