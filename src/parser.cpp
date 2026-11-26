@@ -395,6 +395,29 @@ static int pointerArrayElement(NodeToken *arg)
     return pointerArrayTarget(e->getTargetText());
 }
 
+// Whether an expression is a pointer: p, an array's name, f() returning
+// one, p + n.
+static bool isPointerExpr(NodeToken *n)
+{
+    if (n->_nodetype == changeTypeNode && n->children_size() == 1)
+        return isPointerExpr(n->getChildPtr(0));
+    if (n->_nodetype == binOpNode && (n->type == TokenAddition || n->type == TokenSubstraction) &&
+        n->children_size() == 2)
+        return isPointerExpr(n->getChildPtr(0)) && !isPointerExpr(n->getChildPtr(1));
+    return n->isPointer && !n->asPointer &&
+           (n->children_size() == 0 || n->_nodetype == callFunctionNode);
+}
+
+// An argument `p - q` between two pointers: a number of elements, an int
+// for the call's signature, as in C. A pointer on the right is enough
+// (n - p is not a pointer either).
+static bool isPointerDifference(NodeToken *arg)
+{
+    NodeToken *e = arg->children_size() == 1 ? arg->getChildPtr(0) : NULL;
+    return e != NULL && e->_nodetype == binOpNode && e->type == TokenSubstraction &&
+           e->children_size() == 2 && isPointerExpr(e->getChildPtr(1));
+}
+
 // `int a[] = {5, 6, 7};` takes its size from the values (it used to be
 // one element long, the other values written over the next globals), and
 // `int a[2] = {5, 6, 7};` is an error. nd is the array's declaration node,
@@ -4584,10 +4607,13 @@ void Parser::parseArguments()
         int pointee = pointerArrayElement(current_node);
         if (pointee >= 0)
             typeName = _varTypes[pointee].varName;
-        bool bytes = (current_node->isPointer || pointee >= 0) &&
-                     (pointee >= 0 ? pointee : current_node->_vartype) == __uint8_t__;
+        bool difference = isPointerDifference(current_node);
+        if (difference)
+            typeName = _varTypes[__int__].varName;
+        bool asPointerArg = (current_node->isPointer || pointee >= 0) && !difference;
+        bool bytes = asPointerArg && (pointee >= 0 ? pointee : current_node->_vartype) == __uint8_t__;
         appendSignature(typeName, bytes ? "char" : typeName);
-        if (current_node->isPointer || pointee >= 0)
+        if (asPointerArg)
             appendSignature(_star_, _star_);
     }
     current_node = current_node->parent;
@@ -4620,11 +4646,14 @@ void Parser::parseArguments()
             int pointee = pointerArrayElement(current_node);
             if (pointee >= 0)
                 typeName = _varTypes[pointee].varName;
-            bool bytes = (current_node->isPointer || pointee >= 0) &&
-                         (pointee >= 0 ? pointee : current_node->_vartype) == __uint8_t__;
+            bool difference = isPointerDifference(current_node);
+            if (difference)
+                typeName = _varTypes[__int__].varName;
+            bool asPointerArg = (current_node->isPointer || pointee >= 0) && !difference;
+            bool bytes = asPointerArg && (pointee >= 0 ? pointee : current_node->_vartype) == __uint8_t__;
             appendSignature(_separ_, _separ_);
             appendSignature(typeName, bytes ? "char" : typeName);
-            if (current_node->isPointer || pointee >= 0)
+            if (asPointerArg)
                 appendSignature(_star_, _star_);
         }
         current_node = current_node->parent;

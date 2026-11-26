@@ -888,6 +888,77 @@ static bool steppedAsPointer(NodeToken *operand)
     return operand->isPointer && !operand->asPointer && operand->children_size() == 0;
 }
 
+// The element size when `n` is a pointer in + or - (`p`, an array's
+// name, `p + 1`), 0 when it is a number.
+static int pointerArithStep(NodeToken *n)
+{
+    if (n->_nodetype == binOpNode && (n->type == TokenAddition || n->type == TokenSubstraction) &&
+        n->children_size() == 2)
+    {
+        int l = pointerArithStep(n->getChildPtr(0)), r = pointerArithStep(n->getChildPtr(1));
+        if (r == 0)
+            return l;
+        return n->type == TokenAddition && l == 0 ? r : 0; // n + p; p - q is a number
+    }
+    if (n->_nodetype == binOpNode || !steppedAsPointer(n) || n->getVarTypeObj() == NULL)
+        return 0;
+    return n->getVarTypeObj()->total_size;
+}
+
+static void emitScaleByConstant(int dst, int src, int k, int scratch);
+
+// reg *= k, folded into the movi that just loaded a constant
+static void scalePointerOffset(int reg, int k, int scratch)
+{
+    char *last = bufferText->current();
+    char *tocmp = string_format("movi a%d,", reg);
+    int a, b;
+    if (strncmp(last, tocmp, strlen(tocmp)) == 0 && sscanf(last, "movi a%d,%d", &a, &b) == 2)
+    {
+        bufferText->blankCurrent();
+        bufferText->addAfter(string_format(movi, reg, b * k));
+    }
+    else
+        emitScaleByConstant(reg, reg, k, scratch);
+    free(tocmp);
+}
+
+// p + n, n + p, p - n move by n elements, as in C; p - q counts the
+// elements between them. They added or subtracted bytes. Returns true
+// when it emitted p - q itself.
+static bool pointerArithmetic(NodeToken *nd)
+{
+    if ((nd->type != TokenAddition && nd->type != TokenSubstraction) || nd->children_size() != 2 ||
+        globalType.get() == __float__ || globalType.get() == __ffloat__)
+        return false;
+    int ls = pointerArithStep(nd->getChildPtr(0));
+    int rs = pointerArithStep(nd->getChildPtr(1));
+    int l = register_numl.get(), r = register_numr.get();
+    int scratch = l != 9 && r != 9 ? 9 : (l != 8 && r != 8 ? 8 : 10);
+    if (ls > 1 && rs == 0)
+        scalePointerOffset(r, ls, scratch);
+    else if (rs > 1 && ls == 0 && nd->type == TokenAddition)
+        scalePointerOffset(l, rs, scratch);
+    else if (rs > 1 && nd->type == TokenSubstraction) // p - q (f() - q: a pointer on the right is enough)
+    {
+        bufferText->addAfter(string_format(sub, l, l, r));
+        if ((rs & (rs - 1)) == 0)
+        {
+            int shift = 0;
+            while ((1 << shift) < rs)
+                shift++;
+            bufferText->addAfter(string_format("srai a%d,a%d,%d", l, l, shift));
+        }
+        else
+        {
+            bufferText->addAfter(string_format(movi, r, rs));
+            bufferText->addAfter(string_format(quos, l, l, r));
+        }
+        return true;
+    }
+    return false;
+}
+
 void _visitoperatorNode(NodeToken *nd)
 {
     // printf("operator %s\n",tokenNames[nd->type].c_str());
@@ -945,9 +1016,13 @@ void _visitoperatorNode(NodeToken *nd)
     asmInstruction asmInstr;
     bool intLeft = ffIntLeft, intRight = ffIntRight, divMaybeZero = ffDivMaybeZero;
     ffIntLeft = ffIntRight = ffDivMaybeZero = false; // only for this operator, not nested ones
-    if (nd->children_size() >= 2 && !intRight && !(globalType.get() == __ffloat__ && (nd->type == TokenShiftLeft || nd->type == TokenShiftRight)))
+    // a pointer operand of + or - is an address, never converted
+    bool addSub = (nd->type == TokenAddition || nd->type == TokenSubstraction) && nd->children_size() >= 2;
+    bool ptrLeft = addSub && pointerArithStep(nd->getChildPtr(0)) > 0;
+    bool ptrRight = addSub && pointerArithStep(nd->getChildPtr(1)) > 0;
+    if (nd->children_size() >= 2 && !intRight && !ptrRight && !(globalType.get() == __ffloat__ && (nd->type == TokenShiftLeft || nd->type == TokenShiftRight)))
         translateType(globalType.get(), r, register_numr.get());
-    if (!intLeft)
+    if (!intLeft && !ptrLeft)
         translateType(globalType.get(), l, register_numl.get());
     if (globalType.get() == __ffloat__ && nd->type == TokenStar)
     {
@@ -1021,6 +1096,8 @@ void _visitoperatorNode(NodeToken *nd)
         addffloatdivision = true;
         return;
     }
+    if (pointerArithmetic(nd))
+        return;
     switch (nd->type)
     {
     case TokenAddition:
@@ -1767,6 +1844,11 @@ void _visitglobalVariableNode(NodeToken *nd)
             bufferText->sp.push(bufferText->get());
         }
     }
+    else if (isBarePointer(nd) && strncmp(nd->getText(), "local_string_", 13) != 0) // `uint16_t *gp;` read as a value: the address it holds (a string literal is its characters)
+    {
+        bufferText->addAfter(string_format(l32i, register_numl.get(), point_regnum, 0));
+        bufferText->sp.push(bufferText->get());
+    }
     else // s(leds)
     {
         bufferText->addAfter(string_format(mov, register_numl.get(), point_regnum));
@@ -2246,8 +2328,11 @@ void _visitassignementNode(NodeToken *nd)
     bufferText->sp.push(bufferText->get());
     register_numl.duplicate();
 
+    // `float *f = fl + 2;`: the value is f's address, an int, not a float
+    bool pointerValue = nd->children_size() > 1 && steppedAsPointer(nd->getChildPtr(0)) &&
+                        nd->getChildPtr(0)->type != TokenUserDefinedVariableMemberFunction;
     if (nd->children_size() > 1)
-        globalType.push(nd->getChildPtr(0)->getVarTypeObj()->_varType);
+        globalType.push(pointerValue ? __int__ : nd->getChildPtr(0)->getVarTypeObj()->_varType);
 
     if (nd->children_size() > 1)
     {
@@ -2255,7 +2340,7 @@ void _visitassignementNode(NodeToken *nd)
         nd->getChildPtr(1)->visitNode();
         register_numl.pop();
 
-        if (nd->getChildPtr(1)->getVarTypeObj() != NULL)
+        if (nd->getChildPtr(1)->getVarTypeObj() != NULL && !pointerValue)
         {
 
             translateType(globalType.get(), nd->getChildPtr(1)->getVarTypeObj()->_varType, register_numl.get());
@@ -3600,6 +3685,9 @@ void _visitextGlobalVariableNode(NodeToken *nd)
         else
         {
             bufferText->addAfter(string_format("movExt a%d,@_ext_%s", register_numl.get(), nd->getText()));
+            // `external uint16_t *led16;` read as a value: the address it holds
+            if (isBarePointer(nd) && !nd->asPointer)
+                bufferText->addAfter(string_format(l32i, register_numl.get(), register_numl.get(), 0));
             bufferText->sp.push(bufferText->get());
             bufferText->sp.push(bufferText->get());
             register_numl.pop();
@@ -3970,6 +4058,28 @@ void _visitdefGlobalVariableNode(NodeToken *nd)
                 }
             }
         }
+        else if (nd->getVarTypeObj()->_varType == __char__ && isBarePointer(nd) &&
+                 strncmp(nd->getText(), "local_string_", 13) != 0) // a literal is its characters
+        {
+            // char *word = "pointer"; a pointer, as in C: the characters
+            // under a label of their own, their address stored at load
+            // (see storeStringAddress()). They were word's own bytes, so
+            // `word = other;` overwrote the text and word + 3 was wrong.
+            char *str = nd->getChildPtr(0)->getText();
+            char *chars = NULL;
+            for (int i = 1; i < strlen(str) - 1; i++)
+                chars = str_concat("%s %02x", chars, str[i]);
+            chars = str_concat("%s 00", chars);
+            nd->_total_size = 4;
+            header.addAfter(".bytes 4 00 00 00 00");
+            header.addAfter(string_format("@_%s__chars:", nd->getText()));
+            header.addAfter(string_format(".bytes %d%s", (int)strlen(str) - 1, chars));
+            free(chars);
+            char *label = string_format("%s__chars", nd->getText());
+            storeStringAddress(nd->getText(), 0, label);
+            free(label);
+            return;
+        }
         else if (nd->getVarTypeObj()->_varType == __char__)
         {
             char *str = nd->getChildPtr(0)->getText();
@@ -4184,6 +4294,7 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
     }
     // string body = "";
     //  register_numl++;
+    int pointerStart = start; // `gs = pts;` with `pt *gs`: the pointer itself, not its last member
     for (int h = 0; h < v->size - 1; h++)
     {
         start += v->sizes[h];
@@ -4204,7 +4315,7 @@ void _visitstoreGlobalVariableNode(NodeToken *nd)
 
     else
     {
-        bufferText->addAfter(bufferText->sp.pop(), string_format(s32i, register_numl.get(), point_regnum, start));
+        bufferText->addAfter(bufferText->sp.pop(), string_format(s32i, register_numl.get(), point_regnum, pointerStart));
     }
 
     bufferText->sp.push(bufferText->get());
@@ -4332,6 +4443,7 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
     int savreg_num = point_regnum;
     point_regnum = 6; // YBA 25-02-2025
     // register_numl++;
+    int pointerStart = start; // the pointer itself, not its last member
     for (int h = 0; h < v->size - 1; h++)
     {
         start += v->sizes[h];
@@ -4348,7 +4460,7 @@ void _visitstoreExtGlocalVariableNode(NodeToken *nd)
     }
     else
     {
-        bufferText->addAfter(bufferText->sp.pop(), string_format(s32i, register_numl.get(), point_regnum, start));
+        bufferText->addAfter(bufferText->sp.pop(), string_format(s32i, register_numl.get(), point_regnum, pointerStart));
     }
     // res.f = f;
     // res.header = number.header + h;
@@ -4710,7 +4822,11 @@ void _visitchangeTypeNode(NodeToken *nd)
         (globalType.get() == __ffloat__ || containsValueOfType(nd, __ffloat__)))
         nd->_vartype = __ffloat__;
 
-    globalType.push(nd->getVarTypeObj()->_varType);
+    // a pointer (`fl`, `fl + 2` with `float fl[4]`) is an address: computed
+    // as an int, whatever it points to
+    bool pointerExpr = strlen(nd->getText()) == 0 && nd->children_size() == 1 &&
+                       pointerArithStep(nd->getChildPtr(0)) > 0;
+    globalType.push(pointerExpr ? __int__ : nd->getVarTypeObj()->_varType);
     for (int i = 0; i < nd->children_size(); i++)
     {
 
@@ -4721,7 +4837,7 @@ void _visitchangeTypeNode(NodeToken *nd)
         // f = f + g.f;
         // h = h + g.header;
 
-        if (nd->getChildPtr(i)->getVarTypeObj() != NULL)
+        if (nd->getChildPtr(i)->getVarTypeObj() != NULL && !pointerExpr)
         {
             // register_numl.pop();
             if (strlen(nd->getChildPtr(i)->getText()) > 0)
