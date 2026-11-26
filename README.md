@@ -1058,6 +1058,46 @@ int array3D[depth, height, width];
 int h = array3D[2, 12, 23];
 ```
 
+An array given its values can leave its size out, and `for (x in array)` goes through its elements:
+
+```c
+int notes[] = {60, 62, 64, 65};   // 4 elements
+
+void main()
+{
+   for (n in notes)               // n takes each element in turn
+      printfln("%d", n);
+   for (int n : notes) { }        // the C++ form, with a type
+}
+```
+
+`break` and `continue` work as in any loop. The array needs one dimension and a known size. Without a type, a variable of that name that already exists receives the elements.
+
+An array of structures takes one `{...}` per element, laid out as in C. In the loop, the variable *is* the element, so changing a field changes the array:
+
+```c
+struct voice { int note; float gain; };
+voice voices[] = {{60, 0.5}, {64, 1.0}, {67, 0.25}};
+
+for (v in voices)
+   v.gain = v.gain * 2;
+```
+
+Strings work the same way: an array of `char *`, and a `char *` field in a structure, take their strings in the braces:
+
+```c
+char *colors[] = {"red", "green", "blue"};
+
+struct item { char *name; int price; };
+item shop[] = {{"apple", 3}, {"kiwi", 25}};
+
+for (c in colors) printfln("%s", c);          // c is a char *
+for (i in shop) printfln("%s costs %d", i.name, i.price);
+shop[1].name = "golden kiwi";
+```
+
+Example: [ForInArrays](examples/ForInArrays/ForInArrays.ino).
+
 ---
 
 # Structures

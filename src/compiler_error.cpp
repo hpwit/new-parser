@@ -50,7 +50,9 @@ const char *error_messages[]=
 "This member can't be used through a pointer (only plain numbers and char)",
 "* needs a pointer variable",
 "Can't take the address of this variable",
-"Not an array or a pointer: it can't be indexed"
+"Not an array or a pointer: it can't be indexed",
+"Too many values in the initializer",
+"for (x in a) needs an array of one dimension with a known size"
 
 };
 char error_detail[240] = "";

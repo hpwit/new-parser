@@ -9,6 +9,7 @@
 
 #define RETURN_ERROR(x) { Error.error=x;Error.token=current();return;}
 #define RETURN_IF_ERROR if(Error.error!=noError) return;
+struct ForInAlias;
 class Parser
 {
 public:
@@ -36,6 +37,8 @@ public:
     void parseTerm();
     void parseBlockStatement();
     void parseUnbracedBody();
+    bool rewriteForIn(vect<Token> *decl, ForInAlias *alias);
+    void parseInitializerValue();
     void parseCreateArguments();
     void parseStatement();
     void getVariable(bool isStore);

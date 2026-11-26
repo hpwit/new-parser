@@ -22,6 +22,10 @@ struct varType
     uint8_t total_size;
     // bit i set: component i is padding (C alignment) and holds nothing
     uint32_t fillers;
+    // bit i set: member i is a pointer (`char *name;`), stored as a
+    // uint32_t; pointees[i] is the type it points to
+    uint32_t pointerMembers;
+    uint8_t pointees[20];
 };
 
 /*
@@ -131,6 +135,10 @@ public:
     Token *prev();
     Token *peek(int index);
     Token back();
+    // the parser's rewrites (for (x in a)): index counts from the current
+    // token, as for peek()
+    void insert(int index, Token t);
+    void remove(int index);
     bool Match(tokenType tt);
     bool Match(tokenType tt, int index);
 private:

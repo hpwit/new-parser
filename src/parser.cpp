@@ -84,9 +84,47 @@ Token *Parser::current()
 {
     return _tks->current();
 }
+// for (p in a) over structs: inside the body p stands for a[__forinN]
+// itself, rewritten as the tokens come (see rewriteForIn()), not for a
+// copy -- p.x reads and writes the element.
+struct ForInAlias
+{
+    char *name;
+    Token tokens[4]; // a [ __forinN ]
+};
+static vect<ForInAlias> forInAliases;
+// the current token is an alias rewritten: the original, to put it back
+// when the body ends on it (the token after the loop)
+static bool forInRewritten = false;
+static Token forInRewrittenFrom;
+
+static void rewriteForInAlias(Tokens *tks, tokenType before)
+{
+    forInRewritten = false;
+    Token *t = tks->current();
+    if (forInAliases.size() == 0 || t->getType() != TokenIdentifier || before == TokenMember ||
+        before == TokenKeywordVarType || before == TokenUserDefinedVariable)
+        return;
+    for (int k = forInAliases.size() - 1; k >= 0; k--)
+    {
+        ForInAlias *a = forInAliases.getptr(k);
+        if (strcmp(a->name, t->getText()) != 0)
+            continue;
+        forInRewrittenFrom = *t;
+        forInRewritten = true;
+        tks->remove(0);
+        for (int i = 0; i < 4; i++)
+            tks->insert(i, a->tokens[i]);
+        return;
+    }
+}
+
 Token *Parser::next()
 {
-    return _tks->next();
+    tokenType before = current()->getType();
+    _tks->next();
+    rewriteForInAlias(_tks, before);
+    return current();
 }
 Token *Parser::prev()
 {
@@ -317,6 +355,223 @@ static void markPointerToArray(NodeToken *nd)
     nd->addTargetText(string_format("%s *", t));
 }
 
+// `char *names[3]`: an array of pointers, 4-byte elements each holding an
+// address (it used to be an array of char, its elements one byte). Its
+// elements are uint32_t; the dimensions get " $T", T the pointed-to
+// type (their readers stop at the numbers), for `for (s in names)` to
+// declare `T *s`. Not for pointers to structures.
+static void makePointerArray(NodeToken *type, NodeToken *nd, int elements)
+{
+    const char *t = nd->getTargetText();
+    if (!type->isPointer || t == NULL || t[0] != '@' || type->type != TokenKeywordVarType)
+        return;
+    int pointee = nd->_vartype;
+    nd->_vartype = __uint32_t__;
+    nd->_total_size = elements * 4;
+    nd->addTargetText(string_format("%s $%d", t, pointee));
+}
+
+// The element type of an array of pointers (see makePointerArray()), or -1.
+static int pointerArrayTarget(const char *t)
+{
+    const char *d = t != NULL ? strstr(t, " $") : NULL;
+    return d != NULL ? atoi(d + 2) : -1;
+}
+
+// An argument that is an element of an array of pointers, names[i]: the
+// type it points to (char for char *names[]), else -1. Its elements are
+// stored as uint32_t, but it is a char * for the call's signature.
+static int pointerArrayElement(NodeToken *arg)
+{
+    NodeToken *e = arg->children_size() == 1 ? arg->getChildPtr(0) : NULL;
+    if (e == NULL || e->target == EOF_TEXTARRAY)
+        return -1;
+    // a char * member: shop[i].name, one.name
+    if (e->type == TokenUserDefinedVariableMember)
+        return pointerArrayTarget(e->getTargetText());
+    if (!e->isPointer || e->children_size() == 0 ||
+        !(e->_nodetype == globalVariableNode || e->_nodetype == extGlobalVariableNode))
+        return -1;
+    return pointerArrayTarget(e->getTargetText());
+}
+
+// `int a[] = {5, 6, 7};` takes its size from the values (it used to be
+// one element long, the other values written over the next globals), and
+// `int a[2] = {5, 6, 7};` is an error. nd is the array's declaration node,
+// its values in its children; the scope's copy of the variable gets the
+// size too, for `for (x in a)`.
+static void sizeArrayFromInitializer(NodeToken *nd, Token *at)
+{
+    varType *vt = nd->getVarTypeObj();
+    const char *t = nd->getTargetText();
+    if (vt == NULL || vt->_varSize == 0 || t == NULL || t[0] != '@')
+        return;
+    int count = nd->children_size();
+    // `@1`, or `@1 $T` for pointers: no size given
+    if (strncmp(t, "@1", 2) == 0 && (t[2] == 0 || (t[2] == ' ' && (t[3] < '0' || t[3] > '9'))))
+    {
+        nd->_total_size = count * vt->_varSize;
+        nd->addTargetText(string_format("@1 %d%s", count, t + 2));
+        findVariable(current_cntx, nd->getText(), true);
+        if (search_result != NULL)
+        {
+            search_result->_total_size = nd->_total_size;
+            search_result->addTargetText(string_format("%s", nd->getTargetText()));
+        }
+    }
+    else if (count > nd->_total_size / vt->_varSize)
+    {
+        snprintf(error_detail, sizeof(error_detail), "%s holds %d, %d given",
+                 nd->getText(), nd->_total_size / vt->_varSize, count);
+        Error.error = tooManyInitializers;
+        Error.token = at;
+    }
+}
+
+static Token forInToken(Token *at, tokenType type, int vartype, const char *text)
+{
+    Token t = Token(type, vartype, at->line);
+    t.pos = at->pos;
+    t.lineref = at->lineref;
+    t.addText(text);
+    return t;
+}
+
+// `for (x in a)`, `for (int x in a)` and `for (int x : a)`, a an array of
+// one dimension with a known size, run the body once per element of a,
+// in x. Called on the `for` token: the header is rewritten in the token
+// stream as `for (int __forinN = 0; __forinN < size; __forinN++)` and
+// *decl gets `int x = a[__forinN];`, which the caller parses at the top
+// of the body; for structs and CRGB, *alias instead names x as a[__forinN]
+// in the body (see ForInAlias). Without a type, x is the variable of that name when there
+// is one (`x = a[__forinN];`), else declared with a's element type.
+// Returns false, leaving the tokens alone, when the header is not of this
+// form.
+bool Parser::rewriteForIn(vect<Token> *decl, ForInAlias *alias)
+{
+    alias->name = NULL;
+    int name = 2;
+    if (Match(TokenKeywordVarType, 2) || Match(TokenUserDefinedVariable, 2))
+        name = Match(TokenStar, 3) ? 4 : 3; // for (char *s : names)
+    if (!Match(TokenOpenParenthesis, 1) || !Match(TokenIdentifier, name) ||
+        !Match(TokenIdentifier, name + 2) || !Match(TokenCloseParenthesis, name + 3))
+        return false;
+    if (!Match(TokenColon, name + 1) &&
+        !(Match(TokenIdentifier, name + 1) && strcmp(peek(name + 1)->getText(), "in") == 0))
+        return false;
+
+    Token *at = current();
+    findVariable(current_cntx, peek(name + 2)->getText(), false);
+    NodeToken *array = search_result;
+    if (array == NULL)
+    {
+        Error.error = impossibletofindvariabledeclaration;
+        Error.token = peek(name + 2);
+        return true;
+    }
+    int dims = 0, count = 0;
+    const char *t = array->getTargetText();
+    if (!array->isPointer || t == NULL || sscanf(t, "@%d %d", &dims, &count) != 2 || dims != 1 ||
+        count <= 0)
+    {
+        snprintf(error_detail, sizeof(error_detail), "%s", array->getText());
+        Error.error = forInNeedsArray;
+        Error.token = peek(name + 2);
+        return true;
+    }
+
+    static int forInNum = 0;
+    char *index = string_format("__forin%d", forInNum++);
+    // a struct array's _vartype is the struct's index in _userDefinedTypes
+    if (array->type == TokenUserDefinedVariable || array->_vartype == __CRGB__ || array->_vartype == __CRGBW__)
+    {
+        ForInAlias a;
+        a.name = strdup(peek(name)->getText());
+        a.tokens[0] = forInToken(at, TokenIdentifier, EOF_VARTYPE, array->getText());
+        a.tokens[1] = forInToken(at, TokenOpenBracket, EOF_VARTYPE, "[");
+        a.tokens[2] = forInToken(at, TokenIdentifier, EOF_VARTYPE, index);
+        a.tokens[3] = forInToken(at, TokenCloseBracket, EOF_VARTYPE, "]");
+        *alias = a;
+    }
+    // x = a[__forinN];  with the type in front when x is declared here
+    else if (name > 2)
+    {
+        for (int i = 2; i < name; i++)
+            decl->push_back(*peek(i));
+    }
+    else
+    {
+        findVariable(current_cntx, peek(name)->getText(), false);
+        if (search_result == NULL)
+        {
+            // char *names[]: s is a char *, not the uint32_t it is stored as
+            int pointee = pointerArrayTarget(array->getTargetText());
+            int type = pointee >= 0 ? pointee : array->_vartype;
+            decl->push_back(forInToken(at, TokenKeywordVarType, type, _varTypes[type].varName));
+            if (pointee >= 0)
+                decl->push_back(forInToken(at, TokenStar, EOF_VARTYPE, "*"));
+        }
+    }
+    if (alias->name == NULL)
+    {
+        decl->push_back(forInToken(at, TokenIdentifier, EOF_VARTYPE, peek(name)->getText()));
+        decl->push_back(forInToken(at, TokenEqual, EOF_VARTYPE, "="));
+        decl->push_back(forInToken(at, TokenIdentifier, EOF_VARTYPE, array->getText()));
+        decl->push_back(forInToken(at, TokenOpenBracket, EOF_VARTYPE, "["));
+        decl->push_back(forInToken(at, TokenIdentifier, EOF_VARTYPE, index));
+        decl->push_back(forInToken(at, TokenCloseBracket, EOF_VARTYPE, "]"));
+        decl->push_back(forInToken(at, TokenSemicolon, EOF_VARTYPE, ";"));
+    }
+
+    // the header, up to its `)`
+    for (int i = 2; i < name + 3; i++)
+        _tks->remove(2);
+    char *size = string_format("%d", count);
+    Token header[] = {
+        forInToken(at, TokenKeywordVarType, __int__, "int"),
+        forInToken(at, TokenIdentifier, EOF_VARTYPE, index),
+        forInToken(at, TokenEqual, EOF_VARTYPE, "="),
+        forInToken(at, TokenNumber, __int__, "0"),
+        forInToken(at, TokenSemicolon, EOF_VARTYPE, ";"),
+        forInToken(at, TokenIdentifier, EOF_VARTYPE, index),
+        forInToken(at, TokenLessThan, EOF_VARTYPE, "<"),
+        forInToken(at, TokenNumber, __int__, size),
+        forInToken(at, TokenSemicolon, EOF_VARTYPE, ";"),
+        forInToken(at, TokenIdentifier, EOF_VARTYPE, index),
+        forInToken(at, TokenPlusPlus, EOF_VARTYPE, "++"),
+    };
+    for (int i = 0; i < (int)(sizeof(header) / sizeof(header[0])); i++)
+        _tks->insert(2 + i, header[i]);
+    free(index);
+    free(size);
+    return true;
+}
+
+// One value of a global array's initializer: a number, or a list of
+// them in braces for an element of a struct array (`{1, 2.5}`) or a CRGB
+// (`{255, 0, 0}`), its values in the children of one node.
+void Parser::parseInitializerValue()
+{
+    if (!Match(TokenOpenCurlyBracket))
+    {
+        parseFactor();
+        return;
+    }
+    current_node = current_node->addChild(NodeToken(current(), statementNode));
+    next();
+    while (!Match(TokenCloseCurlyBracket))
+    {
+        parseInitializerValue();
+        RETURN_IF_ERROR
+        if (Match(TokenComma))
+            next();
+        else if (!Match(TokenCloseCurlyBracket))
+            RETURN_ERROR(expectingClosingBracket)
+    }
+    next();
+    current_node = current_node->parent;
+}
+
 void Parser::parseProgram()
 {
     // for-loop external-store tracking starts afresh with every program
@@ -363,6 +618,7 @@ void Parser::parseProgram()
                 varType usded;
                 usded._varType = __userDefined__;
                 usded.fillers = 0;
+                usded.pointerMembers = 0;
                 memberpos = 0;
                 _start = 0;
                 _pos = 0;
@@ -374,6 +630,18 @@ void Parser::parseProgram()
                 next(); // int
                 while (!Match(TokenCloseCurlyBracket) and !Match(TokenEndOfFile))
                 {
+                    // `char *name;`: a pointer field, the 4 bytes of an
+                    // address, read and written as a uint32_t (it used to
+                    // be refused)
+                    if (Match(TokenKeywordVarType) && Match(TokenStar, 1) && Match(TokenIdentifier, 2) &&
+                        !Match(TokenOpenParenthesis, 3))
+                    {
+                        usded.pointerMembers |= 1u << memberpos;
+                        usded.pointees[memberpos] = current()->_vartype;
+                        current()->_vartype = __uint32_t__;
+                        current()->addText("uint32_t");
+                        _tks->remove(1);
+                    }
 
                     if (Match(TokenUserDefinedVariable) and Match(TokenOpenParenthesis, 1))
                     {
@@ -703,9 +971,11 @@ void Parser::parseProgram()
                 // wrong stride when this override lived in copyPrty()
                 // instead.
                 bool wasBarePointerDecl = _t.isPointer && nd._total_size == 1;
+                int elements = nd._total_size;
                 copyPrty(&_t, &nd);
                 if (wasBarePointerDecl)
                     nd._total_size = 4;
+                makePointerArray(&_t, &nd, elements);
                 markPointerToArray(&nd);
                 _t.clear();
              // PARSER_LOG("gert %s %s",nd.getText(),_t.getText());
@@ -744,9 +1014,11 @@ void Parser::parseProgram()
                         // rather than inside copyPrty() itself.
                         {
                             bool wasBarePointerDecl = _t.isPointer && nd._total_size == 1;
+                            int elements = nd._total_size;
                             copyPrty(&_t, &nd);
                             if (wasBarePointerDecl)
                                 nd._total_size = 4;
+                            makePointerArray(&_t, &nd, elements);
                             markPointerToArray(&nd);
                         }
 
@@ -812,7 +1084,7 @@ void Parser::parseProgram()
                    
                     next();
                     next();
-                    parseFactor();
+                    parseInitializerValue();
                     if (Error.error)
                     {
                         return;
@@ -820,7 +1092,7 @@ void Parser::parseProgram()
                     while (Match(TokenComma))
                     {
                         next();
-                        parseFactor();
+                        parseInitializerValue();
                         if (Error.error)
                         {
                             return;
@@ -828,6 +1100,8 @@ void Parser::parseProgram()
                     }
                     if (!Match(TokenCloseCurlyBracket))
                         RETURN_ERROR(expectingClosingBracket)
+                    sizeArrayFromInitializer(current_node, current());
+                    RETURN_IF_ERROR
                     next();
                     if (!Match(TokenSemicolon))
                         RETURN_ERROR(expectingSemicolon)
@@ -1340,6 +1614,13 @@ void Parser::parseFactor()
                     ((tmp_sav->_vartype == __CRGB__ || tmp_sav->_vartype == __CRGBW__) && change_type.back()->isPointer))
                 {
                     change_type.back()->_vartype = tmp_sav->_vartype;
+                }
+                // one char, s[i]: a number (its type stayed none, and
+                // emit(s[0]) found no function)
+                else if (tmp_sav->_vartype == __char__ && !change_type.back()->isPointer &&
+                         change_type.back()->_vartype == __none__)
+                {
+                    change_type.back()->_vartype = __uint8_t__;
                 }
             }
         }
@@ -2395,6 +2676,10 @@ void Parser::parseStatement()
     }
     else if (Match(TokenKeywordFor))
     {
+        vect<Token> forInDecl;
+        ForInAlias forInAlias;
+        if (rewriteForIn(&forInDecl, &forInAlias))
+            RETURN_IF_ERROR
 
         current_cntx = current_cntx->addChild(NodeToken());
 
@@ -2458,22 +2743,45 @@ void Parser::parseStatement()
                 return;
             }
             current_node = current_node->parent;
-            if (Match(TokenOpenCurlyBracket))
+            // for (x in a): the body in a block of its own, behind
+            // x = a[__forinN]; (see rewriteForIn())
+            if (forInDecl.size() > 0)
             {
-                parseBlockStatement();
-                if (Error.error)
-                {
-                    return;
-                }
+                current_cntx = current_cntx->addChild(NodeToken());
+                block_statement_num++;
+                current_node = current_node->addChild(NodeToken(current(), blockStatementNode));
+                for (int i = 0; i < forInDecl.size(); i++)
+                    _tks->insert(i, forInDecl[i]);
+                parseStatement();
+                RETURN_IF_ERROR
             }
-            else
+            if (forInAlias.name != NULL)
             {
-
+                forInAliases.push_back(forInAlias);
+                rewriteForInAlias(_tks, TokenCloseParenthesis);
+            }
+            if (Match(TokenOpenCurlyBracket))
+                parseBlockStatement();
+            else
                 parseUnbracedBody();
-                if (Error.error)
+            if (forInAlias.name != NULL)
+            {
+                // the token after the loop is the variable's own again
+                if (forInRewritten && strcmp(forInRewrittenFrom.getText(), forInAlias.name) == 0)
                 {
-                    return;
+                    for (int i = 0; i < 4; i++)
+                        _tks->remove(0);
+                    _tks->insert(0, forInRewrittenFrom);
+                    forInRewritten = false;
                 }
+                forInAliases.pop_back();
+                free(forInAlias.name);
+            }
+            RETURN_IF_ERROR
+            if (forInDecl.size() > 0)
+            {
+                current_cntx = current_cntx->parent;
+                current_node = current_node->parent;
             }
 
             Error.error = 0;
@@ -3691,6 +3999,12 @@ void Parser::getVariable(bool isStore)
         // current_node->addTargetText(string(current()->getText()));
         current_node->type = TokenUserDefinedVariableMember;
         current_node->_vartype = v->types[i];
+        // a char * member: marked as for an array of pointers (see
+        // makePointerArray()), for the call signatures
+        if (i < 20 && (v->pointerMembers >> i) & 1)
+            current_node->addTargetText(string_format("%s $%d",
+                                                      current_node->target == EOF_TEXTARRAY ? "" : current_node->getTargetText(),
+                                                      v->pointees[i]));
         if (!_asPointer)
             current_node->stack_pos = current_node->stack_pos + v->starts[i];
         else
@@ -4267,9 +4581,13 @@ void Parser::parseArguments()
     {
         const char *typeName = argumentTypeName(current_node);
         RETURN_IF_ERROR
-        bool bytes = current_node->isPointer && current_node->_vartype == __uint8_t__;
+        int pointee = pointerArrayElement(current_node);
+        if (pointee >= 0)
+            typeName = _varTypes[pointee].varName;
+        bool bytes = (current_node->isPointer || pointee >= 0) &&
+                     (pointee >= 0 ? pointee : current_node->_vartype) == __uint8_t__;
         appendSignature(typeName, bytes ? "char" : typeName);
-        if (current_node->isPointer)
+        if (current_node->isPointer || pointee >= 0)
             appendSignature(_star_, _star_);
     }
     current_node = current_node->parent;
@@ -4299,10 +4617,14 @@ void Parser::parseArguments()
         {
             const char *typeName = argumentTypeName(current_node);
             RETURN_IF_ERROR
-            bool bytes = current_node->isPointer && current_node->_vartype == __uint8_t__;
+            int pointee = pointerArrayElement(current_node);
+            if (pointee >= 0)
+                typeName = _varTypes[pointee].varName;
+            bool bytes = (current_node->isPointer || pointee >= 0) &&
+                         (pointee >= 0 ? pointee : current_node->_vartype) == __uint8_t__;
             appendSignature(_separ_, _separ_);
             appendSignature(typeName, bytes ? "char" : typeName);
-            if (current_node->isPointer)
+            if (current_node->isPointer || pointee >= 0)
                 appendSignature(_star_, _star_);
         }
         current_node = current_node->parent;

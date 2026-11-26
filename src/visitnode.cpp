@@ -279,6 +279,28 @@ static int32_t ffloatOf(double v)
 
 char *_numToBytes(uint32_t __num);
 
+// dst = src + value. addi reaches -128..127: the address of a local deep
+// in a large frame (a1 + 184) or a member far into a structure used to be
+// an addi the assembler refused.
+static void emitAddImmediate(int dst, int src, int value)
+{
+    if (value >= -128 && value <= 127)
+    {
+        bufferText->addAfter(string_format(addi, dst, src, value));
+        return;
+    }
+    if (dst != src && value >= -2048 && value <= 2047)
+    {
+        bufferText->addAfter(string_format(movi, dst, value));
+        bufferText->addAfter(string_format("add a%d,a%d,a%d", dst, src, dst));
+        return;
+    }
+    bufferText->addAfter(string_format(addi, dst, src, value > 0 ? 127 : -128));
+    for (value -= value > 0 ? 127 : -128; value > 127 || value < -128; value -= value > 0 ? 127 : -128)
+        bufferText->addAfter(string_format(addi, dst, dst, value > 0 ? 127 : -128));
+    bufferText->addAfter(string_format(addi, dst, dst, value));
+}
+
 // Loads v into register_numl.get() the way _visitnumberNode() loads an
 // integer literal (same side effects on register_numl and the sp stack).
 static void emitIntConstant(int32_t v)
@@ -3807,6 +3829,111 @@ void _visitjsonBindingNode(NodeToken *nd)
                                   (unsigned)nd->_total_size));
 }
 
+// One value of a global's initializer, as the bytes of `type`: -1 is a
+// unary minus over the number 1, read through the signs (it used to read
+// as 0).
+static uint32_t initializerBits(NodeToken *ndt, varTypeEnum type)
+{
+    bool negative = false;
+    while (ndt->_nodetype == unitaryOpNode && ndt->children_size() == 1 &&
+           (ndt->type == TokenSubstraction || ndt->type == TokenNegation || ndt->type == TokenAddition))
+    {
+        if (ndt->type != TokenAddition)
+            negative = !negative;
+        ndt = ndt->getChildPtr(0);
+    }
+    if (type == __float__ || type == __ffloat__)
+    {
+        float __f = 0;
+        sscanf(ndt->getText(), "%f", &__f);
+        if (negative)
+            __f = -__f;
+        if (type == __ffloat__)
+            return (uint32_t)(int32_t)(__f * (1 << FFLOAT_FRAC_BITS));
+        uint32_t bits;
+        memcpy(&bits, &__f, 4);
+        return bits;
+    }
+    uint32_t __num = 0;
+    sscanf(ndt->getText(), "%u", &__num);
+    return negative ? 0u - __num : __num;
+}
+
+// A string literal in an initializer ("red" in `char *names[] = {"red"}`)
+static bool isStringValue(NodeToken *v)
+{
+    return v->_nodetype == globalVariableNode && v->getText() != NULL &&
+           strncmp(v->getText(), "local_string_", 13) == 0;
+}
+
+// The address of a string can't be part of a global's data: the loader
+// relocates the code's references, not data. The footer, the code run
+// once at load for the globals, stores it: array's bytes at `offset` get
+// the address of `label`.
+static void storeStringAddress(const char *array, int offset, const char *label)
+{
+    footer.addAfter(string_format("l32r a14,@_%s", array));
+    footer.addAfter(string_format("l32r a15,@_%s", label));
+    while (offset > 1020) // s32i reaches 1020
+    {
+        int step = offset > 8188 ? 8188 : offset & ~3;
+        footer.addAfter(string_format(movi, 13, step >> 2));
+        footer.addAfter(string_format("slli a13,a13,2"));
+        footer.addAfter(string_format("add a14,a14,a13"));
+        offset -= step;
+    }
+    footer.addAfter(string_format(s32i, 15, 14, offset));
+}
+
+// The values of an initializer element, in order: {1, {2, 3}} and
+// {1, CRGB(2, 3, 4)} are flattened.
+static void initializerValues(NodeToken *nd, vect<NodeToken *> *values)
+{
+    for (int i = 0; i < nd->children_size(); i++)
+    {
+        NodeToken *v = nd->getChildPtr(i);
+        if (v->_nodetype == statementNode || (v->_nodetype != unitaryOpNode && v->children_size() > 0))
+            initializerValues(v, values);
+        else
+            values->push_back(v);
+    }
+}
+
+// One element of a struct array's initializer, `{1, 2.5, 3}`: its fields
+// in the struct's C layout, padding as zeros, missing fields as 0.
+// A string goes in a char * field through the footer (see
+// storeStringAddress()): `offset` is the element's place in `array`.
+static char *structInitializerBytes(char *data, varType *st, NodeToken *element, const char *array, int offset)
+{
+    vect<NodeToken *> values;
+    initializerValues(element, &values);
+    int value = 0, member = 0, inMember = 0;
+    for (int comp = 0; comp < st->size; comp++)
+    {
+        uint32_t bits = 0;
+        if (!((st->fillers >> comp) & 1))
+        {
+            if (value < values.size() && isStringValue(values[value]))
+                storeStringAddress(array, offset, values[value]->getText());
+            else if (value < values.size())
+                bits = initializerBits(values[value], st->types[member]);
+            value++;
+            if (++inMember >= st->memberSize[member])
+            {
+                member++;
+                inMember = 0;
+            }
+        }
+        for (int i = 0; i < st->sizes[comp]; i++)
+        {
+            data = str_concat("%s %02x", data, bits & 0xff);
+            bits = bits / 256;
+        }
+        offset += st->sizes[comp];
+    }
+    return data;
+}
+
 void _visitdefGlobalVariableNode(NodeToken *nd)
 {
     if (strcmp(nd->getText(), _handle_) == 0)
@@ -3853,51 +3980,32 @@ void _visitdefGlobalVariableNode(NodeToken *nd)
             }
             _data_sav = str_concat("%s 00", _data_sav);
         }
+        else if (nd->getVarTypeObj()->_varType == __userDefined__ &&
+                 (nd->target == EOF_TEXTARRAY || nd->getTargetText()[0] != '@'))
+        {
+            // one structure: item one = {"apple", 3};
+            _data_sav = structInitializerBytes(_data_sav, nd->getVarTypeObj(), nd, nd->getText(), 0);
+        }
+        else if (nd->getVarTypeObj()->_varType == __userDefined__)
+        {
+            for (int ndindex = 0; ndindex < nd->children_size(); ndindex++)
+                _data_sav = structInitializerBytes(_data_sav, nd->getVarTypeObj(), nd->getChildPtr(ndindex),
+                                                   nd->getText(), ndindex * nd->getVarTypeObj()->_varSize);
+        }
         else
         {
-            uint32_t __num;
-            __num = 0;
-            uint8_t c;
-            if (nd->children_size() > 0)
+            for (int ndindex = 0; ndindex < nd->children_size(); ndindex++)
             {
-                // for (NodeToken *ndt : *nd->children)
-                // {
-                for (int ndindex = 0; ndindex < nd->children_size(); ndindex++)
+                uint32_t __num = 0;
+                if (isStringValue(nd->getChildPtr(ndindex))) // char *names[] = {"red", ...}
+                    storeStringAddress(nd->getText(), ndindex * nd->getVarTypeObj()->total_size,
+                                       nd->getChildPtr(ndindex)->getText());
+                else
+                    __num = initializerBits(nd->getChildPtr(ndindex), nd->getVarTypeObj()->_varType);
+                for (int i = 0; i < nd->getVarTypeObj()->total_size; i++)
                 {
-                    NodeToken *ndt = nd->getChildPtr(ndindex);
-                    // -1 is a unary minus over the number 1: read through
-                    // the signs down to the number (it used to read as 0)
-                    bool negative = false;
-                    while (ndt->_nodetype == unitaryOpNode && ndt->children_size() == 1 &&
-                           (ndt->type == TokenSubstraction || ndt->type == TokenNegation || ndt->type == TokenAddition))
-                    {
-                        if (ndt->type != TokenAddition)
-                            negative = !negative;
-                        ndt = ndt->getChildPtr(0);
-                    }
-                    if (nd->getVarTypeObj()->_varType == __float__)
-                    {
-                        float __f = 0;
-                        sscanf(ndt->getText(), "%f", &__f);
-                        if (negative)
-                            __f = -__f;
-                        __num = (uint32_t)(*((uint32_t *)&__f));
-                    }
-                    else
-                    {
-                        __num = 0;
-                        sscanf(ndt->getText(), "%u", &__num);
-                        if (negative)
-                            __num = 0u - __num;
-                    }
-                    for (int i = 0; i < nd->getVarTypeObj()->total_size; i++)
-                    {
-                        c = __num & 0xff;
-                        _data_sav = str_concat("%s %02x", _data_sav, c);
-                        //_data_sav = _data_sav + " " + string_format("%02x", c);
-                        // val=val+'A';
-                        __num = __num / 256;
-                    }
+                    _data_sav = str_concat("%s %02x", _data_sav, __num & 0xff);
+                    __num = __num / 256;
                 }
             }
         }
@@ -4017,12 +4125,12 @@ void _visitstoreLocalVariableNode(NodeToken *nd)
 
                 if (isStructFunction)
                 {
-                    bufferText->addAfter(string_format(addi, point_regnum, 2, (int)(nd->stack_pos / 1000)));
+                    emitAddImmediate(point_regnum, 2, (int)(nd->stack_pos / 1000));
                 }
                 else
                 {
                     bufferText->addAfter(string_format(l32i, point_regnum, 1, nd->stack_pos - (int)(nd->stack_pos / 1000) * 1000));
-                    bufferText->addAfter(string_format(addi, point_regnum, point_regnum, (int)(nd->stack_pos / 1000)));
+                    emitAddImmediate(point_regnum, point_regnum, (int)(nd->stack_pos / 1000));
                 }
             }
             else
@@ -4032,7 +4140,7 @@ void _visitstoreLocalVariableNode(NodeToken *nd)
         else
         {
             // a remettre
-            bufferText->addAfter(string_format(addi, point_regnum, 1, nd->stack_pos));
+            emitAddImmediate(point_regnum, 1, nd->stack_pos);
         }
         bufferText->end();
         bufferText->sp.pop();
@@ -4929,7 +5037,7 @@ void _visitcallConstructorNode(NodeToken *nd)
 
     if (nd->stack_pos > 0)
     {
-        bufferText->addAfter(string_format(addi, 5, 1, nd->stack_pos));
+        emitAddImmediate(5, 1, nd->stack_pos);
     }
     else
     {

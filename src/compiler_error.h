@@ -51,6 +51,8 @@ pointerMemberType,
 derefNotPointer,
 addressNotPossible,
 notIndexable,
+tooManyInitializers,
+forInNeedsArray,
 };
 struct error_message_struct
 {

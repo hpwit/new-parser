@@ -818,6 +818,28 @@ varType _varTypes[] = {
         }
 #endif
     }
+    void Tokens::insert(int index, Token t)
+    {
+        peek(index);
+#ifdef __FULL_TOKEN
+        int at = position + index;
+#else
+        int at = __DEPTH + index;
+#endif
+        if (at >= _tokens.size())
+            _tokens.push_back(t);
+        else
+            _tokens.insertBefore(_tokens.getptr(at), t);
+    }
+    void Tokens::remove(int index)
+    {
+        peek(index);
+#ifdef __FULL_TOKEN
+        _tokens.erase(position + index);
+#else
+        _tokens.erase(__DEPTH + index);
+#endif
+    }
     Token Tokens::back()
     {
         if (_tokens.size() > 0)

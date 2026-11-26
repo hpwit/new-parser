@@ -4,6 +4,22 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 🔁 `for (x in array)` and `int a[] = {...}`
+
+```c
+int notes[] = {60, 62, 64, 65};
+for (n in notes) printfln("%d", n);
+for (int n : notes) { }
+```
+
+An array given its values can leave its size out: before, `int a[] = {...}` silently made an array of one element and wrote the other values over the next globals. Too many values for a declared size (`int a[2] = {1, 2, 3};`) is now an error. Arrays of structures take one `{...}` per element (`voice voices[] = {{60, 0.5}, {64, 1.0}};`), in the C layout with its padding, a missing field being 0. `ffloat` arrays given values now hold them; before, `1.5` was read as an integer.
+
+`for (x in a)` and the C++ form `for (int x : a)` go through an array of one dimension. They compile to the same code as the counted `for` they stand for, zero-overhead loop included. Over structures the variable is the element itself, as `for (auto &v : a)` in C++: `v.gain = 0;` changes the array. Example: `ForInArrays`.
+
+Strings in arrays and structures: `char *colors[] = {"red", "green"};` is an array of strings. Before, any `T *a[N]` was an array of `T`, so `colors[1] = "x"` kept one byte of the address. A structure can have a `char *name;` field (it was refused), given its string in the braces too: `{{"apple", 3}}`. An element or a field goes to a function taking a `char *` as one, and `for (c in colors)` declares `c` a `char *`.
+
+Two fixes found on the way: one character of a string passed to a function (`emit(s[0])`) found no function, and storing into a `char *` local deep in a large frame gave an `addi` past 127 that the assembler refused.
+
 ### ⚡ A faster compiler, smaller and faster code
 
 The compiler's line store is a hash instead of lists it scanned for every line it added or removed: compiling takes 2.2 to 3.2 times less time on a computer (Wickwire 3.2 s -> 1.0 s), and `MultiEffectController` compiles on an esp32 without PSRAM in 8.1 s instead of 10.6 s. On a board with PSRAM the compiler's working memory goes there, so a compile no longer competes with the sketch for internal RAM.
