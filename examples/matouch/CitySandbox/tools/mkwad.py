@@ -16,6 +16,9 @@ Lumps
            z forward, y up, around the car's centre on the ground)
   PEDMESH  the same for the person on foot
   CARLOD   the car from afar, a few boxes; PEDLOD  the person from afar
+  COPMESH  the police car: the car, black below, white above (colour 20,
+           painted white by the script), a light bar red (21) and blue (5)
+  COPLOD   the police car from afar
 Edit the tables below and re-run, from tools/:
   python3 mkwad.py ../data/city.wad ../city_wad.h
 (the second file is the WAD as a C array, which CitySandbox.ino compiles in)
@@ -132,6 +135,20 @@ PERSON_LOD = [
     (-0.28, 0.28, -0.28, 0.3, 3.0, 3.7, 23),   # head
 ]
 
+# the police car: the car with its lower body black, and a light bar
+COP = [((b[0], b[1], b[2], b[3], b[4], b[5], 19) if i == 0 else b) for i, b in enumerate(CAR)] + [
+    (-1.1, 1.1, -0.7, -0.1, 2.6, 2.7, 19),     # light bar
+    (-1.0, -0.05, -0.65, -0.15, 2.7, 2.95, 21),  # red
+    (0.05, 1.0, -0.65, -0.15, 2.7, 2.95, 5),   # blue
+]
+COP_LOD = [
+    (-2.0, 2.0, -4.6, 4.6, 0.35, 1.0, 19),     # black below
+    (-2.0, 2.0, -4.6, 4.6, 1.0, 1.5, 20),      # white above
+    (-1.6, 1.6, -2.0, 1.2, 1.5, 2.4, 10),      # glasshouse
+    (-1.0, 0.0, -0.65, -0.15, 2.4, 2.7, 21),   # lights
+    (0.0, 1.0, -0.65, -0.15, 2.4, 2.7, 5),
+]
+
 def mesh(boxes):
     out = struct.pack("<h", len(boxes))
     for b in boxes:
@@ -161,6 +178,8 @@ def build():
         (b"PEDMESH", mesh(PERSON)),
         (b"CARLOD", mesh(CAR_LOD)),
         (b"PEDLOD", mesh(PERSON_LOD)),
+        (b"COPMESH", mesh(COP)),
+        (b"COPLOD", mesh(COP_LOD)),
     ]
     off = 8 + 16 * len(lumps)
     head = b"CWAD" + struct.pack("<I", len(lumps))

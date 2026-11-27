@@ -1,5 +1,5 @@
 // ============================================================
-// CITY SANDBOX  -  milestones (b) and (c): on foot and driving, views, traffic and people
+// CITY SANDBOX  -  milestones (b) to (d): driving and walking, traffic and people, police
 // Style C "clear day downtown". 400x240 RGB565, upscaled 2x by present().
 //
 // Language subset used on purpose (so it survives a small compiler):
@@ -66,6 +66,7 @@ external int wadLoad(uint8_t *dst, int maxlen);   // reads city.wad, returns byt
 #define KEY_ENTER 6
 #define KEY_VIEW 7
 #define KEY_BRAKE 8
+#define KEY_WANTED 9
 #define TURN_STEP 10
 #define MOVE_STEP 307
 #define TICK_MS 33
@@ -149,6 +150,10 @@ int carLod[56];
 int carLodN = 0;
 int pedLod[56];
 int pedLodN = 0;
+int copBox[280];
+int copN = 0;
+int copLod[56];
+int copLodN = 0;
 
 // Signed 16-bit read from the WAD buffer.
 int rds16(int o) {
@@ -204,6 +209,12 @@ int loadAssets() {
   o = findLump(80, 69, 68, 76);
   if (o == 0) return 0;
   pedLodN = loadMesh(o, pedLod);
+  o = findLump(67, 79, 80, 77);
+  if (o == 0) return 0;
+  copN = loadMesh(o, copBox);
+  o = findLump(67, 79, 80, 76);
+  if (o == 0) return 0;
+  copLodN = loadMesh(o, copLod);
   return 1;
 }
 
@@ -895,6 +906,7 @@ int pedA = 0;
 int view = 0;              // 0 chase, 1 far chase, 2 hood
 int lastEnter = 0;
 int lastView = 0;
+int lastWanted = 0;
 
 // --- traffic: cars on the street grid, driving on the right ---
 // A street runs along x = k * PITCH and z = k * PITCH, k 1..15. A car goes
@@ -932,6 +944,27 @@ int walkPhase[40];
 int walkShirt[40];
 int pedPhase = 0;
 
+// --- the police: up to 4 cars, one per wanted star ---
+#define NCOPS 4
+#define COP_GAP 1200
+#define BUST_D 1800
+int copOn[4];
+int copNX[4];
+int copNZ[4];
+int copDir[4];
+int copT[4];
+int copX[4];
+int copZ[4];
+int copA[4];
+int copWait[4];
+int wanted = 0;
+int calmT = 0;        // steps without a police car near: a star goes at 300
+int crimeT = 0;       // steps before another crash counts
+int bustT = 0;        // steps a police car has been at you
+int bannerT = 0;      // steps of the BUSTED banner left
+int hitWhat = 0;      // what blocked() met: 1 a car of the traffic, 2 the police
+int flash = 0;        // the light bars, every few frames
+
 // The block under (x, z).
 int blockAt(int x, int z) {
   return (z / PITCH) * 16 + x / PITCH;
@@ -951,11 +984,26 @@ int blocked(int x, int z, int r) {
   if (z - r < CITY_MIN) return 1;
   if (z + r > CITY_MAX) return 1;
   if (x - r < PITCH - ROAD_HALF) return 1;   // the waterfront column
+  hitWhat = 0;
   for (int k = 0; k < NCARS; k++) {
     bx = (x - npcX[k]) / 64;
     bz = (z - npcZ[k]) / 64;
     b = (r + CAR_R) / 64;
-    if (bx * bx + bz * bz < b * b) return 1;
+    if (bx * bx + bz * bz < b * b) {
+      hitWhat = 1;
+      return 1;
+    }
+  }
+  for (int k = 0; k < NCOPS; k++) {
+    if (copOn[k] == 1) {
+      bx = (x - copX[k]) / 64;
+      bz = (z - copZ[k]) / 64;
+      b = (r + CAR_R) / 64;
+      if (bx * bx + bz * bz < b * b) {
+        hitWhat = 2;
+        return 1;
+      }
+    }
   }
   for (int k = 0; k < 4; k++) {
     bx = x - r;
@@ -1054,6 +1102,16 @@ void driveStep() {
     carX = nx;
     carZ = nz;
   } else {
+    // into a car at speed: a crime (one every two seconds at most)
+    if (hitWhat != 0) {
+      if (crimeT == 0) {
+        if (carSpd > 200) crimeT = 60;
+        if (carSpd < 0 - 200) crimeT = 60;
+        if (crimeT == 60) {
+          if (wanted < 5) wanted++;
+        }
+      }
+    }
     // slide along the wall when one axis is free, else bounce back
     if (blocked(nx, carZ, CAR_R) == 0) {
       carX = nx;
@@ -1407,10 +1465,240 @@ void initActors() {
   }
 }
 
+// --- the police ---
+// Where the player is: in the car or on foot.
+int plX() {
+  if (driving == 1) return carX;
+  return pedX;
+}
+
+int plZ() {
+  if (driving == 1) return carZ;
+  return pedZ;
+}
+
+void placeCop(int i) {
+  int fx;
+  int fz;
+  fx = dirX(copDir[i]);
+  fz = dirZ(copDir[i]);
+  copX[i] = copNX[i] * PITCH + fx * copT[i] + fz * LANE;
+  copZ[i] = copNZ[i] * PITCH + fz * copT[i] - fx * LANE;
+}
+
+// At a crossing a police car takes the street that brings it nearest the
+// player, back included.
+void copChooseDir(int i) {
+  int best;
+  int bestD;
+  int nx;
+  int nz;
+  int dx;
+  int dz;
+  int d;
+  best = copDir[i];
+  bestD = 2000000000;
+  for (int t = 0; t < 4; t++) {
+    nx = copNX[i] + dirX(t);
+    nz = copNZ[i] + dirZ(t);
+    if (nodeOk(nx, nz) == 1) {
+      dx = (nx * PITCH - plX()) / 256;
+      dz = (nz * PITCH - plZ()) / 256;
+      d = dx * dx + dz * dz;
+      // going back counts a little farther, so it is not done for nothing
+      if (t == ((copDir[i] + 2) & 3)) d = d + 400;
+      if (d < bestD) {
+        bestD = d;
+        best = t;
+      }
+    }
+  }
+  copDir[i] = best;
+}
+
+// A police car appears at a crossing four or five blocks from the player.
+void spawnCop(int i) {
+  int px;
+  int pz;
+  int r;
+  px = plX() / PITCH;
+  pz = plZ() / PITCH;
+  r = rnd(4);
+  copNX[i] = px + 4 + rnd(2);
+  copNZ[i] = pz - 2 + rnd(5);
+  if (r == 1) {
+    copNX[i] = px - 4 - rnd(2);
+  }
+  if (r == 2) {
+    copNX[i] = px - 2 + rnd(5);
+    copNZ[i] = pz + 4 + rnd(2);
+  }
+  if (r == 3) {
+    copNX[i] = px - 2 + rnd(5);
+    copNZ[i] = pz - 4 - rnd(2);
+  }
+  if (copNX[i] < 1) copNX[i] = 1;
+  if (copNX[i] > 15) copNX[i] = 15;
+  if (copNZ[i] < 1) copNZ[i] = 1;
+  if (copNZ[i] > 15) copNZ[i] = 15;
+  copDir[i] = 0;
+  copT[i] = 0;
+  copWait[i] = 0;
+  copChooseDir(i);
+  placeCop(i);
+  copA[i] = dirA(copDir[i]);
+  copOn[i] = 1;
+}
+
+// 1 when (ox, oz) is in police car i's lane, close ahead.
+int copInFront(int i, int ox, int oz) {
+  int vx;
+  int vz;
+  int fx;
+  int fz;
+  int ahead;
+  int side;
+  fx = dirX(copDir[i]);
+  fz = dirZ(copDir[i]);
+  vx = ox - copX[i];
+  vz = oz - copZ[i];
+  ahead = vx * fx + vz * fz;
+  side = vx * fz - vz * fx;
+  if (side < 0) side = 0 - side;
+  if (ahead <= 0) return 0;
+  if (ahead >= COP_GAP) return 0;
+  if (side >= NPC_LAT) return 0;
+  return 1;
+}
+
+// The police: as many cars as stars (4 at most), faster with each star;
+// they keep behind the traffic for a moment, stop at the player, and bust
+// a player who stays slow next to one for two seconds. A star goes after
+// ten seconds with no police car near.
+void policeStep() {
+  int want;
+  int spd;
+  int stop;
+  int near;
+  int diff;
+  int dx;
+  int dz;
+  int pspd;
+  want = wanted;
+  if (want > NCOPS) want = NCOPS;
+  for (int i = 0; i < NCOPS; i++) {
+    if (i < want) {
+      if (copOn[i] == 0) spawnCop(i);
+    } else {
+      copOn[i] = 0;
+    }
+  }
+  spd = 220 + wanted * 40;
+  near = 0;
+  pspd = 0;
+  if (driving == 1) {
+    pspd = carSpd;
+    if (pspd < 0) pspd = 0 - pspd;
+  }
+  for (int i = 0; i < NCOPS; i++) {
+    if (copOn[i] == 1) {
+      dx = (copX[i] - plX()) / 256;
+      dz = (copZ[i] - plZ()) / 256;
+      if (dx * dx + dz * dz < 900) near = 1;
+      if (dx * dx + dz * dz < (BUST_D / 256) * (BUST_D / 256)) {
+        if (pspd < 60) near = 2;
+      }
+      stop = copInFront(i, plX(), plZ());
+      for (int k = 0; k < NCARS; k++) {
+        if (copInFront(i, npcX[k], npcZ[k]) == 1) stop = 1;
+      }
+      if (stop == 1) {
+        copWait[i] = copWait[i] + 1;
+        if (copWait[i] > 30) stop = 0;
+      }
+      if (copInFront(i, plX(), plZ()) == 1) stop = 1;
+      if (stop == 0) {
+        copWait[i] = 0;
+        copT[i] = copT[i] + spd;
+        if (copT[i] >= PITCH) {
+          copT[i] = copT[i] - PITCH;
+          copNX[i] = copNX[i] + dirX(copDir[i]);
+          copNZ[i] = copNZ[i] + dirZ(copDir[i]);
+          copChooseDir(i);
+        }
+        placeCop(i);
+      }
+      diff = ((dirA(copDir[i]) - copA[i] + 1536) & 1023) - 512;
+      if (diff > 64) diff = 64;
+      if (diff < 0 - 64) diff = 0 - 64;
+      copA[i] = wrapA(copA[i] + diff);
+    }
+  }
+  if (wanted > 0) {
+    if (near == 0) {
+      calmT++;
+      if (calmT >= 300) {
+        wanted--;
+        calmT = 0;
+      }
+    } else {
+      calmT = 0;
+    }
+  }
+  if (near == 2) {
+    bustT++;
+  } else {
+    bustT = 0;
+  }
+  if (bustT > 60) {
+    // busted: back to the start, no stars, no police
+    bannerT = 90;
+    bustT = 0;
+    wanted = 0;
+    calmT = 0;
+    for (int i = 0; i < NCOPS; i++) copOn[i] = 0;
+    driving = 1;
+    carX = 111462;
+    carZ = 82944;
+    carA = 0;
+    carSpd = 0;
+  }
+}
+
+// A person the car runs into at speed is knocked down: a star, and the
+// person walks on later round another block, far away.
+void runOverStep() {
+  int dx;
+  int dz;
+  int r;
+  int s;
+  if (driving == 0) return;
+  s = carSpd;
+  if (s < 0) s = 0 - s;
+  if (s < 60) return;
+  r = (CAR_R + PED_R) / 64;
+  for (int k = 0; k < NPEDS; k++) {
+    dx = (walkX[k] - carX) / 64;
+    dz = (walkZ[k] - carZ) / 64;
+    if (dx * dx + dz * dz < r * r) {
+      if (wanted < 5) wanted++;
+      walkB[k] = 17 + rnd(222);
+      if (blkType[walkB[k]] == 2) walkB[k] = walkB[k] + 1;
+      placeWalker(k);
+    }
+  }
+}
+
 // One 30 Hz step: the keys pressed once (get in or out, the view), then
 // the car or the person, then the camera.
 void update() {
   int k;
+  // while BUSTED shows, nothing moves and no key counts
+  if (bannerT > 0) {
+    bannerT--;
+    placeCamera();
+    return;
+  }
   k = keyDown(KEY_ENTER);
   if (k != 0) {
     if (lastEnter == 0) enterOrExit();
@@ -1425,6 +1713,15 @@ void update() {
     }
   }
   lastView = k;
+  // W: one more star, to try the police
+  k = keyDown(KEY_WANTED);
+  if (k != 0) {
+    if (lastWanted == 0) {
+      if (wanted < 5) wanted++;
+    }
+  }
+  lastWanted = k;
+  if (crimeT > 0) crimeT--;
   if (driving == 1) {
     driveStep();
   } else {
@@ -1432,6 +1729,8 @@ void update() {
   }
   trafficStep();
   walkersStep();
+  runOverStep();
+  policeStep();
   placeCamera();
 }
 
@@ -1479,6 +1778,7 @@ int boxD[40];
 
 int boxZ0[40];
 int boxZ1[40];
+int lightSwap = 0;
 
 // Swing of the legs and arms, 24.8, from a walking phase (a triangle wave).
 int swingOf(int phase) {
@@ -1551,13 +1851,22 @@ void drawMesh(int *m, int n, int cx, int cz, int a, int paint, int swing) {
       if (curCi == 20) curCi = paint;
       if (curCi == 22) curCi = paint;
     }
+    // a police car's light bar: red and blue change places
+    if (lightSwap == 1) {
+      if (curCi == 21) {
+        curCi = 5;
+      } else {
+        if (curCi == 5) curCi = 21;
+      }
+    }
     drawOBox(cx, cz, a, m[k], m[k + 1], boxZ0[boxOrd[k2]], boxZ1[boxOrd[k2]]);
   }
 }
 
 // --- per-block object list, far to near ---
 // 0 building, 1 tree, 2 lamp facing -z, 3 lamp facing +z, 4 a car of the
-// traffic, 5 a person walking, 6 the player's car, 7 the player on foot
+// traffic, 5 a person walking, 6 the player's car, 7 the player on foot,
+// 8 a police car
 int itT[48];
 int itA[48];
 int itB[48];
@@ -1617,6 +1926,14 @@ void addActors(int b) {
   }
   if (driving == 0) {
     if (blockAt(pedX, pedZ) == b) addItem(7, 0, 0, dist2(pedX, pedZ));
+  }
+  for (int k = 0; k < NCOPS; k++) {
+    if (copOn[k] == 1) {
+      if (blockAt(copX[k], copZ[k]) == b) {
+        d = dist2(copX[k], copZ[k]);
+        if (d < D2_PROPS_SIMPLE) addItem(8, k, 0, d);
+      }
+    }
   }
 }
 
@@ -1708,10 +2025,81 @@ void drawBlockObjects(int b, int d) {
       }
     }
     if (t == 6) drawMesh(carBox, carN, carX, carZ, carA, 0 - 1, 0);
+    if (t == 8) {
+      j = itA[k];
+      lightSwap = (flash / 4) & 1;
+      if (itD[k] < 900) {
+        drawMesh(copBox, copN, copX[j], copZ[j], copA[j], 4, 0);
+      } else {
+        drawMesh(copLod, copLodN, copX[j], copZ[j], copA[j], 4, 0);
+      }
+      lightSwap = 0;
+    }
     if (t == 7) drawMesh(pedBox, pedN, pedX, pedZ, pedA, 0 - 1, swingOf(pedPhase));
   }
 }
 
+
+// --- the HUD: the wanted stars, the BUSTED banner ---
+// B U S T E D, 5 x 7, a row a byte (bit 4 the left column)
+uint8_t letters[42];
+
+void initLetters() {
+  letters[0] = 30; letters[1] = 17; letters[2] = 17; letters[3] = 30; letters[4] = 17; letters[5] = 17; letters[6] = 30;
+  letters[7] = 17; letters[8] = 17; letters[9] = 17; letters[10] = 17; letters[11] = 17; letters[12] = 17; letters[13] = 14;
+  letters[14] = 15; letters[15] = 16; letters[16] = 16; letters[17] = 14; letters[18] = 1; letters[19] = 1; letters[20] = 30;
+  letters[21] = 31; letters[22] = 4; letters[23] = 4; letters[24] = 4; letters[25] = 4; letters[26] = 4; letters[27] = 4;
+  letters[28] = 31; letters[29] = 16; letters[30] = 16; letters[31] = 30; letters[32] = 16; letters[33] = 16; letters[34] = 31;
+  letters[35] = 30; letters[36] = 17; letters[37] = 17; letters[38] = 17; letters[39] = 17; letters[40] = 17; letters[41] = 30;
+}
+
+// A solid rectangle straight into the frame.
+void hudRect(int x0, int y0, int w, int h, int c) {
+  int o;
+  for (int y = y0; y < y0 + h; y++) {
+    o = y * SCR_W;
+    for (int x = x0; x < x0 + w; x++) fb[o + x] = c;
+  }
+}
+
+// A star as a diamond with a cross, 13 x 13, filled or dark.
+void hudStar(int cx, int cy, int on) {
+  int c;
+  int w;
+  int o;
+  c = 2113;
+  if (on == 1) c = 65504;
+  for (int dy = 0 - 6; dy <= 6; dy++) {
+    w = 6 - dy;
+    if (dy < 0) w = 6 + dy;
+    w = w / 2;
+    if (dy == 0 - 1) w = 6;
+    if (dy == 0) w = 6;
+    if (dy == 1) w = 6;
+    o = (cy + dy) * SCR_W + cx;
+    for (int dx = 0 - w; dx <= w; dx++) fb[o + dx] = c;
+  }
+}
+
+void drawHud() {
+  int x;
+  int bits;
+  for (int i = 0; i < 5; i++) {
+    x = SCR_W - 12 - (4 - i) * 16;
+    hudStar(x, 12, (i < wanted) * 1);
+  }
+  if (bannerT > 0) {
+    hudRect(0, 92, SCR_W, 56, 30720);
+    for (int l = 0; l < 6; l++) {
+      for (int row = 0; row < 7; row++) {
+        bits = letters[l * 7 + row];
+        for (int col = 0; col < 5; col++) {
+          if (((bits >> (4 - col)) & 1) == 1) hudRect(110 + l * 32 + col * 5, 102 + row * 5, 5, 5, 65535);
+        }
+      }
+    }
+  }
+}
 
 // One full frame: background, all ground, then all objects, cars and people far to near.
 void render() {
@@ -1722,6 +2110,8 @@ void render() {
   collectBlocks();
   for (int k = 0; k < visN; k++) drawGround(visI[k], visD[k]);
   for (int k = 0; k < visN; k++) drawBlockObjects(visI[k], visD[k]);
+  drawHud();
+  flash++;
 }
 
 // ===== 11. MAIN LOOP =====
@@ -1734,6 +2124,7 @@ int main() {
   if (loadAssets() == 0) return 1;
   genCity();
   initActors();
+  initLetters();
   placeCamera();
   initRows();
   last = millis();

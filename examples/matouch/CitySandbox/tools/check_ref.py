@@ -30,6 +30,7 @@ static int tourKey(int f, int key) {
   case 6: return f == 105 || f == 179;
   case 4: return f >= 131 && f < 179;
   case 7: return f == 130 || f == 185 || f == 195;
+  case 9: return f == 3 || f == 6;
   }
   return 0;
 }
