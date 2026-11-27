@@ -517,7 +517,7 @@ The WAD (1.6 MB, `tools/make_wad.py`, about 30 s) holds the two maps and a 128x1
 | <img src="examples/matouch/CitySandbox/citysandbox_cafe.png" width="400" alt="A café terrace"> | <img src="examples/matouch/CitySandbox/citysandbox_passenger.png" width="400" alt="A taxi mission: the passenger waiting"> |
 | <img src="examples/matouch/CitySandbox/citysandbox_passed.png" width="400" alt="Mission passed"> | <img src="examples/matouch/CitySandbox/citysandbox_dusk.png" width="400" alt="Dusk"> |
 | <img src="examples/matouch/CitySandbox/citysandbox_night.png" width="400" alt="Night: lit windows and street lamps"> | <img src="examples/matouch/CitySandbox/citysandbox_police.png" width="400" alt="A police car"> |
-| <img src="examples/matouch/CitySandbox/citysandbox_busted.png" width="400" alt="Busted"> | |
+| <img src="examples/matouch/CitySandbox/citysandbox_busted.png" width="400" alt="Busted"> | <img src="examples/matouch/CitySandbox/citysandbox_lights.png" width="400" alt="Traffic lights at a crossing, a red light run"> |
 
 ### Starting
 
@@ -543,7 +543,7 @@ The coupé takes a moment to gather speed and grips less the faster it goes: tak
 
 ### The city
 
-Twenty cars, coupés, saloons and vans, drive on the right, turn at the crossings and stop behind whatever is in their way, brake lights on. Sixty people walk the pavements, men and women of every look. Nearly half the buildings have a shop on the ground floor, a quarter a café with its terrace of tables and parasols. The round map at the top left turns with you and shows the streets, the parks, the buildings, the police and your next goal.
+Twenty cars, coupés, saloons and vans, drive on the right, turn at the crossings and stop behind whatever is in their way, brake lights on. Every crossing has traffic lights, green, amber and red, glowing at night: the traffic waits at the line on red. You don't have to: drive through a crossing on red and it pays $25. Sixty people walk the pavements, men and women of every look. Nearly half the buildings have a shop on the ground floor, a quarter a café with its terrace of tables and parasols. The round map at the top left turns with you and shows the streets, the parks, the buildings, the police and your next goal.
 
 ### Missions and money
 

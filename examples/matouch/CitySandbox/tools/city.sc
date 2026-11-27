@@ -80,12 +80,12 @@ external void setWindow(int on);   // reads city.wad, returns byte count
 // ===== 2. MATHS TABLES AND ASSETS (filled from the WAD) =====
 uint8_t wad[12288];
 int sinT[1024];
-uint16_t pal[1880];
+uint16_t pal[1960];
 uint16_t skyC[8];
 uint8_t patT[64];
 uint16_t rowCol[240];
 uint8_t font[448];      // 5x7 characters 32..95, from the WAD
-uint8_t colRGB[141];    // the 47 colours, r g b: relit by the time of day
+uint8_t colRGB[147];    // the 49 colours, r g b: relit by the time of day
 
 int camX = 111462;
 int camZ = 82944;
@@ -202,7 +202,7 @@ int loadAssets() {
   if (wad[1] != 87) return 0;
   o = findLump(80, 65, 76, 69);
   if (o == 0) return 0;
-  for (int i = 0; i < 1880; i++) pal[i] = rd16(o + i * 2);
+  for (int i = 0; i < 1960; i++) pal[i] = rd16(o + i * 2);
   o = findLump(83, 75, 89, 67);
   if (o == 0) return 0;
   for (int i = 0; i < 8; i++) skyC[i] = rd16(o + i * 2);
@@ -245,7 +245,7 @@ int loadAssets() {
   womLodN = loadMesh(o, womLod);
   o = findLump(67, 79, 76, 82);
   if (o == 0) return 0;
-  for (int i = 0; i < 141; i++) colRGB[i] = wad[o + i];
+  for (int i = 0; i < 147; i++) colRGB[i] = wad[o + i];
   o = findLump(83, 69, 68, 77);
   if (o == 0) return 0;
   sedN = loadMesh(o, sedBox);
@@ -574,7 +574,7 @@ void relight() {
   lr = (light[0] * light[1]) / 256;
   lg = (light[0] * light[2]) / 256;
   lb = (light[0] * light[3]) / 256;
-  for (int c = 0; c < 47; c++) {
+  for (int c = 0; c < 49; c++) {
     for (int sh = 0; sh < 5; sh++) {
       r = (colRGB[c * 3] * shade256[sh]) / 256;
       g = (colRGB[c * 3 + 1] * shade256[sh]) / 256;
@@ -1135,7 +1135,10 @@ int lastWanted = 0;
 int lastTime = 0;
 int bustedNow = 0;      // set by a bust, read by the missions
 int cash = 0;
-int killT = 0;          // how long "+$50" still shows
+int killT = 0;          // how long the "+$" popup still shows
+int popAmt = 50;        // its amount
+int popRed = 0;         // 1: it was a red light
+int lastCross = 0;      // 1 while the car is inside a crossing
 
 // --- traffic: cars on the street grid, driving on the right ---
 // A street runs along x = k * PITCH and z = k * PITCH, k 1..15. A car goes
@@ -1624,6 +1627,23 @@ int nodeOk(int kx, int kz) {
 }
 
 // Car k on its way: the lane to the right of the street's middle.
+// --- traffic lights ---
+// Every crossing runs a 20-second cycle, staggered from crossing to crossing:
+// green 8 s, amber 2 s, then red 10 s while the other street has its turn.
+// axis 0: travelling along x, 1: along z. Returns 0 green, 1 amber, 2 red.
+#define LIGHT_CYCLE 600
+#define STOP_LINE 2300
+int lightT = 0;
+
+int lightOf(int nx, int nz, int axis) {
+  int p;
+  p = (lightT + ((nx * 7 + nz * 13) % 20) * 30) % LIGHT_CYCLE;
+  if (axis == 1) p = (p + 300) % LIGHT_CYCLE;
+  if (p < 240) return 0;
+  if (p < 300) return 1;
+  return 2;
+}
+
 void placeNpc(int k) {
   int fx;
   int fz;
@@ -1682,7 +1702,19 @@ int inFront(int k, int ox, int oz) {
 void trafficStep() {
   int stop;
   int diff;
+  int ax;
+  int red;
+  lightT++;
   for (int k = 0; k < NCARS; k++) {
+    // at the stop line on amber or red: wait (without losing patience)
+    red = 0;
+    if (npcT[k] <= PITCH - STOP_LINE) {
+      if (npcT[k] + NPC_SPD > PITCH - STOP_LINE) {
+        ax = 1;
+        if (dirX(npcDir[k]) != 0) ax = 0;
+        if (lightOf(npcNX[k] + dirX(npcDir[k]), npcNZ[k] + dirZ(npcDir[k]), ax) != 0) red = 1;
+      }
+    }
     stop = inFront(k, carX, carZ);
     if (driving == 0) {
       if (inFront(k, pedX, pedZ) == 1) stop = 1;
@@ -1695,6 +1727,10 @@ void trafficStep() {
     if (stop == 1) {
       npcWait[k] = npcWait[k] + 1;
       if (npcWait[k] > NPC_PATIENCE) stop = 0;
+    }
+    if (red == 1) {
+      stop = 1;
+      if (npcWait[k] == 0) npcWait[k] = 1;
     }
     if (stop == 0) {
       npcWait[k] = 0;
@@ -1712,6 +1748,45 @@ void trafficStep() {
     if (diff < 0 - 48) diff = 0 - 48;
     npcA[k] = wrapA(npcA[k] + diff);
   }
+}
+
+// Into a crossing on red, at speed: $25 (once a crossing).
+void redLightStep() {
+  int nx;
+  int nz;
+  int in;
+  int ax;
+  int s;
+  int c;
+  nx = (carX + PITCH / 2) / PITCH;
+  nz = (carZ + PITCH / 2) / PITCH;
+  in = 0;
+  if (carX > nx * PITCH - ROAD_HALF) {
+    if (carX < nx * PITCH + ROAD_HALF) {
+      if (carZ > nz * PITCH - ROAD_HALF) {
+        if (carZ < nz * PITCH + ROAD_HALF) in = 1;
+      }
+    }
+  }
+  if (in == 1) {
+    if (lastCross == 0) {
+      s = sinT[carVA];
+      if (s < 0) s = 0 - s;
+      c = sinT[(carVA + 256) & 1023];
+      if (c < 0) c = 0 - c;
+      ax = 1;
+      if (s > c) ax = 0;
+      if (carSpd > 100) {
+        if (lightOf(nx, nz, ax) == 2) {
+          cash = cash + 25;
+          killT = 45;
+          popAmt = 25;
+          popRed = 1;
+        }
+      }
+    }
+  }
+  lastCross = in;
 }
 
 // Person k: its place on the loop round its block's pavement.
@@ -2077,6 +2152,8 @@ void runOverStep() {
       if (wanted < 5) wanted++;
       cash = cash + 50;
       killT = 45;
+      popAmt = 50;
+      popRed = 0;
       walkB[k] = 17 + rnd(222);
       if (blkType[walkB[k]] == 2) walkB[k] = walkB[k] + 1;
       placeWalker(k);
@@ -2308,6 +2385,7 @@ void update() {
   if (crimeT > 0) crimeT--;
   if (driving == 1) {
     driveStep();
+    redLightStep();
   } else {
     walkStep();
   }
@@ -2365,7 +2443,7 @@ int boxD[40];
 int boxZ0[40];
 int boxZ1[40];
 int lightSwap = 0;
-uint8_t recol[47];
+uint8_t recol[49];
 int bodyP = 0;          // the body's pitch and roll for the next mesh (24.8 per unit): wheels stay down
 int bodyR = 0;      // colour substitutions for the next meshes, identity by default
 
@@ -2594,6 +2672,57 @@ void carShadow(int x, int z, int a, int hw, int hl) {
   flatCam(0, 19, 0);
 }
 
+// A traffic light at (x, z), on a corner of a crossing: a pole, a dark head,
+// and the lit lamp on the two faces turned to the crossing, red at the top,
+// amber in the middle, green at the bottom (at the height of the colour).
+void drawLight(int x, int z) {
+  int nx;
+  int nz;
+  int sx;
+  int sz;
+  int l;
+  int f;
+  nx = (x + PITCH / 2) / PITCH;
+  nz = (z + PITCH / 2) / PITCH;
+  sx = 1;
+  if (x > nx * PITCH) sx = 0 - 1;
+  sz = 1;
+  if (z > nz * PITCH) sz = 0 - 1;
+  curStyle = 0 - 1;
+  curCi = 8;
+  curY0 = 0;
+  curY1 = 1280;
+  drawBox(x - 40, z - 40, x + 40, z + 40);
+  curCi = 19;
+  curY0 = 1280;
+  curY1 = 1760;
+  drawBox(x - 110, z - 110, x + 110, z + 110);
+  // the face toward x travel (axis 0), then toward z travel (axis 1)
+  for (int a = 0; a < 2; a++) {
+    l = lightOf(nx, nz, a);
+    curCi = 47;
+    curY0 = 1310;
+    if (l == 1) {
+      curCi = 48;
+      curY0 = 1460;
+    }
+    if (l == 2) {
+      curCi = 46;
+      curY0 = 1610;
+    }
+    curY1 = curY0 + 120;
+    if (a == 0) {
+      f = x + sx * 110;
+      if (sx > 0) drawBox(f, z - 70, f + 28, z + 70);
+      if (sx < 0) drawBox(f - 28, z - 70, f, z + 70);
+    } else {
+      f = z + sz * 110;
+      if (sz > 0) drawBox(x - 70, f, x + 70, f + 28);
+      if (sz < 0) drawBox(x - 70, f - 28, x + 70, f);
+    }
+  }
+}
+
 // A mission marker: a glowing column with a cap that blinks white.
 void drawMarker(int c) {
   curStyle = 0 - 1;
@@ -2612,7 +2741,7 @@ void drawMarker(int c) {
 // 0 building, 1 tree, 2 lamp facing -z, 3 lamp facing +z, 4 a car of the
 // traffic, 5 a person walking, 6 the player's car, 7 the player on foot,
 // 8 a police car, 9 a shop front, 10 a café table, 11 a mission marker,
-// 12 the passenger waiting
+// 12 the passenger waiting, 13 a traffic light
 int itT[64];
 int itA[64];
 int itB[64];
@@ -2692,6 +2821,17 @@ void addActors(int b) {
       }
     }
   }
+}
+
+// The block's two traffic lights, on its north-west and south-east corners,
+// when they are near enough.
+void addLights(int b, int wx, int wz) {
+  int d;
+  if (b % 16 == 0) return;
+  d = dist2(wx + 160, wz + 160);
+  if (d < D2_SHOP_NEAR) addItem(13, wx + 160, wz + 160, d);
+  d = dist2(wx + PAD - 160, wz + PAD - 160);
+  if (d < D2_SHOP_NEAR) addItem(13, wx + PAD - 160, wz + PAD - 160, d);
 }
 
 // Buildings, trees, lamps, cars and people of one block, sorted by distance
@@ -2784,6 +2924,7 @@ void drawBlockObjects(int b, int d) {
       }
     }
     if (lod == 0) {
+      addLights(b, wx, wz);
       addItem(2, wx + 5120, wz + 307, dist2(wx + 5120, wz + 307));
       addItem(3, wx + 5120, wz + PAD - 307, dist2(wx + 5120, wz + PAD - 307));
     }
@@ -2850,6 +2991,8 @@ void drawBlockObjects(int b, int d) {
       if (polyCount < PROP_BUDGET) drawTable(itA[k], itB[k], wx, wz);
     }
     if (t == 11) drawMarker(itA[k]);
+    // traffic lights: few and near, so past the props' budget
+    if (t == 13) drawLight(itA[k], itB[k]);
     if (t == 12) {
       recol[23] = pasSkin;
       recol[28] = pasLow;
@@ -3505,6 +3648,7 @@ uint8_t txLose[15] = {76, 79, 83, 69, 32, 84, 72, 69, 32, 80, 79, 76, 73, 67, 69
 uint8_t txPassed[14] = {77, 73, 83, 83, 73, 79, 78, 32, 80, 65, 83, 83, 69, 68};
 uint8_t txFailed[14] = {77, 73, 83, 83, 73, 79, 78, 32, 70, 65, 73, 76, 69, 68};
 uint8_t txKmh[5] = {32, 75, 77, 47, 72};
+uint8_t txRed[10] = {82, 69, 68, 32, 76, 73, 71, 72, 84, 32};
 uint8_t tb[40];
 int tbN = 0;
 
@@ -3604,10 +3748,11 @@ void drawMissionHud() {
   }
   if (killT > 0) {
     tbN = 0;
-    tb[0] = 43;
-    tb[1] = 36;
-    tbN = 2;
-    tbNum(50, 1);
+    if (popRed == 1) tbText(txRed, 10);
+    tb[tbN] = 43;
+    tb[tbN + 1] = 36;
+    tbN = tbN + 2;
+    tbNum(popAmt, 1);
     textMid(40, tb, tbN, 2, rgb(120, 230, 110), 0);
   }
   if (msgT > 0) {
@@ -3655,7 +3800,7 @@ int main() {
   if (loadAssets() == 0) return 1;
   genCity();
   initShops();
-  for (int k = 0; k < 47; k++) recol[k] = k;
+  for (int k = 0; k < 49; k++) recol[k] = k;
   initActors();
   initLetters();
   initMap();

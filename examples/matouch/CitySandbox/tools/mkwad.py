@@ -8,7 +8,7 @@ Layout (little-endian):
   ... lump data
 
 Lumps
-  PALETTE  47 colours x 5 shades x 8 fog levels, RGB565   index = (colour*5+shade)*8+fog
+  PALETTE  49 colours x 5 shades x 8 fog levels, RGB565   index = (colour*5+shade)*8+fog
   SKYCOLS  8 x RGB565: 6 sky bands (top to horizon), fog colour, spare
   SINTAB   1024 x int16, sin(2*pi*i/1024) * 4096
   PATTERNS 8 window styles x 8 rows; bit c of row (floor & 7) = window present in column c & 7
@@ -21,7 +21,7 @@ Lumps
   COPLOD   the police car from afar
   WOMMESH  a woman (the person on foot is a man); WOMLOD from afar
   SEDMESH, SEDLOD, VANMESH, VANLOD  a saloon and a van of the traffic
-  COLRGB   the 47 colours as r g b bytes: the script relights the palette by the time of day
+  COLRGB   the 49 colours as r g b bytes: the script relights the palette by the time of day
   FONT     5x7 characters 32..95, 7 rows each, bit 4 = leftmost column
 Edit the tables below and re-run, from tools/:
   python3 mkwad.py ../data/city.wad ../city_wad.h
@@ -78,7 +78,9 @@ COLOURS = [
     (196, 186, 146),  # 43 headlights on the road
     (60, 230, 90),    # 44 marker: a mission starts here
     (255, 214, 40),   # 45 marker: the mission's target
-    (255, 60, 50),    # 46 brake lights on, and the police light's red
+    (255, 60, 50),    # 46 brake lights on, the police light's red, a red traffic light
+    (40, 255, 110),   # 47 a green traffic light
+    (255, 180, 30),   # 48 an amber traffic light
 ]
 SKY = [(60, 130, 220), (86, 152, 230), (116, 174, 238), (150, 196, 244),
        (184, 216, 248), (206, 226, 246)]
@@ -323,7 +325,7 @@ def font():
     return bytes(out)
 
 def build():
-    assert len(COLOURS) == 47 and len(PATTERNS) == 8
+    assert len(COLOURS) == 49 and len(PATTERNS) == 8
     pal = []
     for col in COLOURS:
         for sh in SHADES:
