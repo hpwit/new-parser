@@ -15,6 +15,7 @@ Lumps
   CARMESH  int16 box count, then per box x0 x1 z0 z1 y0 y1 colour (24.8; x to the right,
            z forward, y up, around the car's centre on the ground)
   PEDMESH  the same for the person on foot
+  CARLOD   the car from afar, a few boxes; PEDLOD  the person from afar
 Edit the tables below and re-run, from tools/:
   python3 mkwad.py ../data/city.wad ../city_wad.h
 (the second file is the WAD as a C array, which CitySandbox.ino compiles in)
@@ -119,6 +120,18 @@ PERSON = [
     (0.08, 0.2, 0.3, 0.32, 3.36, 3.44, 19),
 ]
 
+CAR_LOD = [
+    (-2.0, 2.0, -4.6, 4.6, 0.35, 1.5, 20),     # body
+    (-1.6, 1.6, -2.0, 1.2, 1.5, 2.4, 10),      # glasshouse
+    (-2.15, 2.15, 2.6, 3.9, 0.0, 1.0, 19),     # front wheels
+    (-2.15, 2.15, -3.9, -2.6, 0.0, 1.0, 19),   # rear wheels
+]
+PERSON_LOD = [
+    (-0.48, 0.48, -0.25, 0.25, 0.0, 1.8, 10),  # legs
+    (-0.6, 0.6, -0.3, 0.3, 1.8, 3.0, 22),      # shirt and arms
+    (-0.28, 0.28, -0.28, 0.3, 3.0, 3.7, 23),   # head
+]
+
 def mesh(boxes):
     out = struct.pack("<h", len(boxes))
     for b in boxes:
@@ -146,6 +159,8 @@ def build():
         (b"PATTERNS", bytes(v for row in PATTERNS for v in row)),
         (b"CARMESH", mesh(CAR)),
         (b"PEDMESH", mesh(PERSON)),
+        (b"CARLOD", mesh(CAR_LOD)),
+        (b"PEDLOD", mesh(PERSON_LOD)),
     ]
     off = 8 + 16 * len(lumps)
     head = b"CWAD" + struct.pack("<I", len(lumps))

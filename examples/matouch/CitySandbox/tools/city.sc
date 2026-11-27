@@ -1,5 +1,5 @@
 // ============================================================
-// CITY SANDBOX  -  milestone (b): on foot and driving, collisions, views
+// CITY SANDBOX  -  milestones (b) and (c): on foot and driving, views, traffic and people
 // Style C "clear day downtown". 400x240 RGB565, upscaled 2x by present().
 //
 // Language subset used on purpose (so it survives a small compiler):
@@ -144,6 +144,11 @@ int carBox[280];
 int carN = 0;
 int pedBox[280];
 int pedN = 0;
+// the same seen from afar
+int carLod[56];
+int carLodN = 0;
+int pedLod[56];
+int pedLodN = 0;
 
 // Signed 16-bit read from the WAD buffer.
 int rds16(int o) {
@@ -193,6 +198,12 @@ int loadAssets() {
   o = findLump(80, 69, 68, 77);
   if (o == 0) return 0;
   pedN = loadMesh(o, pedBox);
+  o = findLump(67, 65, 82, 76);
+  if (o == 0) return 0;
+  carLodN = loadMesh(o, carLod);
+  o = findLump(80, 69, 68, 76);
+  if (o == 0) return 0;
+  pedLodN = loadMesh(o, pedLod);
   return 1;
 }
 
@@ -853,106 +864,6 @@ void drawGround(int b, int d) {
   }
 }
 
-// --- per-block object list, far to near ---
-int itT[16];   // 0 building, 1 tree, 2 lamp facing -z, 3 lamp facing +z
-int itA[16];
-int itB[16];
-int itD[16];
-int itN = 0;
-
-// Inserts an object into the block list, keeping it sorted far to near.
-void addItem(int t, int a, int b, int d) {
-  int k;
-  int go;
-  if (itN >= 16) return;
-  k = itN;
-  go = 1;
-  while (go == 1) {
-    go = 0;
-    if (k > 0) {
-      if (itD[k - 1] < d) {
-        itD[k] = itD[k - 1];
-        itT[k] = itT[k - 1];
-        itA[k] = itA[k - 1];
-        itB[k] = itB[k - 1];
-        k--;
-        go = 1;
-      }
-    }
-  }
-  itD[k] = d;
-  itT[k] = t;
-  itA[k] = a;
-  itB[k] = b;
-  itN++;
-}
-
-// Buildings, trees and lamps of one block, sorted by distance and drawn far to near.
-void drawBlockObjects(int b, int d) {
-  int ix;
-  int iz;
-  int wx;
-  int wz;
-  int t;
-  int i;
-  int x;
-  int z;
-  int lod;
-  t = blkType[b];
-  if (t == 2) return;
-  ix = b % 16;
-  iz = b / 16;
-  wx = ix * PITCH + ROAD_HALF;
-  wz = iz * PITCH + ROAD_HALF;
-  itN = 0;
-  lod = 2;
-  if (d < D2_PROPS_SIMPLE) lod = 1;
-  if (d < D2_PROPS_FULL) lod = 0;
-  if (t == 1) {
-    if (lod < 2) {
-      for (int j = 0; j < 6; j++) {
-        x = wx + 1280 + (hash2(b, j) % 7680);
-        z = wz + 1280 + (hash2(b, j + 8) % 7680);
-        addItem(1, x, z, dist2(x, z));
-      }
-    }
-  } else {
-    for (int l = 0; l < 4; l++) {
-      i = b * 4 + l;
-      if (lotH[i] > 0) {
-        nearestOnLot(i, wx, wz);
-        addItem(0, i, 0, dist2(nearX, nearZ));
-      }
-    }
-    if (lod < 2) {
-      for (int j = 0; j < 4; j++) {
-        x = wx + 384;
-        if (j > 1) x = wx + PAD - 384;
-        z = wz + 3072;
-        if ((j & 1) == 1) z = wz + 7168;
-        addItem(1, x, z, dist2(x, z));
-      }
-    }
-    if (lod == 0) {
-      addItem(2, wx + 5120, wz + 307, dist2(wx + 5120, wz + 307));
-      addItem(3, wx + 5120, wz + PAD - 307, dist2(wx + 5120, wz + PAD - 307));
-    }
-  }
-  for (int k = 0; k < itN; k++) {
-    t = itT[k];
-    if (t == 0) {
-      if (polyCount < MAX_POLY) drawBuilding(itA[k], wx, wz);
-    } else {
-      if (polyCount < PROP_BUDGET) {
-        if (t == 1) drawTree(itA[k], itB[k], lod);
-        if (t == 2) drawLamp(itA[k], itB[k], 0);
-        if (t == 3) drawLamp(itA[k], itB[k], 1);
-      }
-    }
-  }
-}
-
-
 // ===== 7. PLAYER, CAR AND COLLISIONS =====
 // The player walks, or drives the car. Positions are 24.8, headings 0..1023
 // (forward is (sin, cos), right is (cos, -sin)), speeds 24.8 per 30 Hz step.
@@ -985,8 +896,49 @@ int view = 0;              // 0 chase, 1 far chase, 2 hood
 int lastEnter = 0;
 int lastView = 0;
 
-// 1 when a circle of radius r at (x, z) is in the water, outside the city
-// or inside a building.
+// --- traffic: cars on the street grid, driving on the right ---
+// A street runs along x = k * PITCH and z = k * PITCH, k 1..15. A car goes
+// from crossing (nodeX, nodeZ) in direction 0 +x, 1 +z, 2 -x, 3 -z, npcT
+// along the way, in the lane to the right of the middle.
+#define NCARS 20
+#define NPC_SPD 150
+#define LANE 896
+// how far ahead a car keeps clear, and how wide its lane is
+#define NPC_GAP 2800
+#define NPC_LAT 900
+// steps waited before driving on anyway (two cars meeting at a crossing)
+#define NPC_PATIENCE 60
+int npcNX[20];
+int npcNZ[20];
+int npcDir[20];
+int npcT[20];
+int npcX[20];
+int npcZ[20];
+int npcA[20];
+int npcWait[20];
+int npcPaint[20];
+
+// --- people on the pavements: each walks round one block ---
+#define NPEDS 40
+#define PED_INSET 180
+#define PED_STEP 26
+int walkB[40];
+int walkS[40];
+int walkDir[40];
+int walkX[40];
+int walkZ[40];
+int walkA[40];
+int walkPhase[40];
+int walkShirt[40];
+int pedPhase = 0;
+
+// The block under (x, z).
+int blockAt(int x, int z) {
+  return (z / PITCH) * 16 + x / PITCH;
+}
+
+// 1 when a circle of radius r at (x, z) is in the water, outside the city,
+// inside a building or on one of the cars of the traffic.
 int blocked(int x, int z, int r) {
   int bx;
   int bz;
@@ -999,6 +951,12 @@ int blocked(int x, int z, int r) {
   if (z - r < CITY_MIN) return 1;
   if (z + r > CITY_MAX) return 1;
   if (x - r < PITCH - ROAD_HALF) return 1;   // the waterfront column
+  for (int k = 0; k < NCARS; k++) {
+    bx = (x - npcX[k]) / 64;
+    bz = (z - npcZ[k]) / 64;
+    b = (r + CAR_R) / 64;
+    if (bx * bx + bz * bz < b * b) return 1;
+  }
   for (int k = 0; k < 4; k++) {
     bx = x - r;
     if ((k & 1) == 1) bx = x + r;
@@ -1124,6 +1082,7 @@ void walkStep() {
   if (keyDown(KEY_UP) != 0) step = WALK_STEP;
   if (keyDown(KEY_DOWN) != 0) step = 0 - WALK_STEP / 2;
   if (step != 0) {
+    pedPhase++;
     s = sinT[pedA];
     c = sinT[(pedA + 256) & 1023];
     nx = pedX + (s * step) / 4096;
@@ -1218,6 +1177,236 @@ void placeCamera() {
   camZ = tz - (c * d) / 4096;
 }
 
+// Heading of a street direction.
+int dirA(int d) {
+  if (d == 0) return 256;
+  if (d == 1) return 0;
+  if (d == 2) return 768;
+  return 512;
+}
+
+int dirX(int d) {
+  if (d == 0) return 1;
+  if (d == 2) return 0 - 1;
+  return 0;
+}
+
+int dirZ(int d) {
+  if (d == 1) return 1;
+  if (d == 3) return 0 - 1;
+  return 0;
+}
+
+// 1 when there is a street crossing at (kx, kz).
+int nodeOk(int kx, int kz) {
+  if (kx < 1) return 0;
+  if (kx > 15) return 0;
+  if (kz < 1) return 0;
+  if (kz > 15) return 0;
+  return 1;
+}
+
+// Car k on its way: the lane to the right of the street's middle.
+void placeNpc(int k) {
+  int fx;
+  int fz;
+  fx = dirX(npcDir[k]);
+  fz = dirZ(npcDir[k]);
+  npcX[k] = npcNX[k] * PITCH + fx * npcT[k] + fz * LANE;
+  npcZ[k] = npcNZ[k] * PITCH + fz * npcT[k] - fx * LANE;
+}
+
+// At a crossing: straight on half the time, else left or right; never
+// back the way it came unless it is the only street.
+void chooseDir(int k) {
+  int d;
+  int r;
+  int t;
+  int c;
+  d = npcDir[k];
+  r = rnd(4);
+  for (int i = 0; i < 4; i++) {
+    t = d;
+    c = (r + i) & 3;
+    if (c == 2) t = (d + 1) & 3;
+    if (c == 3) t = (d + 3) & 3;
+    if (nodeOk(npcNX[k] + dirX(t), npcNZ[k] + dirZ(t)) == 1) {
+      npcDir[k] = t;
+      return;
+    }
+  }
+  npcDir[k] = (d + 2) & 3;
+}
+
+// 1 when (ox, oz) is in car k's lane, closer ahead than NPC_GAP.
+int inFront(int k, int ox, int oz) {
+  int vx;
+  int vz;
+  int fx;
+  int fz;
+  int ahead;
+  int side;
+  fx = dirX(npcDir[k]);
+  fz = dirZ(npcDir[k]);
+  vx = ox - npcX[k];
+  vz = oz - npcZ[k];
+  ahead = vx * fx + vz * fz;
+  side = vx * fz - vz * fx;
+  if (side < 0) side = 0 - side;
+  if (ahead <= 0) return 0;
+  if (ahead >= NPC_GAP) return 0;
+  if (side >= NPC_LAT) return 0;
+  return 1;
+}
+
+// One step of the traffic: a car waits while something is in front of it
+// (another car, the player's car, the player on foot), turning toward its
+// street's heading as it goes.
+void trafficStep() {
+  int stop;
+  int diff;
+  for (int k = 0; k < NCARS; k++) {
+    stop = inFront(k, carX, carZ);
+    if (driving == 0) {
+      if (inFront(k, pedX, pedZ) == 1) stop = 1;
+    }
+    for (int j = 0; j < NCARS; j++) {
+      if (j != k) {
+        if (inFront(k, npcX[j], npcZ[j]) == 1) stop = 1;
+      }
+    }
+    if (stop == 1) {
+      npcWait[k] = npcWait[k] + 1;
+      if (npcWait[k] > NPC_PATIENCE) stop = 0;
+    }
+    if (stop == 0) {
+      npcWait[k] = 0;
+      npcT[k] = npcT[k] + NPC_SPD;
+      if (npcT[k] >= PITCH) {
+        npcT[k] = npcT[k] - PITCH;
+        npcNX[k] = npcNX[k] + dirX(npcDir[k]);
+        npcNZ[k] = npcNZ[k] + dirZ(npcDir[k]);
+        chooseDir(k);
+      }
+      placeNpc(k);
+    }
+    diff = ((dirA(npcDir[k]) - npcA[k] + 1536) & 1023) - 512;
+    if (diff > 48) diff = 48;
+    if (diff < 0 - 48) diff = 0 - 48;
+    npcA[k] = wrapA(npcA[k] + diff);
+  }
+}
+
+// Person k: its place on the loop round its block's pavement.
+void placeWalker(int k) {
+  int x0;
+  int z0;
+  int w;
+  int s;
+  int a;
+  w = PAD - 2 * PED_INSET;
+  x0 = (walkB[k] % 16) * PITCH + ROAD_HALF + PED_INSET;
+  z0 = (walkB[k] / 16) * PITCH + ROAD_HALF + PED_INSET;
+  s = walkS[k];
+  if (s < w) {
+    walkX[k] = x0 + s;
+    walkZ[k] = z0;
+    a = 256;
+  } else {
+    if (s < 2 * w) {
+      walkX[k] = x0 + w;
+      walkZ[k] = z0 + s - w;
+      a = 0;
+    } else {
+      if (s < 3 * w) {
+        walkX[k] = x0 + w - (s - 2 * w);
+        walkZ[k] = z0 + w;
+        a = 768;
+      } else {
+        walkX[k] = x0;
+        walkZ[k] = z0 + w - (s - 3 * w);
+        a = 512;
+      }
+    }
+  }
+  if (walkDir[k] < 0) a = a + 512;
+  walkA[k] = wrapA(a);
+}
+
+// One step of the people: on round their loop, now and then turning back.
+void walkersStep() {
+  int w4;
+  w4 = 4 * (PAD - 2 * PED_INSET);
+  for (int k = 0; k < NPEDS; k++) {
+    walkS[k] = walkS[k] + walkDir[k] * PED_STEP;
+    if (walkS[k] < 0) walkS[k] = walkS[k] + w4;
+    if (walkS[k] >= w4) walkS[k] = walkS[k] - w4;
+    if (rnd(500) == 0) walkDir[k] = 0 - walkDir[k];
+    walkPhase[k] = walkPhase[k] + 1;
+    placeWalker(k);
+  }
+}
+
+int carPaints[8];
+int shirtPaints[8];
+
+// The cars and people at the start, from the city's seed.
+void initActors() {
+  int b;
+  carPaints[0] = 20;
+  carPaints[1] = 5;
+  carPaints[2] = 19;
+  carPaints[3] = 12;
+  carPaints[4] = 7;
+  carPaints[5] = 16;
+  carPaints[6] = 15;
+  carPaints[7] = 14;
+  shirtPaints[0] = 22;
+  shirtPaints[1] = 20;
+  shirtPaints[2] = 7;
+  shirtPaints[3] = 15;
+  shirtPaints[4] = 12;
+  shirtPaints[5] = 19;
+  shirtPaints[6] = 13;
+  shirtPaints[7] = 14;
+  // half of them within three blocks of the start, the others anywhere
+  for (int k = 0; k < NCARS; k++) {
+    npcNX[k] = 1 + rnd(15);
+    npcNZ[k] = 1 + rnd(15);
+    if (k < NCARS / 2) {
+      npcNX[k] = carX / PITCH - 3 + rnd(7);
+      npcNZ[k] = carZ / PITCH - 3 + rnd(7);
+      if (npcNX[k] < 1) npcNX[k] = 1;
+      if (npcNZ[k] < 1) npcNZ[k] = 1;
+      if (npcNX[k] > 15) npcNX[k] = 15;
+      if (npcNZ[k] > 15) npcNZ[k] = 15;
+    }
+    npcDir[k] = rnd(4);
+    if (nodeOk(npcNX[k] + dirX(npcDir[k]), npcNZ[k] + dirZ(npcDir[k])) == 0) npcDir[k] = (npcDir[k] + 2) & 3;
+    npcT[k] = rnd(PITCH);
+    npcWait[k] = 0;
+    npcPaint[k] = carPaints[rnd(8)];
+    placeNpc(k);
+    npcA[k] = dirA(npcDir[k]);
+  }
+  for (int k = 0; k < NPEDS; k++) {
+    b = 17 + rnd(222);
+    if (k < NPEDS / 2) {
+      b = blockAt(carX, carZ) + (rnd(7) - 3) * 16 + rnd(7) - 3;
+      if (b < 17) b = 17;
+      if (b > 238) b = 238;
+    }
+    if (blkType[b] == 2) b = b + 1;
+    walkB[k] = b;
+    walkS[k] = rnd(4 * (PAD - 2 * PED_INSET));
+    walkDir[k] = 1;
+    if (rnd(2) == 0) walkDir[k] = 0 - 1;
+    walkPhase[k] = rnd(20);
+    walkShirt[k] = shirtPaints[rnd(8)];
+    placeWalker(k);
+  }
+}
+
 // One 30 Hz step: the keys pressed once (get in or out, the view), then
 // the car or the person, then the camera.
 void update() {
@@ -1241,6 +1430,8 @@ void update() {
   } else {
     walkStep();
   }
+  trafficStep();
+  walkersStep();
   placeCamera();
 }
 
@@ -1286,10 +1477,23 @@ void drawOBox(int cx, int cz, int a, int x0, int x1, int z0, int z1) {
 int boxOrd[40];
 int boxD[40];
 
+int boxZ0[40];
+int boxZ1[40];
+
+// Swing of the legs and arms, 24.8, from a walking phase (a triangle wave).
+int swingOf(int phase) {
+  int p;
+  p = phase % 20;
+  if (p >= 10) p = 20 - p;
+  return (p - 5) * 15;
+}
+
 // A mesh (n boxes of 7 values) at (cx, cz) with heading a, its boxes drawn
 // far to near: by the distance from the camera to their centres, height
 // included, in quarter units (the parts of a mesh touch and stack).
-void drawMesh(int *m, int n, int cx, int cz, int a) {
+// paint >= 0 replaces colours 20 (car paint) and 22 (shirt); swing moves
+// the person's legs (boxes 0 to 3) and arms (6 to 9) forward and back.
+void drawMesh(int *m, int n, int cx, int cz, int a, int paint, int swing) {
   int s;
   int c;
   int mx;
@@ -1303,8 +1507,20 @@ void drawMesh(int *m, int n, int cx, int cz, int a) {
   s = sinT[a];
   c = sinT[(a + 256) & 1023];
   for (int i = 0; i < n; i++) {
+    boxZ0[i] = m[i * 7 + 2];
+    boxZ1[i] = m[i * 7 + 3];
+    if (swing != 0) {
+      k = 0;
+      if (i < 4) k = 1;
+      if (i >= 6) {
+        if (i < 10) k = 0 - 1;
+      }
+      if (m[i * 7] < 0) k = 0 - k;
+      boxZ0[i] = boxZ0[i] + k * swing;
+      boxZ1[i] = boxZ1[i] + k * swing;
+    }
     mx = (m[i * 7] + m[i * 7 + 1]) / 2;
-    mz = (m[i * 7 + 2] + m[i * 7 + 3]) / 2;
+    mz = (boxZ0[i] + boxZ1[i]) / 2;
     dx = (cx + (mx * c + mz * s) / 4096 - camX) / 64;
     dz = (cz + (mz * c - mx * s) / 4096 - camZ) / 64;
     dy = ((m[i * 7 + 4] + m[i * 7 + 5]) / 2 - camH) / 64;
@@ -1331,29 +1547,173 @@ void drawMesh(int *m, int n, int cx, int cz, int a) {
     curY0 = m[k + 4];
     curY1 = m[k + 5];
     curCi = m[k + 6];
-    drawOBox(cx, cz, a, m[k], m[k + 1], m[k + 2], m[k + 3]);
+    if (paint >= 0) {
+      if (curCi == 20) curCi = paint;
+      if (curCi == 22) curCi = paint;
+    }
+    drawOBox(cx, cz, a, m[k], m[k + 1], boxZ0[boxOrd[k2]], boxZ1[boxOrd[k2]]);
   }
 }
 
-// After the city: the person and the car, the farther one first.
-void drawActors() {
-  if (view == 2) {
-    if (driving == 1) return;   // from the bonnet the car is not seen
+// --- per-block object list, far to near ---
+// 0 building, 1 tree, 2 lamp facing -z, 3 lamp facing +z, 4 a car of the
+// traffic, 5 a person walking, 6 the player's car, 7 the player on foot
+int itT[48];
+int itA[48];
+int itB[48];
+int itD[48];
+int itN = 0;
+
+// Inserts an object into the block list, keeping it sorted far to near.
+void addItem(int t, int a, int b, int d) {
+  int k;
+  int go;
+  if (itN >= 48) return;
+  k = itN;
+  go = 1;
+  while (go == 1) {
+    go = 0;
+    if (k > 0) {
+      if (itD[k - 1] < d) {
+        itD[k] = itD[k - 1];
+        itT[k] = itT[k - 1];
+        itA[k] = itA[k - 1];
+        itB[k] = itB[k - 1];
+        k--;
+        go = 1;
+      }
+    }
   }
-  if (driving == 1) {
-    drawMesh(carBox, carN, carX, carZ, carA);
-    return;
+  itD[k] = d;
+  itT[k] = t;
+  itA[k] = a;
+  itB[k] = b;
+  itN++;
+}
+
+// The cars and the people in block b, into its list: the full mesh near the
+// camera, a few boxes farther, nothing past the props' distance.
+void addActors(int b) {
+  int d;
+  for (int k = 0; k < NCARS; k++) {
+    if (blockAt(npcX[k], npcZ[k]) == b) {
+      d = dist2(npcX[k], npcZ[k]);
+      if (d < D2_PROPS_SIMPLE) addItem(4, k, 0, d);
+    }
   }
-  if (dist2(carX, carZ) > dist2(pedX, pedZ)) {
-    drawMesh(carBox, carN, carX, carZ, carA);
-    drawMesh(pedBox, pedN, pedX, pedZ, pedA);
-  } else {
-    drawMesh(pedBox, pedN, pedX, pedZ, pedA);
-    drawMesh(carBox, carN, carX, carZ, carA);
+  for (int k = 0; k < NPEDS; k++) {
+    if (walkB[k] == b) {
+      d = dist2(walkX[k], walkZ[k]);
+      if (d < D2_PROPS_FULL) addItem(5, k, 0, d);
+    }
+  }
+  if (blockAt(carX, carZ) == b) {
+    // from the bonnet, the player's own car is not drawn
+    d = 1;
+    if (view == 2) {
+      if (driving == 1) d = 0;
+    }
+    if (d == 1) addItem(6, 0, 0, dist2(carX, carZ));
+  }
+  if (driving == 0) {
+    if (blockAt(pedX, pedZ) == b) addItem(7, 0, 0, dist2(pedX, pedZ));
   }
 }
 
-// One full frame: background, all ground, then all objects far to near, then the car and the person.
+// Buildings, trees, lamps, cars and people of one block, sorted by distance
+// and drawn far to near.
+void drawBlockObjects(int b, int d) {
+  int ix;
+  int iz;
+  int wx;
+  int wz;
+  int t;
+  int i;
+  int x;
+  int z;
+  int lod;
+  int j;
+  t = blkType[b];
+  ix = b % 16;
+  iz = b / 16;
+  wx = ix * PITCH + ROAD_HALF;
+  wz = iz * PITCH + ROAD_HALF;
+  itN = 0;
+  addActors(b);
+  lod = 2;
+  if (d < D2_PROPS_SIMPLE) lod = 1;
+  if (d < D2_PROPS_FULL) lod = 0;
+  if (t == 2) {
+    lod = 3;
+  }
+  if (t == 1) {
+    if (lod < 2) {
+      for (int j = 0; j < 6; j++) {
+        x = wx + 1280 + (hash2(b, j) % 7680);
+        z = wz + 1280 + (hash2(b, j + 8) % 7680);
+        addItem(1, x, z, dist2(x, z));
+      }
+    }
+  }
+  if (t == 0) {
+    for (int l = 0; l < 4; l++) {
+      i = b * 4 + l;
+      if (lotH[i] > 0) {
+        nearestOnLot(i, wx, wz);
+        addItem(0, i, 0, dist2(nearX, nearZ));
+      }
+    }
+    if (lod < 2) {
+      for (int j = 0; j < 4; j++) {
+        x = wx + 384;
+        if (j > 1) x = wx + PAD - 384;
+        z = wz + 3072;
+        if ((j & 1) == 1) z = wz + 7168;
+        addItem(1, x, z, dist2(x, z));
+      }
+    }
+    if (lod == 0) {
+      addItem(2, wx + 5120, wz + 307, dist2(wx + 5120, wz + 307));
+      addItem(3, wx + 5120, wz + PAD - 307, dist2(wx + 5120, wz + PAD - 307));
+    }
+  }
+  for (int k = 0; k < itN; k++) {
+    t = itT[k];
+    if (t == 0) {
+      if (polyCount < MAX_POLY) drawBuilding(itA[k], wx, wz);
+    }
+    if (t >= 1) {
+      if (t <= 3) {
+        if (polyCount < PROP_BUDGET) {
+          if (t == 1) drawTree(itA[k], itB[k], lod);
+          if (t == 2) drawLamp(itA[k], itB[k], 0);
+          if (t == 3) drawLamp(itA[k], itB[k], 1);
+        }
+      }
+    }
+    if (t == 4) {
+      j = itA[k];
+      if (itD[k] < 900) {
+        drawMesh(carBox, carN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
+      } else {
+        drawMesh(carLod, carLodN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
+      }
+    }
+    if (t == 5) {
+      j = itA[k];
+      if (itD[k] < 225) {
+        drawMesh(pedBox, pedN, walkX[j], walkZ[j], walkA[j], walkShirt[j], swingOf(walkPhase[j]));
+      } else {
+        drawMesh(pedLod, pedLodN, walkX[j], walkZ[j], walkA[j], walkShirt[j], 0);
+      }
+    }
+    if (t == 6) drawMesh(carBox, carN, carX, carZ, carA, 0 - 1, 0);
+    if (t == 7) drawMesh(pedBox, pedN, pedX, pedZ, pedA, 0 - 1, swingOf(pedPhase));
+  }
+}
+
+
+// One full frame: background, all ground, then all objects, cars and people far to near.
 void render() {
   polyCount = 0;
   sinA = sinT[camA];
@@ -1362,7 +1722,6 @@ void render() {
   collectBlocks();
   for (int k = 0; k < visN; k++) drawGround(visI[k], visD[k]);
   for (int k = 0; k < visN; k++) drawBlockObjects(visI[k], visD[k]);
-  drawActors();
 }
 
 // ===== 11. MAIN LOOP =====
@@ -1374,6 +1733,7 @@ int main() {
   int run;
   if (loadAssets() == 0) return 1;
   genCity();
+  initActors();
   placeCamera();
   initRows();
   last = millis();
