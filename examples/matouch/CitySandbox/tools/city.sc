@@ -2833,7 +2833,6 @@ void titleScreen() {
     } else {
       if (seenE == 1) return;
     }
-    if (keyDown(KEY_QUIT) != 0) return;
   }
 }
 
@@ -2883,7 +2882,12 @@ int main() {
     }
     render();
     present();
-    if (keyDown(KEY_QUIT) != 0) run = 0;
+    // Escape: back to the title screen (to change the screen), then on
+    if (keyDown(KEY_QUIT) != 0) {
+      titleScreen();
+      last = millis();
+      acc = 0;
+    }
   }
   return 0;
 }

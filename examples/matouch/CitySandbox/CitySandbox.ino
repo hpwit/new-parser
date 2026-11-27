@@ -7,13 +7,13 @@
 // Keys: on the title screen up/down choose full screen or the window,
 // Enter starts. Then arrows (or Z Q S D) drive or walk, Space brakes,
 // Enter (or E) gets in or out of the car, V changes the view, W adds a
-// wanted star (to try the police), Escape quits.
+// wanted star (to try the police), Escape goes back to the title screen.
 //
-// The first 240 frames are a scripted tour on a simulated clock (50 ms a
-// frame): 40 frames of title (the window, then full screen again), then the
-// city with two stars at the start (the police chase it), printing a
-// checksum of every 10th frame: the same as the script compiled as C on a
-// computer. Then the real clock and the keyboard.
+// Built with RUN_TOUR=1, the first 240 frames are a scripted tour on a
+// simulated clock (50 ms a frame): 40 frames of title (the window, then full
+// screen again), then the city with two stars at the start (the police
+// chase it), printing a checksum of every 10th frame: the same as the
+// script compiled as C on a computer. Then the real clock and the keyboard.
 // Every 100 frames: frames per second, script and present() times.
 #include "Matouch7.h"
 #include "keyboard.h"
@@ -54,8 +54,12 @@ void release_char(key_return k) {
   keyIsDown[keyLetter(k)] = 0;
 }
 
-// --- the scripted tour, then real time ---
-#define TOUR_FRAMES 240
+// --- the scripted tour (only when built with RUN_TOUR=1), then real time ---
+// arduino-cli compile --build-property compiler.cpp.extra_flags=-DRUN_TOUR=1 ...
+#ifndef RUN_TOUR
+#define RUN_TOUR 0
+#endif
+#define TOUR_FRAMES (RUN_TOUR ? 240 : 0)
 static int frameNo = 0;
 static uint32_t realStart = 0;
 
@@ -117,8 +121,10 @@ void scriptSetWindow(int on) {
   backdrops = 2;  // both frame buffers need the new surroundings
 }
 
+// RGB565 with its two bytes swapped, as the panel wants it
 static inline uint16_t rgb565(int r, int g, int b) {
-  return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+  uint16_t v = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+  return (v << 8) | (v >> 8);
 }
 
 // Around the window: dark purple fading to black, a pink frame and a cyan one.
@@ -166,17 +172,24 @@ void scriptPresent() {
     backdrops--;
   }
   // 400x240 into the 800-pixel-wide frame buffer: its top left corner shown
-  // at pixel size 2, or its middle at pixel size 1
+  // at pixel size 2, or its middle at pixel size 1. The script draws plain
+  // RGB565; the panel wants each pixel's two bytes swapped: two at a time.
   uint16_t *dst = windowed ? frame_buffer + 120 * 800 + 200 : frame_buffer;
-  for (int y = 0; y < 240; y++)
-    memcpy(dst + y * 800, fb + y * 400, 400 * 2);
+  for (int y = 0; y < 240; y++) {
+    const uint32_t *src = (const uint32_t *)(fb + y * 400);
+    uint32_t *out = (uint32_t *)(dst + y * 800);
+    for (int x = 0; x < 200; x++) {
+      uint32_t w = src[x];
+      out[x] = ((w & 0x00FF00FFu) << 8) | ((w >> 8) & 0x00FF00FFu);
+    }
+  }
   lcd._bus_instance.show();
   frame_buffer = (uint16_t *)lcd._bus_instance._frame_buffer;
   lcd._panel_instance.resetWriteBuffer();
   frameNo++;
   if (frameNo == TOUR_FRAMES) {
     realStart = millis();
-    printf("tour done: arrows (or Z Q S D), Space brakes, Enter gets in or out, V the view, W a star, Escape quits\n");
+    printf("tour done: arrows (or Z Q S D), Space brakes, Enter gets in or out, V the view, W a star, Escape the title screen\n");
   }
   uint32_t t1 = micros();
   presentSum += t1 - t0;
@@ -3026,7 +3039,6 @@ void titleScreen() {
     } else {
       if (seenE == 1) return;
     }
-    if (keyDown(KEY_QUIT) != 0) return;
   }
 }
 
@@ -3076,7 +3088,12 @@ int main() {
     }
     render();
     present();
-    if (keyDown(KEY_QUIT) != 0) run = 0;
+    // Escape: back to the title screen (to change the screen), then on
+    if (keyDown(KEY_QUIT) != 0) {
+      titleScreen();
+      last = millis();
+      acc = 0;
+    }
   }
   return 0;
 }
