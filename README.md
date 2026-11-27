@@ -1620,7 +1620,30 @@ Anything else compiles as an ordinary loop, so trying costs nothing. These, for 
 | `out[x] = (a[x] + b[x]) / 2;` | division (and multiplication: `a[x] * 2`) |
 | `if (a[x] > 128) out[x] = 1;` | an `if`: write `out[x] = a[x] > 128;` when 0 is fine elsewhere |
 | `big[x] = a[x] + 1;` with `int big[100]` | not a byte array |
-| `for (int x = 0; x < n; x++)` | the bound is a variable, not a number |
+| `for (int x = 0; x < n; x++)` | the bound is a variable, not a number (except for the fills below) |
+
+### Filling 16-bit arrays
+
+A second shape fills a `uint16_t` (or `s_int`) array with one value, the span fill of a polygon or a rectangle, with variable bounds this time:
+
+```c
+uint16_t buf[16000];
+
+// a span of pixels: o is the row's first pixel, x0 to x1 - 1 the columns
+for (int x = x0; x < x1; x++)
+   buf[o + x] = colour;
+```
+
+`x0`, `x1`, `o` and the value can each be a variable, a number, or a variable plus or minus a number; the index is `x`, `o + x` or `x + o`. The array can be the script's own or a bound one (`external uint16_t fb[96000];`). The loop becomes a call that stores single pixels until the address is a multiple of 16, then 8 pixels per `ee.vst.128.ip`, then single pixels again; the value is the same as the ordinary loop's, truncated to 16 bits.
+
+How much it gains depends on where the array is. On the matouch board, 592,000 pixels in spans of 37:
+
+| | Ordinary loop | Vectorized |
+|:----|----:|----:|
+| A 32 KB array in internal RAM | 14.96 ms | **8.03 ms** |
+| A 192 KB bound array in PSRAM | 55.0 ms | 55.0 ms |
+
+PSRAM takes about 35 MB/s of writes however they are made, so a frame buffer there gains nothing: what helps then is writing fewer pixels.
 
 ## Writing a loop so that it vectorizes: the game of life
 
