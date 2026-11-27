@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Compiles tools/city.sc as C on this computer with the sketch's scripted
-tour (200 frames, a simulated clock of 50 ms a frame) and prints the checksum
+tour (240 frames: 40 of title, a simulated clock of 50 ms a frame) and prints the checksum
 of every 10th frame: CitySandbox.ino prints the same on the board.
 
   ./check_ref.py            # checksums
-  ./check_ref.py --png      # also city_59.png ... from four frames (needs Pillow)
+  ./check_ref.py --png      # also city_9.png ... from eight frames (needs Pillow)
 """
 import os, re, subprocess, sys, tempfile
 
@@ -20,9 +20,11 @@ static int frameNo = 0;
 static unsigned char wadBytes[8192];
 static int wadSize;
 int millis() { return frameNo * 50; }
-#define TOUR 200
-/* the same tour as CitySandbox.ino's tourKey() */
+#define TOUR 240
+/* the same tour as CitySandbox.ino's tourKey(): 40 frames of title, then the city */
 static int tourKey(int f, int key) {
+  if (f < 40) return (key == 4 && f == 10) || (key == 3 && f == 20) || (key == 6 && (f == 38 || f == 39));
+  f -= 40;
   switch (key) {
   case 3: return f < 90 || (f >= 106 && f < 130) || f >= 180;
   case 2: return f >= 60 && f < 90;
@@ -35,6 +37,7 @@ static int tourKey(int f, int key) {
   return 0;
 }
 int keyDown(int key) { return frameNo < TOUR ? tourKey(frameNo, key) : 0; }
+void setWindow(int on) { }
 int wadLoad(uint8_t *dst, int maxlen) { int n = wadSize < maxlen ? wadSize : maxlen; memcpy(dst, wadBytes, n); return n; }
 static int dumpFrames = 0;
 void present() {
@@ -42,7 +45,7 @@ void present() {
   const uint8_t *b = (const uint8_t *)fb;
   for (int i = 0; i < 192000; i++) h = (h ^ b[i]) * 16777619u;
   if (frameNo % 10 == 9) printf("FRAME %d checksum %08x\n", frameNo, h);
-  if (dumpFrames && (frameNo == 59 || frameNo == 120 || frameNo == 170 || frameNo == 199)) {
+  if (dumpFrames && (frameNo == 9 || frameNo == 19 || frameNo == 29 || frameNo == 39 || frameNo == 99 || frameNo == 160 || frameNo == 210 || frameNo == 239)) {
     char n[32]; sprintf(n, "city_%d.raw", frameNo); FILE *o = fopen(n, "wb"); fwrite(fb, 2, 96000, o); fclose(o);
   }
   frameNo++;
@@ -70,7 +73,7 @@ print(out, end="")
 if png:
     from PIL import Image
     import struct
-    for n in (59, 120, 170, 199):
+    for n in (9, 19, 29, 39, 99, 160, 210, 239):
         px = struct.unpack("<96000H", open(os.path.join(work, "city_%d.raw" % n), "rb").read())
         im = Image.new("RGB", (400, 240))
         im.putdata([(((p >> 11) & 31) * 255 // 31, ((p >> 5) & 63) * 255 // 63, (p & 31) * 255 // 31) for p in px])

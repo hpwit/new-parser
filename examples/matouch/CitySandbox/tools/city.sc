@@ -18,7 +18,8 @@ external uint16_t fb[96000];                      // 400x240 render target, row-
 external void present();                          // upscale fb 2x and show it
 external int millis();                            // milliseconds since boot
 external int keyDown(int key);                    // 1 while the key is held
-external int wadLoad(uint8_t *dst, int maxlen);   // reads city.wad, returns byte count
+external int wadLoad(uint8_t *dst, int maxlen);
+external void setWindow(int on);   // reads city.wad, returns byte count
 
 // ===== 1. CONSTANTS =====
 // --- screen and camera ---
@@ -56,6 +57,9 @@ external int wadLoad(uint8_t *dst, int maxlen);   // reads city.wad, returns byt
 #define BAND_BUDGET 330
 #define WIN_BUDGET 540
 #define PROP_BUDGET 580
+// shop fronts are drawn nearer than 63 units, whole and with their terraces nearer than 40
+#define D2_SHOP 4000
+#define D2_SHOP_NEAR 1600
 #define MAX_POLY 600
 // --- controls and timing ---
 #define KEY_LEFT 1
@@ -70,15 +74,16 @@ external int wadLoad(uint8_t *dst, int maxlen);   // reads city.wad, returns byt
 #define TURN_STEP 10
 #define MOVE_STEP 307
 #define TICK_MS 33
-#define WAD_MAX 8192
+#define WAD_MAX 12288
 
 // ===== 2. MATHS TABLES AND ASSETS (filled from the WAD) =====
-uint8_t wad[8192];
+uint8_t wad[12288];
 int sinT[1024];
-uint16_t pal[960];
+uint16_t pal[1600];
 uint16_t skyC[8];
 uint8_t patT[64];
 uint16_t rowCol[240];
+uint8_t font[448];      // 5x7 characters 32..95, from the WAD
 
 int camX = 111462;
 int camZ = 82944;
@@ -154,6 +159,10 @@ int copBox[280];
 int copN = 0;
 int copLod[56];
 int copLodN = 0;
+int womBox[280];
+int womN = 0;
+int womLod[56];
+int womLodN = 0;
 
 // Signed 16-bit read from the WAD buffer.
 int rds16(int o) {
@@ -183,7 +192,7 @@ int loadAssets() {
   if (wad[1] != 87) return 0;
   o = findLump(80, 65, 76, 69);
   if (o == 0) return 0;
-  for (int i = 0; i < 960; i++) pal[i] = rd16(o + i * 2);
+  for (int i = 0; i < 1600; i++) pal[i] = rd16(o + i * 2);
   o = findLump(83, 75, 89, 67);
   if (o == 0) return 0;
   for (int i = 0; i < 8; i++) skyC[i] = rd16(o + i * 2);
@@ -215,6 +224,15 @@ int loadAssets() {
   o = findLump(67, 79, 80, 76);
   if (o == 0) return 0;
   copLodN = loadMesh(o, copLod);
+  o = findLump(70, 79, 78, 84);
+  if (o == 0) return 0;
+  for (int i = 0; i < 448; i++) font[i] = wad[o + i];
+  o = findLump(87, 79, 77, 77);
+  if (o == 0) return 0;
+  womN = loadMesh(o, womBox);
+  o = findLump(87, 79, 77, 76);
+  if (o == 0) return 0;
+  womLodN = loadMesh(o, womLod);
   return 1;
 }
 
@@ -279,6 +297,31 @@ void genCity() {
         lotP[i] = rnd(8);
       }
     }
+  }
+}
+
+// --- shops and cafés on the ground floors ---
+// Some buildings have a shop (window, door, sign, awning) or a café (a
+// striped awning and a terrace of tables) on one of their two street sides.
+uint8_t lotShop[1024];  // 0 none, 1 shop, 2 café
+uint8_t lotSide[1024];  // 0 the side facing x, 1 the side facing z
+uint8_t lotAwn[1024];   // awning colour
+
+void initShops() {
+  int h;
+  for (int i = 0; i < 1024; i++) {
+    lotShop[i] = 0;
+    if (blkType[i / 4] == 0) {
+      if (lotH[i] > 0) {
+        h = hash2(i, 71) % 100;
+        if (h < 34) lotShop[i] = 1;
+        if (h >= 34) {
+          if (h < 52) lotShop[i] = 2;
+        }
+      }
+    }
+    lotSide[i] = hash2(i, 72) & 1;
+    lotAwn[i] = 24 + hash2(i, 73) % 4;
   }
 }
 
@@ -942,6 +985,10 @@ int walkZ[40];
 int walkA[40];
 int walkPhase[40];
 int walkShirt[40];
+int walkWoman[40];
+int walkSkin[40];
+int walkHair[40];
+int walkLow[40];
 int pedPhase = 0;
 
 // --- the police: up to 4 cars, one per wanted star ---
@@ -1408,6 +1455,41 @@ void walkersStep() {
 int carPaints[8];
 int shirtPaints[8];
 
+// A walker's looks, from a random sequence of their own (the city's stays as
+// it was): man or woman, skin, hair, trousers or skirt (the top is walkShirt).
+int lookSeed = 4242;
+
+int lookRnd(int n) {
+  lookSeed = lookSeed * 1103515245 + 12345;
+  return ((lookSeed / 65536) & 32767) % n;
+}
+
+void dressWalker(int k) {
+  int h;
+  walkWoman[k] = lookRnd(2);
+  h = lookRnd(5);
+  walkSkin[k] = 23;
+  if (h > 0) walkSkin[k] = 31 + h;
+  h = lookRnd(6);
+  walkHair[k] = 29;
+  if (h > 0) walkHair[k] = 35 + h;
+  if (h == 5) {
+    if (walkWoman[k] == 0) walkHair[k] = walkSkin[k];
+  }
+  h = lookRnd(6);
+  if (walkWoman[k] == 0) {
+    walkLow[k] = 28;
+    if (h == 1) walkLow[k] = 19;
+    if (h == 2) walkLow[k] = 8;
+    if (h == 3) walkLow[k] = 15;
+    if (h == 4) walkLow[k] = 31;
+  } else {
+    walkLow[k] = 24 + h % 4;
+    if (h == 4) walkLow[k] = 19;
+    if (h == 5) walkLow[k] = 28;
+  }
+}
+
 // The cars and people at the start, from the city's seed.
 void initActors() {
   int b;
@@ -1461,6 +1543,7 @@ void initActors() {
     if (rnd(2) == 0) walkDir[k] = 0 - 1;
     walkPhase[k] = rnd(20);
     walkShirt[k] = shirtPaints[rnd(8)];
+    dressWalker(k);
     placeWalker(k);
   }
 }
@@ -1779,6 +1862,7 @@ int boxD[40];
 int boxZ0[40];
 int boxZ1[40];
 int lightSwap = 0;
+uint8_t recol[40];      // colour substitutions for the next meshes, identity by default
 
 // Swing of the legs and arms, 24.8, from a walking phase (a triangle wave).
 int swingOf(int phase) {
@@ -1851,6 +1935,7 @@ void drawMesh(int *m, int n, int cx, int cz, int a, int paint, int swing) {
       if (curCi == 20) curCi = paint;
       if (curCi == 22) curCi = paint;
     }
+    curCi = recol[curCi];
     // a police car's light bar: red and blue change places
     if (lightSwap == 1) {
       if (curCi == 21) {
@@ -1863,21 +1948,182 @@ void drawMesh(int *m, int n, int cx, int cz, int a, int paint, int swing) {
   }
 }
 
+// --- shop fronts and café terraces ---
+// A lot's street side as a frame: shFace is the wall's x (axis 0) or z (axis 1),
+// shOut the outward sign, shA0 and shLen the wall's extent along it, shGap the
+// distance from the wall to the outer edge of the pavement, all 24.8.
+int shAxis = 0;
+int shFace = 0;
+int shOut = 0;
+int shA0 = 0;
+int shLen = 0;
+int shGap = 0;
+
+void setShop(int i, int wx, int wz) {
+  int l;
+  l = i % 4;
+  shAxis = lotSide[i];
+  if (shAxis == 0) {
+    shOut = 0 - 1;
+    shFace = wx + lotX0[i] * 256;
+    shGap = lotX0[i] * 256;
+    if ((l & 1) == 1) {
+      shOut = 1;
+      shFace = wx + lotX1[i] * 256;
+      shGap = PAD - lotX1[i] * 256;
+    }
+    shA0 = wz + lotZ0[i] * 256;
+    shLen = (lotZ1[i] - lotZ0[i]) * 256;
+  } else {
+    shOut = 0 - 1;
+    shFace = wz + lotZ0[i] * 256;
+    shGap = lotZ0[i] * 256;
+    if (l >= 2) {
+      shOut = 1;
+      shFace = wz + lotZ1[i] * 256;
+      shGap = PAD - lotZ1[i] * 256;
+    }
+    shA0 = wx + lotX0[i] * 256;
+    shLen = (lotX1[i] - lotX0[i]) * 256;
+  }
+}
+
+// 1 when the camera is on the street side of the shop's wall.
+int shopSeen() {
+  if (shAxis == 0) {
+    if ((camX - shFace) * shOut > 0) return 1;
+  } else {
+    if ((camZ - shFace) * shOut > 0) return 1;
+  }
+  return 0;
+}
+
+// A box in the shop's frame: a0..a1 along the wall, d0..d1 out from it,
+// curY0, curY1 and curCi already set.
+void fbox(int a0, int a1, int d0, int d1) {
+  int p0;
+  int p1;
+  int q;
+  p0 = shFace + shOut * d0;
+  p1 = shFace + shOut * d1;
+  if (p1 < p0) {
+    q = p0;
+    p0 = p1;
+    p1 = q;
+  }
+  if (shAxis == 0) {
+    drawBox(p0, shA0 + a0, p1, shA0 + a1);
+  } else {
+    drawBox(shA0 + a0, p0, shA0 + a1, p1);
+  }
+}
+
+void fboxC(int a0, int a1, int d0, int d1, int y0, int y1) {
+  curY0 = y0;
+  curY1 = y1;
+  fbox(a0, a1, d0, d1);
+}
+
+// The shop front of lot i: plinth, window, door, sign and awning; a café's
+// awning is striped. lod 1 keeps the sign and the awning.
+void drawShop(int i, int wx, int wz, int lod) {
+  int L;
+  int m;
+  int w;
+  int a;
+  setShop(i, wx, wz);
+  curStyle = 0 - 1;
+  L = shLen;
+  m = L / 2;
+  if (lod == 0) {
+    curCi = 19;
+    fboxC(0, L, 0, 30, 0, 90);
+    curCi = 11;
+    fboxC(154, L - 154, 0, 26, 90, 845);
+    curCi = 10;
+    fboxC(m - 205, m + 205, 0, 36, 26, 768);
+  }
+  curCi = lotAwn[i];
+  if (lotShop[i] == 2) curCi = 31;
+  fboxC(77, L - 77, 0, 64, 845, 1126);
+  if (lotShop[i] == 1) {
+    curCi = lotAwn[i];
+    fboxC(154, L - 154, 0, 486, 768, 806);
+    fboxC(154, L - 154, 448, 486, 614, 806);
+    return;
+  }
+  // five stripes, the awning's colour and cream
+  w = (L - 308) / 5;
+  for (int k = 0; k < 5; k++) {
+    curCi = lotAwn[i];
+    if ((k & 1) == 1) curCi = 30;
+    a = 154 + k * w;
+    fboxC(a, a + w, 0, 486, 768, 806);
+    fboxC(a, a + w, 448, 486, 614, 806);
+  }
+}
+
+// Table k of the café on lot i: two chairs either side along the wall, the
+// table, and a parasol when it stands clear of the awning.
+int tabA = 0;
+int tabD = 0;
+
+void tableAt(int i, int k) {
+  tabA = (shLen * (k + 1)) / 4;
+  tabD = shGap - 614;
+}
+
+void drawChair(int a, int dir) {
+  curCi = 31;
+  fboxC(a - 64, a + 64, tabD - 64, tabD + 64, 205, 236);
+  fboxC(a + dir * 64 - 10, a + dir * 64 + 10, tabD - 64, tabD + 64, 236, 448);
+}
+
+void drawTable(int i, int k, int wx, int wz) {
+  int ca;
+  setShop(i, wx, wz);
+  tableAt(i, k);
+  curStyle = 0 - 1;
+  // the camera's place along the wall decides which chair is farther
+  ca = camZ - shA0;
+  if (shAxis == 1) ca = camX - shA0;
+  if (ca < tabA) {
+    drawChair(tabA + 218, 1);
+  } else {
+    drawChair(tabA - 218, 0 - 1);
+  }
+  curCi = 31;
+  fboxC(tabA - 20, tabA + 20, tabD - 20, tabD + 20, 0, 346);
+  curCi = 30;
+  fboxC(tabA - 115, tabA + 115, tabD - 115, tabD + 115, 346, 384);
+  if (ca < tabA) {
+    drawChair(tabA - 218, 0 - 1);
+  } else {
+    drawChair(tabA + 218, 1);
+  }
+  if (tabD > 717) {
+    curCi = 30;
+    fboxC(tabA - 13, tabA + 13, tabD - 13, tabD + 13, 384, 768);
+    curCi = lotAwn[i];
+    fboxC(tabA - 230, tabA + 230, tabD - 230, tabD + 230, 755, 794);
+  }
+}
+
 // --- per-block object list, far to near ---
 // 0 building, 1 tree, 2 lamp facing -z, 3 lamp facing +z, 4 a car of the
 // traffic, 5 a person walking, 6 the player's car, 7 the player on foot,
-// 8 a police car
-int itT[48];
-int itA[48];
-int itB[48];
-int itD[48];
+// 8 a police car, 9 a shop front, 10 a café table
+int itT[64];
+int itA[64];
+int itB[64];
+int itD[64];
 int itN = 0;
 
 // Inserts an object into the block list, keeping it sorted far to near.
 void addItem(int t, int a, int b, int d) {
   int k;
   int go;
-  if (itN >= 48) return;
+  if (itN >= 64) return;
   k = itN;
   go = 1;
   while (go == 1) {
@@ -1950,6 +2196,7 @@ void drawBlockObjects(int b, int d) {
   int z;
   int lod;
   int j;
+  int db;
   t = blkType[b];
   ix = b % 16;
   iz = b / 16;
@@ -1977,7 +2224,43 @@ void drawBlockObjects(int b, int d) {
       i = b * 4 + l;
       if (lotH[i] > 0) {
         nearestOnLot(i, wx, wz);
-        addItem(0, i, 0, dist2(nearX, nearZ));
+        db = dist2(nearX, nearZ);
+        addItem(0, i, 0, db);
+        // a shop front just after its building when its street side is seen,
+        // just before (hidden) when not; its tables likewise
+        if (lotShop[i] > 0) {
+          if (db < D2_SHOP) {
+            setShop(i, wx, wz);
+            j = shopSeen();
+            if (j == 1) {
+              addItem(9, i, 0, db - 1);
+            } else {
+              addItem(9, i, 0, db + 1);
+            }
+            if (lotShop[i] == 2) {
+              if (db < D2_SHOP_NEAR) {
+                for (int k = 0; k < 3; k++) {
+                  tableAt(i, k);
+                  if (shAxis == 0) {
+                    x = shFace + shOut * tabD;
+                    z = shA0 + tabA;
+                  } else {
+                    x = shA0 + tabA;
+                    z = shFace + shOut * tabD;
+                  }
+                  t = dist2(x, z);
+                  if (j == 1) {
+                    if (t > db - 2) t = db - 2;
+                  } else {
+                    if (t < db + 2) t = db + 2;
+                  }
+                  addItem(10, i, k, t);
+                }
+                t = 0;
+              }
+            }
+          }
+        }
       }
     }
     if (lod < 2) {
@@ -2018,11 +2301,35 @@ void drawBlockObjects(int b, int d) {
     }
     if (t == 5) {
       j = itA[k];
-      if (itD[k] < 225) {
-        drawMesh(pedBox, pedN, walkX[j], walkZ[j], walkA[j], walkShirt[j], swingOf(walkPhase[j]));
+      recol[23] = walkSkin[j];
+      recol[28] = walkLow[j];
+      recol[29] = walkHair[j];
+      if (walkWoman[j] == 1) {
+        if (itD[k] < 225) {
+          drawMesh(womBox, womN, walkX[j], walkZ[j], walkA[j], walkShirt[j], swingOf(walkPhase[j]));
+        } else {
+          drawMesh(womLod, womLodN, walkX[j], walkZ[j], walkA[j], walkShirt[j], 0);
+        }
       } else {
-        drawMesh(pedLod, pedLodN, walkX[j], walkZ[j], walkA[j], walkShirt[j], 0);
+        if (itD[k] < 225) {
+          drawMesh(pedBox, pedN, walkX[j], walkZ[j], walkA[j], walkShirt[j], swingOf(walkPhase[j]));
+        } else {
+          drawMesh(pedLod, pedLodN, walkX[j], walkZ[j], walkA[j], walkShirt[j], 0);
+        }
       }
+      recol[23] = 23;
+      recol[28] = 28;
+      recol[29] = 29;
+    }
+    if (t == 9) {
+      if (polyCount < PROP_BUDGET) {
+        j = 1;
+        if (itD[k] < D2_SHOP_NEAR) j = 0;
+        drawShop(itA[k], wx, wz, j);
+      }
+    }
+    if (t == 10) {
+      if (polyCount < PROP_BUDGET) drawTable(itA[k], itB[k], wx, wz);
     }
     if (t == 6) drawMesh(carBox, carN, carX, carZ, carA, 0 - 1, 0);
     if (t == 8) {
@@ -2054,11 +2361,20 @@ void initLetters() {
 }
 
 // A solid rectangle straight into the frame.
+// A filled rectangle, clipped to the screen.
 void hudRect(int x0, int y0, int w, int h, int c) {
   int o;
-  for (int y = y0; y < y0 + h; y++) {
+  int x1;
+  int y1;
+  x1 = x0 + w;
+  y1 = y0 + h;
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 > SCR_W) x1 = SCR_W;
+  if (y1 > SCR_H) y1 = SCR_H;
+  for (int y = y0; y < y1; y++) {
     o = y * SCR_W;
-    for (int x = x0; x < x0 + w; x++) fb[o + x] = c;
+    for (int x = x0; x < x1; x++) fb[o + x] = c;
   }
 }
 
@@ -2101,6 +2417,426 @@ void drawHud() {
   }
 }
 
+
+// ===== 10b. MINIMAP =====
+// A round map at the top left, turned with the camera: up is where you look.
+// One pixel is 1024 (4 units); the player is the arrow in the middle, the
+// police are dots, pinned to the rim when they are farther than the map shows.
+#define MAP_CX 40
+#define MAP_CY 40
+#define MAP_R 34
+int mapW[80];           // half width of each row of the disc, rim included
+uint16_t mapCol[8];     // water, road, pavement, lot, park, building, rim, arrow
+
+int rgb(int r, int g, int b) {
+  return (r / 8) * 2048 + (g / 4) * 32 + b / 8;
+}
+
+int isqrt(int n) {
+  int r;
+  r = 0;
+  while ((r + 1) * (r + 1) <= n) r++;
+  return r;
+}
+
+void initMap() {
+  for (int k = 0; k <= 2 * MAP_R + 4; k++) mapW[k] = isqrt((MAP_R + 2) * (MAP_R + 2) - (k - MAP_R - 2) * (k - MAP_R - 2));
+  mapCol[0] = rgb(40, 80, 150);
+  mapCol[1] = rgb(54, 56, 64);
+  mapCol[2] = rgb(150, 150, 146);
+  mapCol[3] = rgb(104, 104, 102);
+  mapCol[4] = rgb(80, 150, 70);
+  mapCol[5] = rgb(214, 204, 184);
+  mapCol[6] = rgb(20, 20, 26);
+  mapCol[7] = rgb(255, 255, 255);
+}
+
+// What the map shows at (x, z): an index into mapCol.
+int mapAt(int x, int z) {
+  int bx;
+  int bz;
+  int b;
+  int t;
+  int u;
+  int v;
+  int i;
+  if (x < 0) return 0;
+  if (z < 0) return 0;
+  bx = x / PITCH;
+  bz = z / PITCH;
+  if (bx >= CITY_N) return 0;
+  if (bz >= CITY_N) return 0;
+  b = bz * 16 + bx;
+  t = blkType[b];
+  u = x - bx * PITCH - ROAD_HALF;
+  v = z - bz * PITCH - ROAD_HALF;
+  if (t == 2) {
+    if (u < PAD) return 0;
+    return 1;
+  }
+  if (u < 0) return 1;
+  if (v < 0) return 1;
+  if (u >= PAD) return 1;
+  if (v >= PAD) return 1;
+  if (u < 768) return 2;
+  if (v < 768) return 2;
+  if (u >= PAD - 768) return 2;
+  if (v >= PAD - 768) return 2;
+  if (t == 1) return 4;
+  i = b * 4;
+  if (u >= 5120) i = i + 1;
+  if (v >= 5120) i = i + 2;
+  if (lotH[i] == 0) return 3;
+  u = u / 256;
+  v = v / 256;
+  if (u < lotX0[i]) return 3;
+  if (u >= lotX1[i]) return 3;
+  if (v < lotZ0[i]) return 3;
+  if (v >= lotZ1[i]) return 3;
+  return 5;
+}
+
+// A marker on the map for a point of the world, pinned to the rim when outside.
+void mapDot(int wx, int wz, int px, int pz, int c) {
+  int rx;
+  int rz;
+  int dx;
+  int dy;
+  int d;
+  int s;
+  int co;
+  s = sinT[camA];
+  co = sinT[(camA + 256) & 1023];
+  rx = (wx - px) / 64;
+  rz = (wz - pz) / 64;
+  dx = (rx * co - rz * s) / 65536;
+  dy = 0 - (rx * s + rz * co) / 65536;
+  d = isqrt(dx * dx + dy * dy);
+  if (d > MAP_R - 3) {
+    dx = dx * (MAP_R - 3) / d;
+    dy = dy * (MAP_R - 3) / d;
+  }
+  hudRect(MAP_CX + dx - 2, MAP_CY + dy - 2, 4, 4, c);
+}
+
+void drawMap() {
+  int px;
+  int pz;
+  int s;
+  int c;
+  int w;
+  int o;
+  int dy;
+  int x4;
+  int z4;
+  px = plX();
+  pz = plZ();
+  s = sinT[camA];
+  c = sinT[(camA + 256) & 1023];
+  // the rim, two pixels wider than the map
+  for (int k = 0; k <= 2 * MAP_R + 4; k++) {
+    w = mapW[k];
+    o = (MAP_CY - MAP_R - 2 + k) * SCR_W + MAP_CX;
+    for (int x = 0 - w; x <= w; x++) fb[o + x] = mapCol[6];
+  }
+  for (int k = 2; k <= 2 * MAP_R + 2; k++) {
+    w = mapW[k] - 2;
+    dy = k - MAP_R - 2;
+    o = (MAP_CY + dy) * SCR_W + MAP_CX;
+    // world point of the row's first pixel, in quarters of 24.8
+    x4 = px * 4 - w * c - dy * s;
+    z4 = pz * 4 + w * s - dy * c;
+    for (int x = 0 - w; x <= w; x++) {
+      if (x4 < 0) {
+        fb[o + x] = mapCol[0];
+      } else {
+        if (z4 < 0) {
+          fb[o + x] = mapCol[0];
+        } else {
+          fb[o + x] = mapCol[mapAt(x4 / 4, z4 / 4)];
+        }
+      }
+      x4 = x4 + c;
+      z4 = z4 - s;
+    }
+  }
+  if (driving == 0) mapDot(carX, carZ, px, pz, 65504);
+  for (int k = 0; k < NCOPS; k++) {
+    if (copOn[k] == 1) {
+      c = 63488;
+      if (((flash / 4) & 1) == 1) c = 31;
+      mapDot(copX[k], copZ[k], px, pz, c);
+    }
+  }
+  // the player, an arrow pointing up
+  for (int r = 0; r < 8; r++) {
+    w = r / 2;
+    o = (MAP_CY - 4 + r) * SCR_W + MAP_CX;
+    for (int x = 0 - w; x <= w; x++) fb[o + x] = mapCol[7];
+  }
+  fb[(MAP_CY - 4) * SCR_W + MAP_CX] = 63488;
+}
+
+// ===== 10c. TITLE SCREEN =====
+// GT 32 in chrome over a sunset and a neon grid, 1980s television style.
+// Up/down choose full screen (pixel size 2) or a 400x240 window, Enter starts.
+uint8_t txFull[11] = {70, 85, 76, 76, 32, 83, 67, 82, 69, 69, 78};
+uint8_t txWin[6] = {87, 73, 78, 68, 79, 87};
+uint8_t txHelp[31] = {85, 80, 47, 68, 79, 87, 78, 58, 32, 83, 67, 82, 69, 69, 78, 32, 32, 32, 32, 69, 78, 84, 69, 82, 58, 32, 83, 84, 65, 82, 84};
+uint8_t txTag0[18] = {79, 78, 69, 32, 67, 65, 82, 46, 32, 79, 78, 69, 32, 67, 73, 84, 89, 46};
+int strokes[81] = {12, 36, 14, 30, 5, 20, 3, 10, 5, 4, 14, 4, 46, 10, 55, 20, 57, 30, 55, 36, 46, 36, 32, 22, 32, 2, 52, 5, 88, 5, 2, 70, 5, 70, 57, 7, 125, 10, 132, 4, 148, 4, 155, 11, 155, 20, 148, 28, 136, 29, 6, 148, 29, 156, 37, 156, 48, 148, 56, 132, 56, 124, 50, 8, 175, 13, 181, 5, 190, 3, 200, 5, 206, 13, 205, 23, 174, 57, 207, 57, 0};
+#define TM_H 112
+#define TM_FILL 7
+#define TM_OUT 10
+uint8_t tmask[44800];   // the title's letters, 400 x 112: 2 inside a stroke, 1 its outline
+uint16_t rowF[112];     // the colour of each row of the letters
+uint16_t rowO[112];     // and of their outline
+int windowed = 0;
+
+// 5x7 text, sc pixels a dot.
+void drawText(int x, int y, uint8_t *t, int n, int sc, int col) {
+  int g;
+  int bits;
+  for (int i = 0; i < n; i++) {
+    g = (t[i] - 32) * 7;
+    for (int r = 0; r < 7; r++) {
+      bits = font[g + r];
+      for (int cc = 0; cc < 5; cc++) {
+        if (((bits >> (4 - cc)) & 1) == 1) hudRect(x + i * 6 * sc + cc * sc, y + r * sc, sc, sc, col);
+      }
+    }
+  }
+}
+
+// Centred text with a shadow one dot down and right.
+void textMid(int y, uint8_t *t, int n, int sc, int col, int sh) {
+  int x;
+  x = (SCR_W - n * 6 * sc + sc) / 2;
+  drawText(x + sc, y + sc, t, n, sc, sh);
+  drawText(x, y, t, n, sc, col);
+}
+
+// One thick stroke into the mask.
+void maskSeg(int ax, int ay, int bx, int by) {
+  int vx;
+  int vy;
+  int l2;
+  int x0;
+  int x1;
+  int y0;
+  int y1;
+  int qx;
+  int qy;
+  int w;
+  int d;
+  int cr;
+  int m;
+  vx = bx - ax;
+  vy = by - ay;
+  l2 = vx * vx + vy * vy;
+  x0 = ax;
+  x1 = bx;
+  if (bx < ax) {
+    x0 = bx;
+    x1 = ax;
+  }
+  y0 = ay;
+  y1 = by;
+  if (by < ay) {
+    y0 = by;
+    y1 = ay;
+  }
+  x0 = x0 - TM_OUT;
+  x1 = x1 + TM_OUT;
+  y0 = y0 - TM_OUT;
+  y1 = y1 + TM_OUT;
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 > SCR_W - 1) x1 = SCR_W - 1;
+  if (y1 > TM_H - 1) y1 = TM_H - 1;
+  for (int y = y0; y <= y1; y++) {
+    for (int x = x0; x <= x1; x++) {
+      qx = x - ax;
+      qy = y - ay;
+      w = qx * vx + qy * vy;
+      m = 0;
+      if (w <= 0) {
+        d = qx * qx + qy * qy;
+        if (d <= TM_OUT * TM_OUT) m = 1;
+        if (d <= TM_FILL * TM_FILL) m = 2;
+      } else {
+        if (w >= l2) {
+          qx = x - bx;
+          qy = y - by;
+          d = qx * qx + qy * qy;
+          if (d <= TM_OUT * TM_OUT) m = 1;
+          if (d <= TM_FILL * TM_FILL) m = 2;
+        } else {
+          cr = qx * vy - qy * vx;
+          if (cr < 0) cr = 0 - cr;
+          d = cr * cr;
+          if (d <= TM_OUT * TM_OUT * l2) m = 1;
+          if (d <= TM_FILL * TM_FILL * l2) m = 2;
+        }
+      }
+      if (m > tmask[y * SCR_W + x]) tmask[y * SCR_W + x] = m;
+    }
+  }
+}
+
+// Letter units to mask pixels: x1.5, slanted a quarter to the right.
+int tmx(int x, int y) {
+  return 31 + ((x + (60 - y) / 4) * 3) / 2;
+}
+
+int tmy(int y) {
+  return 14 + (y * 3) / 2;
+}
+
+void initTitle() {
+  int i;
+  int n;
+  i = 0;
+  n = strokes[0];
+  while (n > 0) {
+    for (int k = 0; k < n - 1; k++) {
+      maskSeg(tmx(strokes[i + 1 + k * 2], strokes[i + 2 + k * 2]), tmy(strokes[i + 2 + k * 2]),
+              tmx(strokes[i + 3 + k * 2], strokes[i + 4 + k * 2]), tmy(strokes[i + 4 + k * 2]));
+    }
+    i = i + 1 + n * 2;
+    n = strokes[i];
+  }
+}
+
+// Linear mix of two colours given as r g b, t out of 256.
+int mixC(int r0, int g0, int b0, int r1, int g1, int b1, int t) {
+  return rgb(r0 + ((r1 - r0) * t) / 256, g0 + ((g1 - g0) * t) / 256, b0 + ((b1 - b0) * t) / 256);
+}
+
+// The mask onto the screen at row sy, moved by (ox, oy), in rowF / rowO.
+void titleLayer(int sy, int ox, int oy) {
+  int o;
+  int m;
+  int x0;
+  x0 = 0;
+  if (ox < 0) x0 = 0 - ox;
+  for (int y = 0; y < TM_H; y++) {
+    o = (sy + oy + y) * SCR_W + ox;
+    for (int x = x0; x < SCR_W - ox; x++) {
+      m = tmask[y * SCR_W + x];
+      if (m == 2) {
+        fb[o + x] = rowF[y];
+      } else {
+        if (m == 1) fb[o + x] = rowO[y];
+      }
+    }
+  }
+}
+
+void fillRows(int y0, int y1, int c) {
+  hudRect(0, y0, SCR_W, y1 - y0, c);
+}
+
+// A sunset over a neon grid, chrome letters, the screen menu.
+void titleSunset(int t) {
+  int c;
+  int w;
+  int y;
+  int z;
+  for (int yy = 0; yy < 150; yy++) {
+    if (yy < 100) {
+      c = mixC(24, 6, 60, 170, 30, 130, (yy * 256) / 100);
+    } else {
+      c = mixC(170, 30, 130, 255, 140, 60, ((yy - 100) * 256) / 50);
+    }
+    fillRows(yy, yy + 1, c);
+  }
+  for (int yy = 86; yy < 150; yy++) {
+    w = isqrt(64 * 64 - (yy - 150) * (yy - 150));
+    c = mixC(255, 236, 90, 255, 60, 150, ((yy - 86) * 256) / 64);
+    if (yy >= 116) {
+      if ((yy - 116) % 8 < 1 + (yy - 116) / 7) c = 0;
+    }
+    if (c != 0) hudRect(200 - w, yy, w * 2, 1, c);
+  }
+  fillRows(150, 240, rgb(22, 0, 44));
+  fillRows(150, 152, rgb(255, 80, 210));
+  for (int j = 0; j < 24; j++) {
+    z = j * 16 + 16 - (t * 3) % 16;
+    y = 150 + 1600 / z;
+    if (y < 240) fillRows(y, y + 1, rgb(255, 40, 200));
+  }
+  for (int k = 0 - 12; k <= 12; k++) {
+    for (int yy = 152; yy < 240; yy++) {
+      w = 200 + (k * 64 * (yy - 150)) / 90;
+      if (w >= 0) {
+        if (w < SCR_W) fb[yy * SCR_W + w] = rgb(255, 40, 200);
+      }
+    }
+  }
+  for (int yy = 0; yy < TM_H; yy++) {
+    y = ((yy - 14) * 256) / 92;
+    if (y < 0) y = 0;
+    if (y < 128) {
+      c = mixC(120, 190, 255, 255, 255, 255, y * 2);
+    } else {
+      if (y < 140) {
+        c = rgb(50, 30, 110);
+      } else {
+        c = mixC(255, 110, 40, 255, 236, 130, ((y - 140) * 256) / 116);
+      }
+    }
+    rowF[yy] = c;
+    rowO[yy] = rgb(255, 70, 210);
+  }
+  titleLayer(4, 0, 0);
+  textMid(126, txTag0, 18, 2, rgb(80, 240, 255), rgb(40, 0, 60));
+  for (int k = 0; k < 2; k++) {
+    c = rgb(255, 120, 220);
+    if (k == windowed) {
+      hudRect(120, 160 + k * 22, 160, 20, rgb(255, 40, 200));
+      c = 65535;
+    } else {
+      hudRect(120, 160 + k * 22, 160, 20, rgb(40, 0, 60));
+    }
+    if (k == 0) textMid(163, txFull, 11, 2, c, rgb(40, 0, 60));
+    if (k == 1) textMid(185, txWin, 6, 2, c, rgb(40, 0, 60));
+  }
+  if ((t / 8) % 2 == 0) textMid(222, txHelp, 31, 1, 65535, rgb(40, 0, 60));
+}
+
+// Shows the title until Enter is pressed and let go; up/down switch the screen at once.
+void titleScreen() {
+  int t;
+  int k;
+  int lastK;
+  int seenE;
+  t = 0;
+  lastK = 0;
+  seenE = 0;
+  setWindow(windowed);
+  while (1) {
+    titleSunset(t);
+    present();
+    t++;
+    k = keyDown(KEY_UP) + keyDown(KEY_DOWN) * 2;
+    if (k != 0) {
+      if (lastK == 0) {
+        if (k == 1) windowed = 0;
+        if (k == 2) windowed = 1;
+        setWindow(windowed);
+      }
+    }
+    lastK = k;
+    if (keyDown(KEY_ENTER) != 0) {
+      seenE = 1;
+    } else {
+      if (seenE == 1) return;
+    }
+    if (keyDown(KEY_QUIT) != 0) return;
+  }
+}
+
 // One full frame: background, all ground, then all objects, cars and people far to near.
 void render() {
   polyCount = 0;
@@ -2110,6 +2846,7 @@ void render() {
   collectBlocks();
   for (int k = 0; k < visN; k++) drawGround(visI[k], visD[k]);
   for (int k = 0; k < visN; k++) drawBlockObjects(visI[k], visD[k]);
+  drawMap();
   drawHud();
   flash++;
 }
@@ -2123,8 +2860,13 @@ int main() {
   int run;
   if (loadAssets() == 0) return 1;
   genCity();
+  initShops();
+  for (int k = 0; k < 40; k++) recol[k] = k;
   initActors();
   initLetters();
+  initMap();
+  initTitle();
+  titleScreen();
   placeCamera();
   initRows();
   last = millis();
