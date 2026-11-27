@@ -319,9 +319,9 @@ void initShops() {
     if (blkType[i / 4] == 0) {
       if (lotH[i] > 0) {
         h = hash2(i, 71) % 100;
-        if (h < 34) lotShop[i] = 1;
-        if (h >= 34) {
-          if (h < 52) lotShop[i] = 2;
+        if (h < 45) lotShop[i] = 1;
+        if (h >= 45) {
+          if (h < 70) lotShop[i] = 2;
         }
       }
     }
@@ -1083,7 +1083,7 @@ void drawGround(int b, int d) {
 #define CAR_R 640
 // the person's
 #define PED_R 160
-#define CAR_ACC 22
+#define CAR_ACC 11
 #define CAR_BRAKE 48
 #define CAR_DRAG 6
 // top speed: 2.2 units a step
@@ -1110,6 +1110,8 @@ int lastView = 0;
 int lastWanted = 0;
 int lastTime = 0;
 int bustedNow = 0;      // set by a bust, read by the missions
+int cash = 0;
+int killT = 0;          // how long "+$50" still shows
 
 // --- traffic: cars on the street grid, driving on the right ---
 // A street runs along x = k * PITCH and z = k * PITCH, k 1..15. A car goes
@@ -1134,21 +1136,21 @@ int npcWait[20];
 int npcPaint[20];
 
 // --- people on the pavements: each walks round one block ---
-#define NPEDS 40
+#define NPEDS 60
 #define PED_INSET 180
 #define PED_STEP 26
-int walkB[40];
-int walkS[40];
-int walkDir[40];
-int walkX[40];
-int walkZ[40];
-int walkA[40];
-int walkPhase[40];
-int walkShirt[40];
-int walkWoman[40];
-int walkSkin[40];
-int walkHair[40];
-int walkLow[40];
+int walkB[60];
+int walkS[60];
+int walkDir[60];
+int walkX[60];
+int walkZ[60];
+int walkA[60];
+int walkPhase[60];
+int walkShirt[60];
+int walkWoman[60];
+int walkSkin[60];
+int walkHair[60];
+int walkLow[60];
 int pedPhase = 0;
 
 // --- the police: up to 4 cars, one per wanted star ---
@@ -1694,7 +1696,7 @@ void walkersStep() {
 }
 
 int carPaints[8];
-int shirtPaints[8];
+int shirtPaints[12];
 
 void dressWalker(int k) {
   int h;
@@ -1741,6 +1743,10 @@ void initActors() {
   shirtPaints[5] = 19;
   shirtPaints[6] = 13;
   shirtPaints[7] = 14;
+  shirtPaints[8] = 24;
+  shirtPaints[9] = 25;
+  shirtPaints[10] = 27;
+  shirtPaints[11] = 30;
   // half of them within three blocks of the start, the others anywhere
   for (int k = 0; k < NCARS; k++) {
     npcNX[k] = 1 + rnd(15);
@@ -1774,7 +1780,7 @@ void initActors() {
     walkDir[k] = 1;
     if (rnd(2) == 0) walkDir[k] = 0 - 1;
     walkPhase[k] = rnd(20);
-    walkShirt[k] = shirtPaints[rnd(8)];
+    walkShirt[k] = shirtPaints[rnd(12)];
     dressWalker(k);
     placeWalker(k);
   }
@@ -1998,6 +2004,8 @@ void runOverStep() {
     dz = (walkZ[k] - carZ) / 64;
     if (dx * dx + dz * dz < r * r) {
       if (wanted < 5) wanted++;
+      cash = cash + 50;
+      killT = 45;
       walkB[k] = 17 + rnd(222);
       if (blkType[walkB[k]] == 2) walkB[k] = walkB[k] + 1;
       placeWalker(k);
@@ -2013,7 +2021,6 @@ void runOverStep() {
 // kinds take turns: a taxi ride (pick a passenger up, stop at their
 // destination in time), four checkpoints against the clock, and a getaway
 // (three stars, lose them). Missions pay; a bust fails the mission and costs.
-int cash = 0;
 int mState = 0;        // 0 waiting at the start marker, 1 running
 int mKind = 0;         // 0 taxi, 1 checkpoints, 2 getaway
 int mNext = 0;
@@ -2131,6 +2138,7 @@ void missionStep() {
   int d;
   int s;
   if (msgT > 0) msgT--;
+  if (killT > 0) killT--;
   if (bustedNow == 1) {
     bustedNow = 0;
     cash = cash - 100;
@@ -2997,8 +3005,8 @@ void drawMap() {
 }
 
 // ===== 10c. TITLE SCREEN =====
-// GT 32 in chrome over a sunset and a neon grid, 1980s television style.
-// Up/down choose full screen (pixel size 2) or a 400x240 window, Enter starts.
+// GT 32 in chrome letters over a sunset at sea, between palms. Up/down
+// choose full screen (pixel size 2) or a 400x240 window, Enter starts.
 uint8_t txFull[11] = {70, 85, 76, 76, 32, 83, 67, 82, 69, 69, 78};
 uint8_t txWin[6] = {87, 73, 78, 68, 79, 87};
 uint8_t txHelp[31] = {85, 80, 47, 68, 79, 87, 78, 58, 32, 83, 67, 82, 69, 69, 78, 32, 32, 32, 32, 69, 78, 84, 69, 82, 58, 32, 83, 84, 65, 82, 84};
@@ -3112,6 +3120,7 @@ int tmy(int y) {
   return 14 + (y * 3) / 2;
 }
 
+// The letters, into the mask.
 void initTitle() {
   int i;
   int n;
@@ -3156,53 +3165,155 @@ void fillRows(int y0, int y1, int c) {
   hudRect(0, y0, SCR_W, y1 - y0, c);
 }
 
-// A sunset over a neon grid, chrome letters, the screen menu.
-void titleSunset(int t) {
+void lineAt(int x0, int y0, int x1, int y1, int th, int c) {
+  int n;
+  int dx;
+  int dy;
+  dx = x1 - x0;
+  dy = y1 - y0;
+  n = dx;
+  if (n < 0) n = 0 - n;
+  if (dy > n) n = dy;
+  if (0 - dy > n) n = 0 - dy;
+  if (n == 0) n = 1;
+  for (int k = 0; k <= n; k++) hudRect(x0 + (dx * k) / n, y0 + (dy * k) / n, th, th, c);
+}
+
+// A palm: a leaning trunk from (bx, 240) to (tx, ty), then seven fronds
+// that rise from the crown and droop at their tips; dir 1 or -1 mirrors it.
+int frondX[14] = {-18, -40, -16, -34, -6, -16, 4, 6, 14, 28, 18, 38, 10, 30};
+int frondY[14] = {-6, 10, -12, -4, -16, -22, -16, -26, -14, -8, -8, 8, -4, 14};
+
+// t sways it in the wind: one slow wave, back and forth, the whole palm
+// leaning the same way; the trunk bends, the crown moves most, the frond
+// tips follow a little behind.
+void drawPalm(int bx, int tx, int ty, int dir, int c, int t) {
+  int mx;
+  int my;
+  int ex;
+  int ey;
+  int w;
+  int wl;
+  w = sinT[(t * 12) & 1023];
+  wl = sinT[(t * 12 - 60) & 1023];
+  tx = tx + (w * 5) / 4096;
+  lineAt(bx, 240, (bx + tx) / 2 + (w * 1) / 4096, (240 + ty) / 2, 7, c);
+  lineAt((bx + tx) / 2 + (w * 1) / 4096, (240 + ty) / 2, tx, ty, 7, c);
+  for (int k = 0; k < 7; k++) {
+    mx = tx + 2 + frondX[k * 2] * dir + (w * 2) / 4096;
+    my = ty + 2 + frondY[k * 2];
+    ex = tx + 2 + frondX[k * 2 + 1] * dir + (wl * 6) / 4096;
+    ey = ty + 2 + frondY[k * 2 + 1] + (wl * frondX[k * 2 + 1] * dir) / 40960;
+    lineAt(tx + 2, ty + 2, mx, my, 4, c);
+    lineAt(mx, my, ex, ey, 3, c);
+  }
+  hudRect(tx, ty + 2, 6, 6, c);
+}
+
+// Towers standing on row y, up to hmax high; lit windows in colour w when w != 0.
+void drawSkyline(int y, int hmax, int c, int w, int seedK) {
+  int x;
+  int p;
+  int h;
+  int bw;
+  int bh;
+  x = 0;
+  p = seedK;
+  while (x < SCR_W) {
+    p++;
+    h = p * 1103515245 + 12345;
+    h = (h / 65536) & 32767;
+    bw = 14 + h % 22;
+    bh = 10 + (h / 32) % hmax;
+    hudRect(x, y - bh, bw, bh, c);
+    if (w != 0) {
+      for (int wy = y - bh + 3; wy < y - 2; wy = wy + 5) {
+        for (int wx = x + 2; wx < x + bw - 3; wx = wx + 4) {
+          h = (h * 75 + 74) % 65537;
+          if (h % 3 == 0) hudRect(wx, wy, 2, 2, w);
+        }
+      }
+    }
+    x = x + bw + 1;
+  }
+}
+
+// The screen menu and the help line, in a style's colours.
+void titleMenu(int t, int sel, int dim, int box, int sh, int help) {
+  int c;
+  for (int k = 0; k < 2; k++) {
+    c = dim;
+    if (k == windowed) {
+      hudRect(120, 160 + k * 22, 160, 20, sel);
+      c = 65535;
+    } else {
+      hudRect(120, 160 + k * 22, 160, 20, box);
+    }
+    if (k == 0) textMid(163, txFull, 11, 2, c, sh);
+    if (k == 1) textMid(185, txWin, 6, 2, c, sh);
+  }
+  if ((t / 8) % 2 == 0) textMid(222, txHelp, 31, 1, help, sh);
+}
+
+// A sunset over the sea between palms, chrome letters, the screen menu.
+void titleBeach(int t) {
   int c;
   int w;
-  int y;
-  int z;
+  int d;
+  int o;
+  int g;
   for (int yy = 0; yy < 150; yy++) {
-    if (yy < 100) {
-      c = mixC(24, 6, 60, 170, 30, 130, (yy * 256) / 100);
+    if (yy < 90) {
+      c = mixC(36, 8, 64, 236, 64, 132, (yy * 256) / 90);
     } else {
-      c = mixC(170, 30, 130, 255, 140, 60, ((yy - 100) * 256) / 50);
+      c = mixC(236, 64, 132, 255, 164, 84, ((yy - 90) * 256) / 60);
     }
     fillRows(yy, yy + 1, c);
   }
-  for (int yy = 86; yy < 150; yy++) {
-    w = isqrt(64 * 64 - (yy - 150) * (yy - 150));
-    c = mixC(255, 236, 90, 255, 60, 150, ((yy - 86) * 256) / 64);
-    if (yy >= 116) {
-      if ((yy - 116) % 8 < 1 + (yy - 116) / 7) c = 0;
-    }
-    if (c != 0) hudRect(200 - w, yy, w * 2, 1, c);
+  for (int yy = 96; yy < 150; yy++) {
+    w = isqrt(54 * 54 - (yy - 150) * (yy - 150));
+    hudRect(200 - w, yy, w * 2, 1, mixC(255, 240, 160, 255, 130, 90, ((yy - 96) * 256) / 54));
   }
-  fillRows(150, 240, rgb(22, 0, 44));
-  fillRows(150, 152, rgb(255, 80, 210));
-  for (int j = 0; j < 24; j++) {
-    z = j * 16 + 16 - (t * 3) % 16;
-    y = 150 + 1600 / z;
-    if (y < 240) fillRows(y, y + 1, rgb(255, 40, 200));
-  }
-  for (int k = 0 - 12; k <= 12; k++) {
-    for (int yy = 152; yy < 240; yy++) {
-      w = 200 + (k * 64 * (yy - 150)) / 90;
-      if (w >= 0) {
-        if (w < SCR_W) fb[yy * SCR_W + w] = rgb(255, 40, 200);
-      }
-    }
-  }
-  for (int yy = 0; yy < TM_H; yy++) {
-    y = ((yy - 14) * 256) / 92;
-    if (y < 0) y = 0;
-    if (y < 128) {
-      c = mixC(120, 190, 255, 255, 255, 255, y * 2);
+  drawSkyline(150, 14, rgb(70, 24, 80), 0, 7);
+  for (int yy = 150; yy < 240; yy++) {
+    d = yy - 150;
+    fillRows(yy, yy + 1, mixC(90, 36, 100, 24, 16, 60, (d * 256) / 90));
+    // faint crests drifting across the sea
+    w = sinT[(yy * 97 + t * 6) & 1023];
+    if (w > 3600) hudRect(((yy * 53 + t * (1 + d / 20)) % 460) - 30, yy, 18 + d / 3, 1, mixC(120, 60, 130, 60, 40, 100, (d * 256) / 90));
+    // the sun's path: each row swaying on its own wave, wider and looser nearer
+    w = 46 - d / 3 + (sinT[(yy * 61 + t * 17) & 1023] * 4) / 4096;
+    o = (sinT[(yy * 37 + t * 11) & 1023] * (2 + d / 10)) / 4096;
+    c = mixC(255, 176, 110, 170, 70, 120, (d * 256) / 90);
+    if (((yy + t / 3) % 3) != 0) {
+      // a gap drifting through the row
+      g = (sinT[(yy * 83 + t * 13) & 1023] * w) / 4096;
+      hudRect(200 + o - w, yy, w + g - 2, 1, c);
+      hudRect(200 + o + g + 2, yy, w - g - 2, 1, c);
     } else {
-      if (y < 140) {
+      hudRect(200 + o - w / 3, yy, (w * 2) / 3, 1, c);
+    }
+  }
+  // sparkles on the path
+  for (int k = 0; k < 14; k++) {
+    g = (t * 7 + k * 131) * 1103515245 + 12345;
+    g = (g / 65536) & 32767;
+    d = g % 90;
+    hudRect(200 + (g / 90) % (70 - d / 2) - (35 - d / 4), 150 + d, 2, 1, rgb(255, 236, 200));
+  }
+  drawPalm(34, 50, 120, 1, rgb(34, 10, 44), t);
+  drawPalm(376, 356, 128, 0 - 1, rgb(34, 10, 44), t + 30);
+  // chrome: sky blue to white, a dark line, sunset orange to gold
+  for (int yy = 0; yy < TM_H; yy++) {
+    w = ((yy - 14) * 256) / 92;
+    if (w < 0) w = 0;
+    if (w < 128) {
+      c = mixC(120, 190, 255, 255, 255, 255, w * 2);
+    } else {
+      if (w < 140) {
         c = rgb(50, 30, 110);
       } else {
-        c = mixC(255, 110, 40, 255, 236, 130, ((y - 140) * 256) / 116);
+        c = mixC(255, 110, 40, 255, 236, 130, ((w - 140) * 256) / 116);
       }
     }
     rowF[yy] = c;
@@ -3210,18 +3321,7 @@ void titleSunset(int t) {
   }
   titleLayer(4, 0, 0);
   textMid(126, txTag0, 18, 2, rgb(80, 240, 255), rgb(40, 0, 60));
-  for (int k = 0; k < 2; k++) {
-    c = rgb(255, 120, 220);
-    if (k == windowed) {
-      hudRect(120, 160 + k * 22, 160, 20, rgb(255, 40, 200));
-      c = 65535;
-    } else {
-      hudRect(120, 160 + k * 22, 160, 20, rgb(40, 0, 60));
-    }
-    if (k == 0) textMid(163, txFull, 11, 2, c, rgb(40, 0, 60));
-    if (k == 1) textMid(185, txWin, 6, 2, c, rgb(40, 0, 60));
-  }
-  if ((t / 8) % 2 == 0) textMid(222, txHelp, 31, 1, 65535, rgb(40, 0, 60));
+  titleMenu(t, rgb(236, 64, 132), rgb(255, 200, 220), rgb(40, 10, 60), rgb(30, 10, 50), 65535);
 }
 
 // Shows the title until Enter is pressed and let go; up/down switch the screen at once.
@@ -3235,7 +3335,7 @@ void titleScreen() {
   seenE = 0;
   setWindow(windowed);
   while (1) {
-    titleSunset(t);
+    titleBeach(t);
     present();
     t++;
     k = keyDown(KEY_UP) + keyDown(KEY_DOWN) * 2;
@@ -3381,6 +3481,14 @@ void drawMissionHud() {
     tbNum((s * 27) / 128, 1);
     tbText(txKmh, 5);
     tbRight(SCR_W - 6, SCR_H - 20, 2, 65535);
+  }
+  if (killT > 0) {
+    tbN = 0;
+    tb[0] = 43;
+    tb[1] = 36;
+    tbN = 2;
+    tbNum(50, 1);
+    textMid(40, tb, tbN, 2, rgb(120, 230, 110), 0);
   }
   if (msgT > 0) {
     if (bannerT == 0) {
