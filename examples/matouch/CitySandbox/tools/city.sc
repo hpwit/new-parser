@@ -139,10 +139,10 @@ int findLump(int a, int b, int c, int d) {
   return 0;
 }
 
-// --- meshes: boxes of 7 values (x0 x1 z0 z1 y0 y1 colour), up to 12 ---
-int carBox[84];
+// --- meshes: boxes of 7 values (x0 x1 z0 z1 y0 y1 colour), up to 40 ---
+int carBox[280];
 int carN = 0;
-int pedBox[84];
+int pedBox[280];
 int pedN = 0;
 
 // Signed 16-bit read from the WAD buffer.
@@ -157,7 +157,7 @@ int rds16(int o) {
 int loadMesh(int o, int *dst) {
   int n;
   n = rds16(o);
-  if (n > 12) n = 12;
+  if (n > 40) n = 40;
   for (int i = 0; i < n * 7; i++) dst[i] = rds16(o + 2 + i * 2);
   return n;
 }
@@ -1197,7 +1197,7 @@ void placeCamera() {
   }
   if (view == 2) {
     d = 0 - 1280;
-    camH = 1100;
+    camH = 800;
   }
   if (driving == 0) {
     // on foot: over the shoulder, farther back, or at eye height
@@ -1283,11 +1283,12 @@ void drawOBox(int cx, int cz, int a, int x0, int x1, int z0, int z1) {
   }
 }
 
-int boxOrd[12];
-int boxD[12];
+int boxOrd[40];
+int boxD[40];
 
 // A mesh (n boxes of 7 values) at (cx, cz) with heading a, its boxes drawn
-// far to near.
+// far to near: by the distance from the camera to their centres, height
+// included, in quarter units (the parts of a mesh touch and stack).
 void drawMesh(int *m, int n, int cx, int cz, int a) {
   int s;
   int c;
@@ -1296,12 +1297,18 @@ void drawMesh(int *m, int n, int cx, int cz, int a) {
   int k;
   int go;
   int d;
+  int dx;
+  int dy;
+  int dz;
   s = sinT[a];
   c = sinT[(a + 256) & 1023];
   for (int i = 0; i < n; i++) {
     mx = (m[i * 7] + m[i * 7 + 1]) / 2;
     mz = (m[i * 7 + 2] + m[i * 7 + 3]) / 2;
-    d = dist2(cx + (mx * c + mz * s) / 4096, cz + (mz * c - mx * s) / 4096);
+    dx = (cx + (mx * c + mz * s) / 4096 - camX) / 64;
+    dz = (cz + (mz * c - mx * s) / 4096 - camZ) / 64;
+    dy = ((m[i * 7 + 4] + m[i * 7 + 5]) / 2 - camH) / 64;
+    d = dx * dx + dy * dy + dz * dz;
     k = i;
     go = 1;
     while (go == 1) {
