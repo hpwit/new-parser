@@ -51,9 +51,12 @@ void setLoopVectorize(bool on)
     vectorizeOn = on ? 1 : 0;
 }
 
+static int fillCount;
+
 void resetLoopVectorize()
 {
     vecCount = 0;
+    fillCount = 0;
 }
 
 enum VKind
@@ -1085,6 +1088,234 @@ static bool generate(VGen *g, VPlan *p, const char *name)
     return !g->failed;
 }
 
+
+// ---- fills: for (int x = A; x < B; x++) arr[E + x] = C; ----
+// arr a uint16_t (or s_int) array, global or bound external; A, B, E and C
+// variables, numbers, or a variable plus or minus a number (C neither x
+// nor read from arr). The caller computes E, A, B and C into a10..a13 and
+// calls a generated function: one element at a time until the address is
+// a multiple of 16, then 8 at a time with ee.vst.128.ip from a register
+// holding C eight times (a zero-overhead loop), then one at a time again.
+
+// The loop's body: child 3, or child 4 after an empty statement (a body
+// without braces); an onlyNode marker may follow.
+static NodeToken *fillBodyNode(NodeToken *nd)
+{
+    int n = nd->children_size();
+    if (n > 0 && nd->getChildPtr(n - 1)->_nodetype == (int)onlyNode)
+        n--;
+    if (n == 4)
+        return nd->getChildPtr(3);
+    NodeToken *c3 = n == 5 ? nd->getChildPtr(3) : NULL;
+    if (c3 != NULL && c3->_nodetype == statementNode && c3->children_size() == 0)
+        return nd->getChildPtr(4);
+    return NULL;
+}
+
+// for (int x = A; x < B; x++), A and B simple: x's name, A and B's nodes.
+static bool fillHeader(VPlan *p, NodeToken *nd, NodeToken **from, NodeToken **to)
+{
+    if (fillBodyNode(nd) == NULL)
+        return false;
+    NodeToken *init = nd->getChildPtr(0);
+    NodeToken *def = NULL, *assign = NULL;
+    for (int k = 0; k < init->children_size(); k++)
+    {
+        NodeToken *c = init->getChildPtr(k);
+        if (c->_nodetype == defLocalVariableNode || c->_nodetype == defLocalVariableNodeAsRegister)
+            def = c;
+        else if (c->_nodetype == assignementNode)
+            assign = c;
+        else if (!(c->_nodetype == statementNode && c->children_size() == 0))
+            return false;
+    }
+    if (def == NULL || assign == NULL || assign->children_size() != 2)
+        return false;
+    p->iName = def->getText();
+    p->ntemp = 0;
+    if (strcmp(assign->getChildPtr(0)->getText(), p->iName) != 0 || !validRow(p, assign->getChildPtr(1), 0))
+        return false;
+    NodeToken *cmp = nd->getChildPtr(1);
+    if (cmp->_nodetype != comparatorNode || cmp->children_size() != 1)
+        return false;
+    NodeToken *test = cmp->getChildPtr(0);
+    if (test->_nodetype != testNode || test->type != TokenLessThan || test->children_size() != 2)
+        return false;
+    NodeToken *iv = strip(test->getChildPtr(0));
+    if (!isLocal(iv) || strcmp(iv->getText(), p->iName) != 0 || !validRow(p, test->getChildPtr(1), 0))
+        return false;
+    NodeToken *inc = nd->getChildPtr(2);
+    NodeToken *incAssign = NULL;
+    for (int k = 0; k < inc->children_size(); k++)
+    {
+        NodeToken *c = inc->getChildPtr(k);
+        if (c->_nodetype == assignementNode)
+        {
+            if (incAssign != NULL)
+                return false;
+            incAssign = c;
+        }
+        else if (!(c->_nodetype == statementNode && c->children_size() == 0))
+            return false;
+    }
+    if (incAssign == NULL || incAssign->children_size() != 2 ||
+        strcmp(incAssign->getChildPtr(0)->getText(), p->iName) != 0)
+        return false;
+    NodeToken *pp = incAssign->getChildPtr(1);
+    if (pp->_nodetype != unitaryOpNode || pp->type != TokenPlusPlus || pp->children_size() != 1 ||
+        strcmp(strip(pp->getChildPtr(0))->getText(), p->iName) != 0)
+        return false;
+    *from = assign->getChildPtr(1);
+    *to = test->getChildPtr(1);
+    return true;
+}
+
+// The body: arr[E + x] = C, or arr[x + E], or arr[x].
+static bool fillBody(VPlan *p, NodeToken *body, NodeToken **base, NodeToken **value, NodeToken **target)
+{
+    NodeToken *s = body;
+    while (s != NULL && (s->_nodetype == blockStatementNode || s->_nodetype == statementNode))
+    {
+        NodeToken *only = NULL;
+        for (int k = 0; k < s->children_size(); k++)
+        {
+            NodeToken *c = s->getChildPtr(k);
+            if (c->_nodetype == statementNode && c->children_size() == 0)
+                continue;
+            if (only != NULL)
+                return false;
+            only = c;
+        }
+        s = only;
+    }
+    if (s == NULL || s->_nodetype != assignementNode || s->children_size() != 2)
+        return false;
+    NodeToken *t = s->getChildPtr(0);
+    if (t->_nodetype != storeGlobalVariableNode && t->_nodetype != storeExtGlocalVariableNode)
+        return false;
+    if (!t->isPointer || t->asPointer || t->children_size() != 1 || t->getVarTypeObj() == NULL)
+        return false;
+    int vt = t->getVarTypeObj()->_varType;
+    if (vt != __uint16_t__ && vt != __s_int__)
+        return false;
+    const char *tt = t->getTargetText();
+    if (tt == NULL || tt[0] != '@' || atoi(tt + 1) != 1 || strstr(tt, " $") != NULL || strstr(tt, " *") != NULL)
+        return false;
+    NodeToken *ix = strip(t->getChildPtr(0));
+    *base = NULL;
+    if (isLocal(ix) && strcmp(ix->getText(), p->iName) == 0)
+        ;
+    else if (ix->_nodetype == binOpNode && ix->type == TokenAddition && ix->children_size() == 2)
+    {
+        NodeToken *l = strip(ix->getChildPtr(0)), *r = strip(ix->getChildPtr(1));
+        if (isLocal(r) && strcmp(r->getText(), p->iName) == 0)
+            *base = ix->getChildPtr(0);
+        else if (isLocal(l) && strcmp(l->getText(), p->iName) == 0)
+            *base = ix->getChildPtr(1);
+        else
+            return false;
+        if (!validRow(p, *base, 0))
+            return false;
+    }
+    else
+        return false;
+    if (!validRow(p, s->getChildPtr(1), 0))
+        return false;
+    *value = s->getChildPtr(1);
+    *target = t;
+    return true;
+}
+
+static bool vectorizeFill(NodeToken *nd)
+{
+    VPlan *p = (VPlan *)calloc(1, sizeof(VPlan));
+    if (p == NULL)
+        return false;
+    NodeToken *from, *to, *base, *value, *target;
+    bool ok = fillHeader(p, nd, &from, &to) && fillBody(p, fillBodyNode(nd), &base, &value, &target) &&
+              register_numl.get() >= 15;
+    free(p);
+    if (!ok)
+        return false;
+    VGen *g = new VGen();
+    g->fn = 1000 + fillCount;
+    g->label = 0;
+    char *name = string_format("@____fill%d(num|num|num|num)", fillCount++);
+    // a2 E, a3 A, a4 B, a5 C
+    emit(g, string_format("%s:", name));
+    emit(g, string_format("entry a1,64"));
+    char *head = newLabel(g), *vec = newLabel(g), *vend = newLabel(g), *tail = newLabel(g), *done = newLabel(g);
+    emit(g, string_format("sub a6,a4,a3"));
+    emit(g, string_format("bge a3,a4,%s", done));
+    emit(g, string_format("add a7,a2,a3"));
+    if (target->_nodetype == storeExtGlocalVariableNode)
+        emit(g, string_format("movExt a8,@_ext_%s", target->getText()));
+    else
+        emit(g, string_format("l32r a8,@_%s", target->getText()));
+    emit(g, string_format("addx2 a7,a7,a8"));
+    // C eight times in q0, through 16 bytes of the stack frame aligned on 16
+    emit(g, string_format("extui a5,a5,0,16"));
+    emit(g, string_format("slli a9,a5,16"));
+    emit(g, string_format("or a9,a9,a5"));
+    emit(g, string_format("addi a10,a1,31"));
+    emit(g, string_format("movi a11,-16"));
+    emit(g, string_format("and a10,a10,a11"));
+    for (int w = 0; w < 4; w++)
+        emit(g, string_format("s32i a9,a10,%d", 4 * w));
+    emit(g, string_format("ee.vld.128.ip q0,a10,0"));
+    emit(g, string_format("%s:", head));
+    emit(g, string_format("beqz a6,%s", done));
+    emit(g, string_format("extui a11,a7,0,4"));
+    emit(g, string_format("beqz a11,%s", vec));
+    emit(g, string_format("s16i a5,a7,0"));
+    emit(g, string_format("addi a7,a7,2"));
+    emit(g, string_format("addi a6,a6,-1"));
+    emit(g, string_format("j %s", head));
+    emit(g, string_format("%s:", vec));
+    emit(g, string_format("srli a11,a6,3"));
+    emit(g, string_format("loopnez a11,%s", vend));
+    emit(g, string_format("ee.vst.128.ip q0,a7,16"));
+    emit(g, string_format("%s:", vend));
+    emit(g, string_format("extui a6,a6,0,3"));
+    emit(g, string_format("%s:", tail));
+    emit(g, string_format("beqz a6,%s", done));
+    emit(g, string_format("s16i a5,a7,0"));
+    emit(g, string_format("addi a7,a7,2"));
+    emit(g, string_format("addi a6,a6,-1"));
+    emit(g, string_format("j %s", tail));
+    emit(g, string_format("%s:", done));
+    emit(g, string_format("retw.n"));
+    free(head);
+    free(vec);
+    free(vend);
+    free(tail);
+    free(done);
+    // the call: E, A, B, C into a10..a13 (each simple: no temporaries)
+    NodeToken *args[4] = {base, from, to, value};
+    for (int a = 0; a < 4; a++)
+    {
+        if (args[a] == NULL)
+        {
+            bufferText->addAfter(string_format("movi a%d,0", 10 + a));
+            continue;
+        }
+        register_numl.duplicate();
+        args[a]->visitNode();
+        register_numl.pop();
+        bufferText->addAfter(string_format("mov a%d,a%d", 10 + a, register_numl.get()));
+    }
+    bufferText->addAfter(string_format("call8 %s", name));
+    asmFunctions.end();
+    for (int k = 0; k < g->lines.size(); k++)
+        asmFunctions.addAfter((const char *)g->lines.get(k));
+    for (int k = 0; k < g->lines.size(); k++)
+        free(g->lines.get(k));
+    g->lines.clear();
+    delete g;
+    free(name);
+    return true;
+}
+
 static bool enabled()
 {
     if (vectorizeOn < 0)
@@ -1096,6 +1327,8 @@ bool vectorizeLoop(NodeToken *nd)
 {
     if (!enabled())
         return false;
+    if (vectorizeFill(nd))
+        return true;
     VPlan *p = (VPlan *)calloc(1, sizeof(VPlan));
     if (p == NULL)
         return false;
