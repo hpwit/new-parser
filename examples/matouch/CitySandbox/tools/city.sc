@@ -379,6 +379,51 @@ int fogOf(int z) {
   return f;
 }
 
+// --- front to back: a coverage mask ---
+// The frame is drawn nearest first: each pixel is written once, by the first
+// polygon that reaches it (the frame buffer is in PSRAM, where every write
+// costs). One bit a pixel, 32 to a word; whole words are skipped or filled
+// at once. Every drawing sequence runs in the reverse of the painter's
+// order, so the picture is the painter's.
+int cov[3000];
+
+void clearCov() {
+  for (int i = 0; i < 3000; i++) cov[i] = 0;
+}
+
+// Pixels b to e - 1 (offsets into fb) in colour c, where not covered yet:
+// a word of the mask at a time, its free pixels as (span bits) - (span bits
+// & covered bits); none free: skipped, all free: one run.
+void spanCov(int b, int e, int c) {
+  int w;
+  int lo;
+  int n;
+  int range;
+  int m;
+  int free;
+  while (b < e) {
+    w = b >> 5;
+    lo = b & 31;
+    n = 32 - lo;
+    if (e - b < n) n = e - b;
+    range = 0 - 1;
+    if (n < 32) range = ((1 << n) - 1) << lo;
+    m = cov[w];
+    free = range - (range & m);
+    if (free != 0) {
+      if (free == range) {
+        for (int p = b; p < b + n; p++) fb[p] = c;
+      } else {
+        for (int i = 0; i < n; i++) {
+          if (((free >> (lo + i)) & 1) == 1) fb[b + i] = c;
+        }
+      }
+      cov[w] = m | range;
+    }
+    b = b + n;
+  }
+}
+
 // Fills the convex polygon in px/py (n vertices, any order around the outline).
 // Edges are always walked top to bottom, so two polygons sharing an edge meet
 // without gaps. This is the hot loop: a native span fill would speed it up most.
@@ -453,7 +498,7 @@ void fillPoly(int n, int c) {
     if (x0 < 0) x0 = 0;
     if (x1 > SCR_W) x1 = SCR_W;
     o = y * SCR_W;
-    for (int k = x0; k < x1; k++) fb[o + k] = c;
+    if (x1 > x0) spanCov(o + x0, o + x1, c);
   }
 }
 
@@ -469,6 +514,17 @@ int starY[60];
 void drawBackground() {
   int c;
   int o;
+  if (light[0] < 120) {
+    for (int i = 0; i < 60; i++) {
+      c = (starA[i] - camA + 1536) % 1024 - 512;
+      if (c > 0 - 120) {
+        if (c < 120) {
+          o = starY[i] * SCR_W + HALF_W + (c * 1534) / 1000;
+          spanCov(o, o + 1, 65535);
+        }
+      }
+    }
+  }
   for (int y = 0; y < SCR_H; y++) {
     if (y < HORIZON) {
       c = skyC[(y * 6) / HORIZON];
@@ -476,18 +532,7 @@ void drawBackground() {
       c = rowCol[y];
     }
     o = y * SCR_W;
-    for (int x = 0; x < SCR_W; x++) fb[o + x] = c;
-  }
-  if (light[0] < 120) {
-    for (int i = 0; i < 60; i++) {
-      c = (starA[i] - camA + 1536) % 1024 - 512;
-      if (c > 0 - 120) {
-        if (c < 120) {
-          c = HALF_W + (c * 1534) / 1000;
-          fb[starY[i] * SCR_W + c] = 65535;
-        }
-      }
-    }
+    spanCov(o, o + SCR_W, c);
   }
 }
 
@@ -834,12 +879,12 @@ int bcz[4];
 
 // One side of the current box, from corner i to corner j, plus its windows.
 void boxFace(int i, int j, int sh, int lenFP) {
-  drawWall(bcx[i], bcz[i], bcx[j], bcz[j], sh);
   if (curStyle >= 0) {
     if (curLod < 2) {
       drawWindows(bcx[i], bcz[i], bcx[j], bcz[j], (lenFP * 10) / 256, sh);
     }
   }
+  drawWall(bcx[i], bcz[i], bcx[j], bcz[j], sh);
 }
 
 // Draws the axis-aligned world box described by the cur* globals. A box is
@@ -863,10 +908,7 @@ void drawBox(int x0, int z0, int x1, int z1) {
     if (bcz[i] >= NEAR_Z) vis = 1;
   }
   if (vis == 0) return;
-  if (camZ > z1) boxFace(2, 3, 2, x1 - x0);
-  if (camX < x0) boxFace(3, 0, 4, z1 - z0);
-  if (camX > x1) boxFace(1, 2, 1, z1 - z0);
-  if (camZ < z0) boxFace(0, 1, 3, x1 - x0);
+  // the top, then the sides (front to back: the reverse of the painter's order)
   if (camH > curY1) {
     for (int i = 0; i < 4; i++) {
       ax[i] = bcx[i];
@@ -874,6 +916,10 @@ void drawBox(int x0, int z0, int x1, int z1) {
     }
     flatCam(curY1, curCi, 0);
   }
+  if (camZ < z0) boxFace(0, 1, 3, x1 - x0);
+  if (camX > x1) boxFace(1, 2, 1, z1 - z0);
+  if (camX < x0) boxFace(3, 0, 4, z1 - z0);
+  if (camZ > z1) boxFace(2, 3, 2, x1 - x0);
 }
 
 // ===== 6. ENTITIES (static props in this milestone) =====
@@ -881,30 +927,26 @@ void drawBox(int x0, int z0, int x1, int z1) {
 void drawTree(int x, int z, int lod) {
   curStyle = 0 - 1;
   if (lod == 0) {
-    curY0 = 0;
-    curY1 = 922;
-    curCi = 6;
-    drawBox(x - 102, z - 102, x + 102, z + 102);
+    curY0 = 2048;
+    curY1 = 2560;
+    curCi = 18;
+    drawBox(x - 333, z - 333, x + 333, z + 333);
   }
   curY0 = 870;
   curY1 = 2048;
   curCi = 7;
   drawBox(x - 538, z - 538, x + 538, z + 538);
   if (lod == 0) {
-    curY0 = 2048;
-    curY1 = 2560;
-    curCi = 18;
-    drawBox(x - 333, z - 333, x + 333, z + 333);
+    curY0 = 0;
+    curY1 = 922;
+    curCi = 6;
+    drawBox(x - 102, z - 102, x + 102, z + 102);
   }
 }
 
 // Street lamp: pole and a head reaching over the road. dir 0 faces -z, 1 faces +z.
 void drawLamp(int x, int z, int dir) {
   curStyle = 0 - 1;
-  curY0 = 0;
-  curY1 = 2304;
-  curCi = 8;
-  drawBox(x - 46, z - 46, x + 46, z + 46);
   curY0 = 2202;
   curY1 = 2355;
   curCi = 9;
@@ -913,6 +955,10 @@ void drawLamp(int x, int z, int dir) {
   } else {
     drawBox(x - 77, z, x + 77, z + 512);
   }
+  curY0 = 0;
+  curY1 = 2304;
+  curCi = 8;
+  drawBox(x - 46, z - 46, x + 46, z + 46);
 }
 
 // Squared distance in whole units from the camera to a world point.
@@ -1047,25 +1093,16 @@ void drawGround(int b, int d) {
     flatCam(0, 5, 0);
     return;
   }
-  setQuad(wx + ROAD_HALF, wz + ROAD_HALF, wx + ROAD_HALF + PAD, wz + ROAD_HALF + PAD);
-  flatCam(0, 1, 0);
-  if (d < D2_LOT) {
-    setQuad(wx + ROAD_HALF + 768, wz + ROAD_HALF + 768, wx + ROAD_HALF + PAD - 768, wz + ROAD_HALF + PAD - 768);
-    if (t == 1) {
-      flatCam(0, 3, 0);
-    } else {
-      flatCam(0, 2, 0);
-    }
-  }
-  if (d < D2_PROPS_FULL) {
-    for (int j = 0; j < 4; j++) {
-      o = ROAD_HALF + 1536 + j * 2304;
+  // nearest first: what lies on top comes before what it lies on
+  if (d < D2_ZEBRA) {
+    for (int j = 0; j < 5; j++) {
+      o = j * 666 - 1536;
       if (ix > 1) {
-        setQuad(wx - 77, wz + o, wx + 77, wz + o + 1280);
+        setQuad(wx + o, wz + ROAD_HALF + 128, wx + o + 384, wz + ROAD_HALF + 768);
         flatCam(0, 4, 0);
       }
       if (iz > 0) {
-        setQuad(wx + o, wz - 77, wx + o + 1280, wz + 77);
+        setQuad(wx + ROAD_HALF + 128, wz + o, wx + ROAD_HALF + 768, wz + o + 384);
         flatCam(0, 4, 0);
       }
     }
@@ -1081,19 +1118,29 @@ void drawGround(int b, int d) {
       }
     }
   }
-  if (d < D2_ZEBRA) {
-    for (int j = 0; j < 5; j++) {
-      o = j * 666 - 1536;
+  if (d < D2_PROPS_FULL) {
+    for (int j = 0; j < 4; j++) {
+      o = ROAD_HALF + 1536 + j * 2304;
       if (ix > 1) {
-        setQuad(wx + o, wz + ROAD_HALF + 128, wx + o + 384, wz + ROAD_HALF + 768);
+        setQuad(wx - 77, wz + o, wx + 77, wz + o + 1280);
         flatCam(0, 4, 0);
       }
       if (iz > 0) {
-        setQuad(wx + ROAD_HALF + 128, wz + o, wx + ROAD_HALF + 768, wz + o + 384);
+        setQuad(wx + o, wz - 77, wx + o + 1280, wz + 77);
         flatCam(0, 4, 0);
       }
     }
   }
+  if (d < D2_LOT) {
+    setQuad(wx + ROAD_HALF + 768, wz + ROAD_HALF + 768, wx + ROAD_HALF + PAD - 768, wz + ROAD_HALF + PAD - 768);
+    if (t == 1) {
+      flatCam(0, 3, 0);
+    } else {
+      flatCam(0, 2, 0);
+    }
+  }
+  setQuad(wx + ROAD_HALF, wz + ROAD_HALF, wx + ROAD_HALF + PAD, wz + ROAD_HALF + PAD);
+  flatCam(0, 1, 0);
 }
 
 // ===== 7. PLAYER, CAR AND COLLISIONS =====
@@ -2423,11 +2470,7 @@ void drawOBox(int cx, int cz, int a, int x0, int x1, int z0, int z1) {
     bcx[i] = tX;
     bcz[i] = tZ;
   }
-  // back (normal -forward), right (+right), front (+forward), left (-right)
-  if ((camX - owx[0]) * (0 - s) + (camZ - owz[0]) * (0 - c) > 0) drawWall(bcx[0], bcz[0], bcx[1], bcz[1], 3);
-  if ((camX - owx[1]) * c + (camZ - owz[1]) * (0 - s) > 0) drawWall(bcx[1], bcz[1], bcx[2], bcz[2], 1);
-  if ((camX - owx[2]) * s + (camZ - owz[2]) * c > 0) drawWall(bcx[2], bcz[2], bcx[3], bcz[3], 2);
-  if ((camX - owx[3]) * (0 - c) + (camZ - owz[3]) * s > 0) drawWall(bcx[3], bcz[3], bcx[0], bcz[0], 4);
+  // the top, then left (-right), front (+forward), right (+right), back (normal -forward)
   if (camH > curY1) {
     for (int i = 0; i < 4; i++) {
       ax[i] = bcx[i];
@@ -2435,6 +2478,10 @@ void drawOBox(int cx, int cz, int a, int x0, int x1, int z0, int z1) {
     }
     flatCam(curY1, curCi, 0);
   }
+  if ((camX - owx[3]) * (0 - c) + (camZ - owz[3]) * s > 0) drawWall(bcx[3], bcz[3], bcx[0], bcz[0], 4);
+  if ((camX - owx[2]) * s + (camZ - owz[2]) * c > 0) drawWall(bcx[2], bcz[2], bcx[3], bcz[3], 2);
+  if ((camX - owx[1]) * c + (camZ - owz[1]) * (0 - s) > 0) drawWall(bcx[1], bcz[1], bcx[2], bcz[2], 1);
+  if ((camX - owx[0]) * (0 - s) + (camZ - owz[0]) * (0 - c) > 0) drawWall(bcx[0], bcz[0], bcx[1], bcz[1], 3);
 }
 
 int boxOrd[40];
@@ -2509,7 +2556,7 @@ void drawMesh(int *m, int n, int cx, int cz, int a, int paint, int swing) {
     boxOrd[k] = i;
   }
   curStyle = 0 - 1;
-  for (int k2 = 0; k2 < n; k2++) {
+  for (int k2 = n - 1; k2 >= 0; k2--) {
     k = boxOrd[k2] * 7;
     curY0 = m[k + 4];
     curY1 = m[k + 5];
@@ -2587,38 +2634,38 @@ void drawShop(int i, int wx, int wz, int lod) {
   curStyle = 0 - 1;
   L = shLen;
   m = L / 2;
-  if (lod == 0) {
-    curCi = 19;
-    fboxC(0, L, 0, 30, 0, 90);
-    curCi = 11;
-    fboxC(154, L - 154, 0, 26, 90, 845);
-    curCi = 10;
-    fboxC(m - 205, m + 205, 0, 36, 26, 768);
+  if (lotShop[i] == 1) {
+    curCi = lotAwn[i];
+    fboxC(154, L - 154, 448, 486, 614, 806);
+    fboxC(154, L - 154, 0, 486, 768, 806);
+  } else {
+    // five stripes, the awning's colour and cream
+    w = (L - 308) / 5;
+    for (int k = 4; k >= 0; k--) {
+      curCi = lotAwn[i];
+      if ((k & 1) == 1) curCi = 30;
+      a = 154 + k * w;
+      fboxC(a, a + w, 448, 486, 614, 806);
+      fboxC(a, a + w, 0, 486, 768, 806);
+    }
   }
   curCi = lotAwn[i];
   if (lotShop[i] == 2) curCi = 31;
   fboxC(77, L - 77, 0, 64, 845, 1126);
-  if (lotShop[i] == 1) {
-    curCi = lotAwn[i];
-    fboxC(154, L - 154, 0, 486, 768, 806);
-    fboxC(154, L - 154, 448, 486, 614, 806);
-    return;
-  }
-  // five stripes, the awning's colour and cream
-  w = (L - 308) / 5;
-  for (int k = 0; k < 5; k++) {
-    curCi = lotAwn[i];
-    if ((k & 1) == 1) curCi = 30;
-    a = 154 + k * w;
-    fboxC(a, a + w, 0, 486, 768, 806);
-    fboxC(a, a + w, 448, 486, 614, 806);
+  if (lod == 0) {
+    curCi = 10;
+    fboxC(m - 205, m + 205, 0, 36, 26, 768);
+    curCi = 11;
+    fboxC(154, L - 154, 0, 26, 90, 845);
+    curCi = 19;
+    fboxC(0, L, 0, 30, 0, 90);
   }
 }
 
 void drawChair(int a, int dir) {
   curCi = 31;
-  fboxC(a - 64, a + 64, tabD - 64, tabD + 64, 205, 236);
   fboxC(a + dir * 64 - 10, a + dir * 64 + 10, tabD - 64, tabD + 64, 236, 448);
+  fboxC(a - 64, a + 64, tabD - 64, tabD + 64, 205, 236);
 }
 
 void drawTable(int i, int k, int wx, int wz) {
@@ -2629,25 +2676,25 @@ void drawTable(int i, int k, int wx, int wz) {
   // the camera's place along the wall decides which chair is farther
   ca = camZ - shA0;
   if (shAxis == 1) ca = camX - shA0;
-  if (ca < tabA) {
-    drawChair(tabA + 218, 1);
-  } else {
-    drawChair(tabA - 218, 0 - 1);
-  }
-  curCi = 31;
-  fboxC(tabA - 20, tabA + 20, tabD - 20, tabD + 20, 0, 346);
-  curCi = 30;
-  fboxC(tabA - 115, tabA + 115, tabD - 115, tabD + 115, 346, 384);
-  if (ca < tabA) {
-    drawChair(tabA - 218, 0 - 1);
-  } else {
-    drawChair(tabA + 218, 1);
-  }
   if (tabD > 717) {
-    curCi = 30;
-    fboxC(tabA - 13, tabA + 13, tabD - 13, tabD + 13, 384, 768);
     curCi = lotAwn[i];
     fboxC(tabA - 230, tabA + 230, tabD - 230, tabD + 230, 755, 794);
+    curCi = 30;
+    fboxC(tabA - 13, tabA + 13, tabD - 13, tabD + 13, 384, 768);
+  }
+  if (ca < tabA) {
+    drawChair(tabA - 218, 0 - 1);
+  } else {
+    drawChair(tabA + 218, 1);
+  }
+  curCi = 30;
+  fboxC(tabA - 115, tabA + 115, tabD - 115, tabD + 115, 346, 384);
+  curCi = 31;
+  fboxC(tabA - 20, tabA + 20, tabD - 20, tabD + 20, 0, 346);
+  if (ca < tabA) {
+    drawChair(tabA + 218, 1);
+  } else {
+    drawChair(tabA - 218, 0 - 1);
   }
 }
 
@@ -2689,14 +2736,6 @@ void drawLight(int x, int z) {
   sz = 1;
   if (z > nz * PITCH) sz = 0 - 1;
   curStyle = 0 - 1;
-  curCi = 8;
-  curY0 = 0;
-  curY1 = 1280;
-  drawBox(x - 40, z - 40, x + 40, z + 40);
-  curCi = 19;
-  curY0 = 1280;
-  curY1 = 1760;
-  drawBox(x - 110, z - 110, x + 110, z + 110);
   // the face toward x travel (axis 0), then toward z travel (axis 1)
   for (int a = 0; a < 2; a++) {
     l = lightOf(nx, nz, a);
@@ -2721,20 +2760,28 @@ void drawLight(int x, int z) {
       if (sz < 0) drawBox(x - 70, f - 28, x + 70, f);
     }
   }
+  curCi = 19;
+  curY0 = 1280;
+  curY1 = 1760;
+  drawBox(x - 110, z - 110, x + 110, z + 110);
+  curCi = 8;
+  curY0 = 0;
+  curY1 = 1280;
+  drawBox(x - 40, z - 40, x + 40, z + 40);
 }
 
 // A mission marker: a glowing column with a cap that blinks white.
 void drawMarker(int c) {
   curStyle = 0 - 1;
   curCi = c;
-  curY0 = 0;
-  curY1 = 2304;
-  drawBox(mX - 160, mZ - 160, mX + 160, mZ + 160);
-  curCi = c;
   if (((flash / 6) & 1) == 1) curCi = 4;
   curY0 = 2304;
   curY1 = 2560;
   drawBox(mX - 384, mZ - 384, mX + 384, mZ + 384);
+  curCi = c;
+  curY0 = 0;
+  curY1 = 2304;
+  drawBox(mX - 160, mZ - 160, mX + 160, mZ + 160);
 }
 
 // --- per-block object list, far to near ---
@@ -2929,7 +2976,7 @@ void drawBlockObjects(int b, int d) {
       addItem(3, wx + 5120, wz + PAD - 307, dist2(wx + 5120, wz + PAD - 307));
     }
   }
-  for (int k = 0; k < itN; k++) {
+  for (int k = itN - 1; k >= 0; k--) {
     t = itT[k];
     if (t == 0) {
       if (polyCount < MAX_POLY) drawBuilding(itA[k], wx, wz);
@@ -2946,12 +2993,12 @@ void drawBlockObjects(int b, int d) {
     if (t == 4) {
       j = itA[k];
       if (itD[k] < 900) {
-        carShadow(npcX[j], npcZ[j], npcA[j], 520 + npcType[j] * 20, 1200 + npcType[j] * 60);
         if (npcWait[j] > 0) recol[21] = 46;
         if (npcType[j] == 0) drawMesh(carBox, carN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
         if (npcType[j] == 1) drawMesh(sedBox, sedN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
         if (npcType[j] == 2) drawMesh(vanBox, vanN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
         recol[21] = 21;
+        carShadow(npcX[j], npcZ[j], npcA[j], 520 + npcType[j] * 20, 1200 + npcType[j] * 60);
       } else {
         if (npcType[j] == 0) drawMesh(carLod, carLodN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
         if (npcType[j] == 1) drawMesh(sedLod, sedLodN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
@@ -2994,6 +3041,11 @@ void drawBlockObjects(int b, int d) {
     // traffic lights: few and near, so past the props' budget
     if (t == 13) drawLight(itA[k], itB[k]);
     if (t == 12) {
+      curStyle = 0 - 1;
+      curCi = 45;
+      curY0 = 4200 / 4;
+      curY1 = curY0 + 128;
+      if (((flash / 6) & 1) == 0) drawBox(mX - 96, mZ - 96, mX + 96, mZ + 96);
       recol[23] = pasSkin;
       recol[28] = pasLow;
       recol[29] = pasHair;
@@ -3005,14 +3057,8 @@ void drawBlockObjects(int b, int d) {
       recol[23] = 23;
       recol[28] = 28;
       recol[29] = 29;
-      curStyle = 0 - 1;
-      curCi = 45;
-      curY0 = 4200 / 4;
-      curY1 = curY0 + 128;
-      if (((flash / 6) & 1) == 0) drawBox(mX - 96, mZ - 96, mX + 96, mZ + 96);
     }
     if (t == 6) {
-      carShadow(carX, carZ, carA, 540, 1220);
       if (braking == 1) recol[21] = 46;
       bodyP = bodyPitch / 8;
       bodyR = bodyRoll / 8;
@@ -3020,13 +3066,14 @@ void drawBlockObjects(int b, int d) {
       bodyP = 0;
       bodyR = 0;
       recol[21] = 21;
+      carShadow(carX, carZ, carA, 540, 1220);
     }
     if (t == 8) {
       j = itA[k];
       lightSwap = (flash / 4) & 1;
       if (itD[k] < 900) {
-        carShadow(copX[j], copZ[j], copA[j], 540, 1220);
         drawMesh(copBox, copN, copX[j], copZ[j], copA[j], 4, 0);
+        carShadow(copX[j], copZ[j], copA[j], 540, 1220);
       } else {
         drawMesh(copLod, copLodN, copX[j], copZ[j], copA[j], 4, 0);
       }
@@ -3772,18 +3819,20 @@ void drawMissionHud() {
   }
 }
 
-// One full frame: background, all ground, then all objects, cars and people far to near.
+// One full frame, nearest first: the objects of every block, cars and
+// people, then the ground, then the sky and the road where nothing else is.
 void render() {
   polyCount = 0;
   sinA = sinT[camA];
   cosA = sinT[(camA + 256) & 1023];
-  drawBackground();
+  clearCov();
   collectBlocks();
-  for (int k = 0; k < visN; k++) drawGround(visI[k], visD[k]);
+  for (int k = visN - 1; k >= 0; k--) drawBlockObjects(visI[k], visD[k]);
   if (night == 1) {
     if (driving == 1) drawBeam();
   }
-  for (int k = 0; k < visN; k++) drawBlockObjects(visI[k], visD[k]);
+  for (int k = visN - 1; k >= 0; k--) drawGround(visI[k], visD[k]);
+  drawBackground();
   drawMap();
   drawHud();
   drawMissionHud();
