@@ -2115,7 +2115,7 @@ The compiler adds about 165KB of flash and 8.6KB of RAM to a sketch; the loader 
 
 Whole games, from 400 to 5200 lines of script each, compiled on the board or loaded as saved binaries, have their own page: **[README_GAMES.md](README_GAMES.md)**.
 
-- [On the ESP32-S3-Touch-LCD-7](README_GAMES.md#on-the-esp32-s3-touch-lcd-7) (800x480, a USB keyboard): Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing, ChromaQuest, Vault13H, Ironforge, Valmora, Lumenfall, Wickwire and Driftwing, and the GameLauncher that runs them from the FFat partition.
+- [On the ESP32-S3-Touch-LCD-7](README_GAMES.md#on-the-esp32-s3-touch-lcd-7) (800x480, a USB keyboard): Tetris, MazeChase, NeonRacer, PrismBreak, XenoWing, ChromaQuest, Vault13H, Ironforge, Valmora, Lumenfall, Wickwire and Driftwing, and the GameLauncher that runs them from the FFat partition; CitySandbox, a city to drive through, in progress.
 - [On the Guition ESP32-4848S040](README_GAMES.md#on-the-guition-esp32-4848s040-the-games-on-a-touch-screen) (480x480, a touch screen): the same games with their controls on the screen.
 
 ---

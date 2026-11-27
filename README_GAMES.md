@@ -19,6 +19,7 @@ The games written with ESPLiveScript 2 to show what its compiler can do with who
 * [Lumenfall: a platform game with parallax scrolling](#lumenfall-a-platform-game-with-parallax-scrolling)
 * [Wickwire: a 3D platform game, rendered by the script](#wickwire-a-3d-platform-game-rendered-by-the-script)
 * [Driftwing: a flying game over a voxel world](#driftwing-a-flying-game-over-a-voxel-world)
+* [CitySandbox: a city to drive and walk through (in progress)](#citysandbox-a-city-to-drive-and-walk-through-in-progress)
 
 ## On the ESP32-S3-Touch-LCD-7
 
@@ -504,3 +505,23 @@ Writing it found two limits in the compiler, both fixed: past 64 KB of code the 
 Keys: left/right (Q D) bank and turn, up/down (Z S) climb and dive, Space boosts while its gauge lasts, C changes the camera (chase, far, high, low), U/J tilt it, Enter pauses, P shows a picture's time. The game is always 400x240: the title's menu plays it full screen (pixel size 2) or in a window in the middle of the panel (pixel size 1), and M switches during play. `driftwing.bin` runs in the GameLauncher and on SolarOS (`asm run driftwing.bin`, the WAD beside it; `asm run driftwing.bin 1` chooses the window beforehand); `Driftwing.ino` compiles the script on the board.
 
 The WAD (1.6 MB, `tools/make_wad.py`, about 30 s) holds the two maps and a 128x128 minimap compressed, the plane's mesh, the sprites (balloon, bird, letter), the font, the story, the routes and the towers' lights; the script reads it from the FFat partition into PSRAM and unpacks the maps straight into their arrays.
+
+## CitySandbox: a city to drive and walk through (in progress)
+
+[matouch/CitySandbox](examples/matouch/CitySandbox) is the start of an open-world city game, in full 3D, every polygon drawn by the script at 400x240 (shown at pixel size 2). A 16x16-block downtown on a clear day: a waterfront on the west side, parks, streets with lane markings and zebra crossings, trees and street lamps, and towers of concrete, brick, sandstone and steel, taller toward the centre, their windows in eight patterns. You drive a car through it, get out and walk, and get back in.
+
+| | |
+|:---:|:---:|
+| <img src="examples/matouch/CitySandbox/citysandbox_drive.png" width="400" alt="Driving, the chase camera"> | <img src="examples/matouch/CitySandbox/citysandbox_foot.png" width="400" alt="On foot beside the car"> |
+| <img src="examples/matouch/CitySandbox/citysandbox_far.png" width="400" alt="The far camera"> | <img src="examples/matouch/CitySandbox/citysandbox_back.png" width="400" alt="Back in the car"> |
+
+- **The renderer**: no depth buffer. The blocks in view are drawn far to near, the objects of a block sorted by distance, and a box only shows its faces turned to the camera, so nothing needs sorting inside it. Polygons are filled span by span, edges always walked top to bottom so that neighbours meet without gaps. Positions are fixed point (24.8, a unit about half a metre), angles 0 to 1023 with a sine table; the camera turns but does not tilt, so walls stay vertical. Fog in eight levels toward the horizon, buildings rising out of it at the edge of the draw distance instead of popping in, windows drawn one by one near the camera, as bands farther away, not at all beyond; 600 quads at most a frame.
+- **The player**: the car accelerates, brakes, reverses and steers more sharply with speed, sliding along a wall it meets at an angle and bouncing off one it meets head on; on foot you walk and turn. The car and the person are meshes of boxes, turned with their heading.
+- **The views**: a chase camera behind the car, a farther and higher one, and the bonnet (on foot: over the shoulder, farther back, at eye height), the camera following the heading with a little lag.
+
+Keys: up/down (Z S) accelerate and brake (walk on foot), left/right (Q D) steer or turn, Space brakes hard, Enter (or E) gets out of the car once it has stopped and back in within a few steps of it, V changes the view, Escape quits.
+
+The script (`tools/city.sc`) is plain integer code: no structures, no floats. The WAD (4 KB, `tools/mkwad.py`, compiled into the sketch as `city_wad.h`) holds the palette (24 colours, each in 5 shades and 8 fog levels), the sky's colours, the sine table, the window patterns and the meshes of the car and the person. The first 200 frames are a scripted tour on a simulated clock, printing a checksum every 10 frames: `tools/check_ref.py` compiles the same script as C on a computer and prints the same checksums. On the board it compiles in 25 s and runs at 17 to 20 frames a second while driving.
+
+Next: traffic and people in the streets, then the police, missions and a HUD, then day and night.
+
