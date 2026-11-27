@@ -71,6 +71,7 @@ external void setWindow(int on);   // reads city.wad, returns byte count
 #define KEY_VIEW 7
 #define KEY_BRAKE 8
 #define KEY_WANTED 9
+#define KEY_TIME 10
 #define TURN_STEP 10
 #define MOVE_STEP 307
 #define TICK_MS 33
@@ -79,11 +80,12 @@ external void setWindow(int on);   // reads city.wad, returns byte count
 // ===== 2. MATHS TABLES AND ASSETS (filled from the WAD) =====
 uint8_t wad[12288];
 int sinT[1024];
-uint16_t pal[1600];
+uint16_t pal[1840];
 uint16_t skyC[8];
 uint8_t patT[64];
 uint16_t rowCol[240];
 uint8_t font[448];      // 5x7 characters 32..95, from the WAD
+uint8_t colRGB[138];    // the 46 colours, r g b: relit by the time of day
 
 int camX = 111462;
 int camZ = 82944;
@@ -192,7 +194,7 @@ int loadAssets() {
   if (wad[1] != 87) return 0;
   o = findLump(80, 65, 76, 69);
   if (o == 0) return 0;
-  for (int i = 0; i < 1600; i++) pal[i] = rd16(o + i * 2);
+  for (int i = 0; i < 1840; i++) pal[i] = rd16(o + i * 2);
   o = findLump(83, 75, 89, 67);
   if (o == 0) return 0;
   for (int i = 0; i < 8; i++) skyC[i] = rd16(o + i * 2);
@@ -233,6 +235,9 @@ int loadAssets() {
   o = findLump(87, 79, 77, 76);
   if (o == 0) return 0;
   womLodN = loadMesh(o, womLod);
+  o = findLump(67, 79, 76, 82);
+  if (o == 0) return 0;
+  for (int i = 0; i < 138; i++) colRGB[i] = wad[o + i];
   return 1;
 }
 
@@ -432,6 +437,14 @@ void fillPoly(int n, int c) {
   }
 }
 
+// the time of day (section 5b) and the night's stars
+int light[13];          // the current values, as in a keyframe
+int clockMin = 960;     // 16:00
+int clockSub = 0;
+int night = 0;          // 1 when windows, lamps and headlights are on
+int starA[60];
+int starY[60];
+
 // Sky bands above the horizon, fogged road colour below it.
 void drawBackground() {
   int c;
@@ -445,6 +458,26 @@ void drawBackground() {
     o = y * SCR_W;
     for (int x = 0; x < SCR_W; x++) fb[o + x] = c;
   }
+  if (light[0] < 120) {
+    for (int i = 0; i < 60; i++) {
+      c = (starA[i] - camA + 1536) % 1024 - 512;
+      if (c > 0 - 120) {
+        if (c < 120) {
+          c = HALF_W + (c * 1534) / 1000;
+          fb[starY[i] * SCR_W + c] = 65535;
+        }
+      }
+    }
+  }
+}
+
+// A walker's looks, from a random sequence of their own (the city's stays as
+// it was): man or woman, skin, hair, trousers or skirt (the top is walkShirt).
+int lookSeed = 4242;
+
+int lookRnd(int n) {
+  lookSeed = lookSeed * 1103515245 + 12345;
+  return ((lookSeed / 65536) & 32767) % n;
 }
 
 // Precomputes the ground colour of every screen row (depth only depends on the row).
@@ -457,6 +490,112 @@ void initRows() {
       z = (camH * FOCAL) / (y - HORIZON);
       rowCol[y] = pal[fogOf(z)];
     }
+  }
+}
+
+// ===== 5b. DAY AND NIGHT =====
+// A day lasts 12 minutes: the clock moves 2 minutes a second. The light, its
+// tint, the fog and the sky follow keyframes; the palette is recomputed from
+// the WAD's base colours whenever the clock moves. Lamps, lights, lit windows
+// and markers glow: the light does not dim them.
+// keyframes: time in minutes, then light, tint r g b, fog r g b, sky top r g b, sky horizon r g b
+int keyT[8] = {0, 300, 390, 480, 1050, 1140, 1230, 1440};
+int keyV[104] = {60, 190, 205, 256, 16, 20, 40, 2, 4, 14, 16, 20, 40,
+                 60, 190, 205, 256, 16, 20, 40, 2, 4, 14, 16, 20, 40,
+                 170, 256, 200, 170, 220, 170, 150, 60, 80, 150, 240, 170, 140,
+                 256, 256, 256, 256, 206, 226, 246, 60, 130, 220, 206, 226, 246,
+                 256, 256, 256, 256, 206, 226, 246, 60, 130, 220, 206, 226, 246,
+                 170, 256, 190, 150, 230, 150, 110, 70, 60, 130, 250, 140, 90,
+                 60, 190, 205, 256, 16, 20, 40, 2, 4, 14, 16, 20, 40,
+                 60, 190, 205, 256, 16, 20, 40, 2, 4, 14, 16, 20, 40};
+int shade256[5] = {256, 230, 200, 169, 138};
+
+int rgbC(int r, int g, int b) {
+  if (r > 255) r = 255;
+  if (g > 255) g = 255;
+  if (b > 255) b = 255;
+  return (r / 8) * 2048 + (g / 4) * 32 + b / 8;
+}
+
+int glows(int c) {
+  if (c == 9) return 1;
+  if (c == 21) return 1;
+  if (c >= 40) return 1;
+  return 0;
+}
+
+// The light at clockMin, then the palette, the sky and the ground rows.
+void relight() {
+  int k;
+  int u;
+  int span;
+  int a;
+  int b;
+  int lr;
+  int lg;
+  int lb;
+  int r;
+  int g;
+  int bl;
+  int t;
+  int o;
+  k = 0;
+  while (keyT[k + 1] <= clockMin) k++;
+  if (k > 6) k = 6;
+  span = keyT[k + 1] - keyT[k];
+  u = ((clockMin - keyT[k]) * 256) / span;
+  for (int i = 0; i < 13; i++) {
+    a = keyV[k * 13 + i];
+    b = keyV[k * 13 + 13 + i];
+    light[i] = a + ((b - a) * u) / 256;
+  }
+  night = 0;
+  if (light[0] < 200) night = 1;
+  lr = (light[0] * light[1]) / 256;
+  lg = (light[0] * light[2]) / 256;
+  lb = (light[0] * light[3]) / 256;
+  for (int c = 0; c < 46; c++) {
+    for (int sh = 0; sh < 5; sh++) {
+      r = (colRGB[c * 3] * shade256[sh]) / 256;
+      g = (colRGB[c * 3 + 1] * shade256[sh]) / 256;
+      bl = (colRGB[c * 3 + 2] * shade256[sh]) / 256;
+      if (glows(c) == 0) {
+        r = (r * lr) / 256;
+        g = (g * lg) / 256;
+        bl = (bl * lb) / 256;
+      }
+      o = (c * 5 + sh) * 8;
+      for (int f = 0; f < 8; f++) {
+        t = (f * 256) / 7;
+        pal[o + f] = rgbC(r + ((light[4] - r) * t) / 256, g + ((light[5] - g) * t) / 256, bl + ((light[6] - bl) * t) / 256);
+      }
+    }
+  }
+  for (int i = 0; i < 6; i++) {
+    t = (i * 256) / 5;
+    skyC[i] = rgbC(light[7] + ((light[10] - light[7]) * t) / 256, light[8] + ((light[11] - light[8]) * t) / 256, light[9] + ((light[12] - light[9]) * t) / 256);
+  }
+  skyC[6] = rgbC(light[4], light[5], light[6]);
+  initRows();
+}
+
+// The clock: two minutes a second (a step is 1/30 s).
+void clockStep() {
+  clockSub++;
+  if (clockSub >= 15) {
+    clockSub = 0;
+    clockMin++;
+    if (clockMin >= 1440) clockMin = 0;
+    relight();
+  }
+}
+
+// --- stars, for the night sky ---
+
+void initStars() {
+  for (int i = 0; i < 60; i++) {
+    starA[i] = lookRnd(1024);
+    starY[i] = 2 + lookRnd(HORIZON - 30);
   }
 }
 
@@ -615,7 +754,11 @@ void drawWindows(int xa, int za, int xb, int zb, int len10, int sh) {
         py[1] = HORIZON - (ya * sb) / 65536;
         py[2] = HORIZON - (yb * sb) / 65536;
         py[3] = HORIZON - (yb * sa) / 65536;
-        fillPoly(4, pal[(10 * 5 + sh) * 8 + f]);
+        g = 10;
+        if (night == 1) {
+          if ((curId + fl * 3) % 4 != 0) g = 41;
+        }
+        fillPoly(4, pal[(g * 5 + sh) * 8 + f]);
       }
     }
     return;
@@ -642,6 +785,10 @@ void drawWindows(int xa, int za, int xb, int zb, int len10, int sh) {
               yb = ya + 666;
               g = 10;
               if (((curId + fl * 7 + k * 13) & 3) == 0) g = 11;
+              if (night == 1) {
+                g = 10;
+                if ((curId * 3 + fl * 7 + k * 13) % 5 < 2) g = 41;
+              }
               px[0] = x0;
               px[1] = x1;
               px[2] = x1;
@@ -903,6 +1050,17 @@ void drawGround(int b, int d) {
       }
     }
   }
+  // at night, the light of the two street lamps on the pavement and the road
+  if (night == 1) {
+    if (d < D2_PROPS_FULL) {
+      if (t == 0) {
+        setQuad(wx + ROAD_HALF + 5120 - 460, wz + ROAD_HALF + 307 - 1000, wx + ROAD_HALF + 5120 + 460, wz + ROAD_HALF + 307 + 200);
+        flatCam(0, 42, 0);
+        setQuad(wx + ROAD_HALF + 5120 - 460, wz + ROAD_HALF + PAD - 307 - 200, wx + ROAD_HALF + 5120 + 460, wz + ROAD_HALF + PAD - 307 + 1000);
+        flatCam(0, 42, 0);
+      }
+    }
+  }
   if (d < D2_ZEBRA) {
     for (int j = 0; j < 5; j++) {
       o = j * 666 - 1536;
@@ -950,6 +1108,8 @@ int view = 0;              // 0 chase, 1 far chase, 2 hood
 int lastEnter = 0;
 int lastView = 0;
 int lastWanted = 0;
+int lastTime = 0;
+int bustedNow = 0;      // set by a bust, read by the missions
 
 // --- traffic: cars on the street grid, driving on the right ---
 // A street runs along x = k * PITCH and z = k * PITCH, k 1..15. A car goes
@@ -1009,6 +1169,84 @@ int calmT = 0;        // steps without a police car near: a star goes at 300
 int crimeT = 0;       // steps before another crash counts
 int bustT = 0;        // steps a police car has been at you
 int bannerT = 0;      // steps of the BUSTED banner left
+// --- shop fronts and café terraces ---
+// A lot's street side as a frame: shFace is the wall's x (axis 0) or z (axis 1),
+// shOut the outward sign, shA0 and shLen the wall's extent along it, shGap the
+// distance from the wall to the outer edge of the pavement, all 24.8.
+int shAxis = 0;
+int shFace = 0;
+int shOut = 0;
+int shA0 = 0;
+int shLen = 0;
+int shGap = 0;
+
+void setShop(int i, int wx, int wz) {
+  int l;
+  l = i % 4;
+  shAxis = lotSide[i];
+  if (shAxis == 0) {
+    shOut = 0 - 1;
+    shFace = wx + lotX0[i] * 256;
+    shGap = lotX0[i] * 256;
+    if ((l & 1) == 1) {
+      shOut = 1;
+      shFace = wx + lotX1[i] * 256;
+      shGap = PAD - lotX1[i] * 256;
+    }
+    shA0 = wz + lotZ0[i] * 256;
+    shLen = (lotZ1[i] - lotZ0[i]) * 256;
+  } else {
+    shOut = 0 - 1;
+    shFace = wz + lotZ0[i] * 256;
+    shGap = lotZ0[i] * 256;
+    if (l >= 2) {
+      shOut = 1;
+      shFace = wz + lotZ1[i] * 256;
+      shGap = PAD - lotZ1[i] * 256;
+    }
+    shA0 = wx + lotX0[i] * 256;
+    shLen = (lotX1[i] - lotX0[i]) * 256;
+  }
+}
+
+// Table k of the café on lot i: two chairs either side along the wall, the
+// table, and a parasol when it stands clear of the awning.
+int tabA = 0;
+int tabD = 0;
+
+void tableAt(int i, int k) {
+  tabA = (shLen * (k + 1)) / 4;
+  tabD = shGap - 614;
+}
+
+// 1 when a circle at (x, z) touches the terrace of the café on lot i.
+int onTerrace(int i, int wx, int wz, int x, int z, int r) {
+  int a0;
+  int a1;
+  int d0;
+  int d1;
+  int u;
+  int v;
+  setShop(i, wx, wz);
+  a0 = shLen / 4 - 400 - r;
+  a1 = (shLen * 3) / 4 + 400 + r;
+  tableAt(i, 0);
+  d0 = tabD - 300 - r;
+  d1 = tabD + 300 + r;
+  if (shAxis == 0) {
+    u = z - shA0;
+    v = (x - shFace) * shOut;
+  } else {
+    u = x - shA0;
+    v = (z - shFace) * shOut;
+  }
+  if (u < a0) return 0;
+  if (u > a1) return 0;
+  if (v < d0) return 0;
+  if (v > d1) return 0;
+  return 1;
+}
+
 int hitWhat = 0;      // what blocked() met: 1 a car of the traffic, 2 the police
 int flash = 0;        // the light bars, every few frames
 
@@ -1069,6 +1307,9 @@ int blocked(int x, int z, int r) {
               wz = bz * PITCH + ROAD_HALF;
               for (int l = 0; l < 4; l++) {
                 i = b * 4 + l;
+                if (lotShop[i] == 2) {
+                  if (onTerrace(i, wx, wz, x, z, r) == 1) return 1;
+                }
                 if (lotH[i] > 0) {
                   if (x + r > wx + lotX0[i] * 256) {
                     if (x - r < wx + lotX1[i] * 256) {
@@ -1455,15 +1696,6 @@ void walkersStep() {
 int carPaints[8];
 int shirtPaints[8];
 
-// A walker's looks, from a random sequence of their own (the city's stays as
-// it was): man or woman, skin, hair, trousers or skirt (the top is walkShirt).
-int lookSeed = 4242;
-
-int lookRnd(int n) {
-  lookSeed = lookSeed * 1103515245 + 12345;
-  return ((lookSeed / 65536) & 32767) % n;
-}
-
 void dressWalker(int k) {
   int h;
   walkWoman[k] = lookRnd(2);
@@ -1737,6 +1969,7 @@ void policeStep() {
     // busted: back to the start, no stars, no police
     bannerT = 90;
     bustT = 0;
+    bustedNow = 1;
     wanted = 0;
     calmT = 0;
     for (int i = 0; i < NCOPS; i++) copOn[i] = 0;
@@ -1774,6 +2007,186 @@ void runOverStep() {
 
 // One 30 Hz step: the keys pressed once (get in or out, the view), then
 // the car or the person, then the camera.
+
+// ===== 7b. MISSIONS =====
+// A green marker on a street starts a mission: drive or walk into it. Three
+// kinds take turns: a taxi ride (pick a passenger up, stop at their
+// destination in time), four checkpoints against the clock, and a getaway
+// (three stars, lose them). Missions pay; a bust fails the mission and costs.
+int cash = 0;
+int mState = 0;        // 0 waiting at the start marker, 1 running
+int mKind = 0;         // 0 taxi, 1 checkpoints, 2 getaway
+int mNext = 0;
+int mStep = 0;         // taxi: 0 pick up, 1 drive; checkpoints: done so far
+int mTime = 0;         // steps left, 0 = no limit
+int mPay = 0;
+int mX = 0;            // the start marker, then the current target
+int mZ = 0;
+int mBX = 0;           // the block of the current target
+int mBZ = 0;
+int pasWoman = 0;      // the passenger's looks
+int pasSkin = 23;
+int pasHair = 29;
+int pasShirt = 22;
+int pasLow = 28;
+int msgT = 0;          // a big message: 0 passed, 1 failed
+int msgKind = 0;
+int msgCash = 0;
+int mSeed = 777;
+
+int mRnd(int n) {
+  mSeed = mSeed * 1103515245 + 12345;
+  return ((mSeed / 65536) & 32767) % n;
+}
+
+// A point on the street along the north side of block (bx, bz): in the
+// middle of the road, or on the block's pavement (side 1).
+void mPoint(int bx, int bz, int side) {
+  mBX = bx;
+  mBZ = bz;
+  mX = bx * PITCH + PITCH / 2;
+  mZ = bz * PITCH;
+  if (side == 1) mZ = mZ + ROAD_HALF + 420;
+}
+
+// A new target 2 to 4 blocks (in each direction at most) from the last one.
+void mHop(int side) {
+  int bx;
+  int bz;
+  bx = mBX + mRnd(5) - 2;
+  bz = mBZ + mRnd(5) - 2;
+  if (mRnd(2) == 0) {
+    if (bx >= mBX) bx = bx + 2;
+    if (bx < mBX) bx = bx - 2;
+  } else {
+    if (bz >= mBZ) bz = bz + 2;
+    if (bz < mBZ) bz = bz - 2;
+  }
+  if (bx < 2) bx = 2 + mRnd(3);
+  if (bx > 14) bx = 14 - mRnd(3);
+  if (bz < 2) bz = 2 + mRnd(3);
+  if (bz > 14) bz = 14 - mRnd(3);
+  mPoint(bx, bz, side);
+}
+
+int isqrtM(int n) {
+  int r;
+  r = 0;
+  while ((r + 1) * (r + 1) <= n) r++;
+  return r;
+}
+
+// Distance in whole units from the player to the target.
+int mDist() {
+  int dx;
+  int dz;
+  dx = (plX() - mX) / 256;
+  dz = (plZ() - mZ) / 256;
+  return isqrtM(dx * dx + dz * dz);
+}
+
+void mEnd(int ok) {
+  msgT = 120;
+  msgKind = 1 - ok;
+  msgCash = 0;
+  if (ok == 1) {
+    cash = cash + mPay;
+    msgCash = mPay;
+  }
+  mState = 0;
+  mNext = (mNext + 1) % 3;
+  mPoint(blockAt(plX(), plZ()) % 16, blockAt(plX(), plZ()) / 16, 0);
+  mHop(0);
+}
+
+void mBegin() {
+  int b;
+  mState = 1;
+  mKind = mNext;
+  mStep = 0;
+  mTime = 0;
+  if (mKind == 0) {
+    pasWoman = mRnd(2);
+    pasSkin = 23;
+    b = mRnd(5);
+    if (b > 0) pasSkin = 31 + b;
+    pasHair = 36 + mRnd(4);
+    pasShirt = 20 + mRnd(3) * 2;
+    pasLow = 24 + mRnd(4);
+    mHop(1);
+    mTime = 30 * 40;
+  }
+  if (mKind == 1) {
+    mHop(0);
+    mTime = 30 * 30;
+    mPay = 300;
+  }
+  if (mKind == 2) {
+    if (wanted < 3) wanted = 3;
+    mPay = 500;
+  }
+}
+
+void missionStep() {
+  int d;
+  int s;
+  if (msgT > 0) msgT--;
+  if (bustedNow == 1) {
+    bustedNow = 0;
+    cash = cash - 100;
+    if (cash < 0) cash = 0;
+    if (mState == 1) mEnd(0);
+    return;
+  }
+  d = mDist();
+  if (mState == 0) {
+    if (d < 6) mBegin();
+    return;
+  }
+  if (mTime > 0) {
+    mTime--;
+    if (mTime == 0) {
+      mEnd(0);
+      return;
+    }
+  }
+  s = carSpd;
+  if (s < 0) s = 0 - s;
+  if (mKind == 0) {
+    // stopped next to the passenger, then at their destination
+    if (driving == 1) {
+      if (s < 60) {
+        if (d < 12) {
+          if (mStep == 0) {
+            mStep = 1;
+            mHop(1);
+            mHop(1);
+            d = mDist();
+            mPay = 100 + d * 2;
+            mTime = 30 * (15 + d / 6);
+          } else {
+            mEnd(1);
+          }
+        }
+      }
+    }
+  }
+  if (mKind == 1) {
+    if (d < 9) {
+      mStep++;
+      if (mStep == 4) {
+        mEnd(1);
+      } else {
+        mHop(0);
+        mTime = mTime + 30 * 12;
+      }
+    }
+  }
+  if (mKind == 2) {
+    if (wanted == 0) mEnd(1);
+  }
+}
+
 void update() {
   int k;
   // while BUSTED shows, nothing moves and no key counts
@@ -1804,6 +2217,15 @@ void update() {
     }
   }
   lastWanted = k;
+  // T: three hours later
+  k = keyDown(KEY_TIME);
+  if (k != 0) {
+    if (lastTime == 0) {
+      clockMin = (clockMin + 180) % 1440;
+      relight();
+    }
+  }
+  lastTime = k;
   if (crimeT > 0) crimeT--;
   if (driving == 1) {
     driveStep();
@@ -1814,6 +2236,8 @@ void update() {
   walkersStep();
   runOverStep();
   policeStep();
+  missionStep();
+  clockStep();
   placeCamera();
 }
 
@@ -1862,7 +2286,7 @@ int boxD[40];
 int boxZ0[40];
 int boxZ1[40];
 int lightSwap = 0;
-uint8_t recol[40];      // colour substitutions for the next meshes, identity by default
+uint8_t recol[46];      // colour substitutions for the next meshes, identity by default
 
 // Swing of the legs and arms, 24.8, from a walking phase (a triangle wave).
 int swingOf(int phase) {
@@ -1939,52 +2363,12 @@ void drawMesh(int *m, int n, int cx, int cz, int a, int paint, int swing) {
     // a police car's light bar: red and blue change places
     if (lightSwap == 1) {
       if (curCi == 21) {
-        curCi = 5;
+        curCi = 40;
       } else {
-        if (curCi == 5) curCi = 21;
+        if (curCi == 40) curCi = 21;
       }
     }
     drawOBox(cx, cz, a, m[k], m[k + 1], boxZ0[boxOrd[k2]], boxZ1[boxOrd[k2]]);
-  }
-}
-
-// --- shop fronts and café terraces ---
-// A lot's street side as a frame: shFace is the wall's x (axis 0) or z (axis 1),
-// shOut the outward sign, shA0 and shLen the wall's extent along it, shGap the
-// distance from the wall to the outer edge of the pavement, all 24.8.
-int shAxis = 0;
-int shFace = 0;
-int shOut = 0;
-int shA0 = 0;
-int shLen = 0;
-int shGap = 0;
-
-void setShop(int i, int wx, int wz) {
-  int l;
-  l = i % 4;
-  shAxis = lotSide[i];
-  if (shAxis == 0) {
-    shOut = 0 - 1;
-    shFace = wx + lotX0[i] * 256;
-    shGap = lotX0[i] * 256;
-    if ((l & 1) == 1) {
-      shOut = 1;
-      shFace = wx + lotX1[i] * 256;
-      shGap = PAD - lotX1[i] * 256;
-    }
-    shA0 = wz + lotZ0[i] * 256;
-    shLen = (lotZ1[i] - lotZ0[i]) * 256;
-  } else {
-    shOut = 0 - 1;
-    shFace = wz + lotZ0[i] * 256;
-    shGap = lotZ0[i] * 256;
-    if (l >= 2) {
-      shOut = 1;
-      shFace = wz + lotZ1[i] * 256;
-      shGap = PAD - lotZ1[i] * 256;
-    }
-    shA0 = wx + lotX0[i] * 256;
-    shLen = (lotX1[i] - lotX0[i]) * 256;
   }
 }
 
@@ -2063,16 +2447,6 @@ void drawShop(int i, int wx, int wz, int lod) {
   }
 }
 
-// Table k of the café on lot i: two chairs either side along the wall, the
-// table, and a parasol when it stands clear of the awning.
-int tabA = 0;
-int tabD = 0;
-
-void tableAt(int i, int k) {
-  tabA = (shLen * (k + 1)) / 4;
-  tabD = shGap - 614;
-}
-
 void drawChair(int a, int dir) {
   curCi = 31;
   fboxC(a - 64, a + 64, tabD - 64, tabD + 64, 205, 236);
@@ -2109,10 +2483,25 @@ void drawTable(int i, int k, int wx, int wz) {
   }
 }
 
+// A mission marker: a glowing column with a cap that blinks white.
+void drawMarker(int c) {
+  curStyle = 0 - 1;
+  curCi = c;
+  curY0 = 0;
+  curY1 = 2304;
+  drawBox(mX - 160, mZ - 160, mX + 160, mZ + 160);
+  curCi = c;
+  if (((flash / 6) & 1) == 1) curCi = 4;
+  curY0 = 2304;
+  curY1 = 2560;
+  drawBox(mX - 384, mZ - 384, mX + 384, mZ + 384);
+}
+
 // --- per-block object list, far to near ---
 // 0 building, 1 tree, 2 lamp facing -z, 3 lamp facing +z, 4 a car of the
 // traffic, 5 a person walking, 6 the player's car, 7 the player on foot,
-// 8 a police car, 9 a shop front, 10 a café table
+// 8 a police car, 9 a shop front, 10 a café table, 11 a mission marker,
+// 12 the passenger waiting
 int itT[64];
 int itA[64];
 int itB[64];
@@ -2172,6 +2561,17 @@ void addActors(int b) {
   }
   if (driving == 0) {
     if (blockAt(pedX, pedZ) == b) addItem(7, 0, 0, dist2(pedX, pedZ));
+  }
+  if (blockAt(mX, mZ) == b) {
+    d = dist2(mX, mZ);
+    if (mState == 0) addItem(11, 44, 0, d);
+    if (mState == 1) {
+      if (mKind == 0) {
+        if (mStep == 0) addItem(12, 0, 0, d);
+        if (mStep == 1) addItem(11, 45, 0, d);
+      }
+      if (mKind == 1) addItem(11, 45, 0, d);
+    }
   }
   for (int k = 0; k < NCOPS; k++) {
     if (copOn[k] == 1) {
@@ -2330,6 +2730,25 @@ void drawBlockObjects(int b, int d) {
     }
     if (t == 10) {
       if (polyCount < PROP_BUDGET) drawTable(itA[k], itB[k], wx, wz);
+    }
+    if (t == 11) drawMarker(itA[k]);
+    if (t == 12) {
+      recol[23] = pasSkin;
+      recol[28] = pasLow;
+      recol[29] = pasHair;
+      if (pasWoman == 1) {
+        drawMesh(womBox, womN, mX, mZ, 512, pasShirt, 0);
+      } else {
+        drawMesh(pedBox, pedN, mX, mZ, 512, pasShirt, 0);
+      }
+      recol[23] = 23;
+      recol[28] = 28;
+      recol[29] = 29;
+      curStyle = 0 - 1;
+      curCi = 45;
+      curY0 = 4200 / 4;
+      curY1 = curY0 + 128;
+      if (((flash / 6) & 1) == 0) drawBox(mX - 96, mZ - 96, mX + 96, mZ + 96);
     }
     if (t == 6) drawMesh(carBox, carN, carX, carZ, carA, 0 - 1, 0);
     if (t == 8) {
@@ -2560,7 +2979,7 @@ void drawMap() {
       z4 = z4 - s;
     }
   }
-  if (driving == 0) mapDot(carX, carZ, px, pz, 65504);
+  if (driving == 0) mapDot(carX, carZ, px, pz, 2047);
   for (int k = 0; k < NCOPS; k++) {
     if (copOn[k] == 1) {
       c = 63488;
@@ -2836,6 +3255,150 @@ void titleScreen() {
   }
 }
 
+// The car's headlights on the road: a trapezoid ahead of it.
+int beamX[4] = {-410, 410, 920, -920};
+int beamZ[4] = {1180, 1180, 4100, 4100};
+
+void drawBeam() {
+  int s;
+  int c;
+  int wxp;
+  int wzp;
+  s = sinT[carA];
+  c = sinT[(carA + 256) & 1023];
+  for (int i = 0; i < 4; i++) {
+    wxp = carX + (beamX[i] * c + beamZ[i] * s) / 4096;
+    wzp = carZ + (beamZ[i] * c - beamX[i] * s) / 4096;
+    toCam(wxp, wzp);
+    ax[i] = tX;
+    az[i] = tZ;
+  }
+  flatCam(0, 43, 0);
+}
+
+// --- the mission HUD: what to do, the time left, money, speed, the clock ---
+uint8_t txGo[33] = {68, 82, 73, 86, 69, 32, 79, 82, 32, 87, 65, 76, 75, 32, 84, 79, 32, 84, 72, 69, 32, 71, 82, 69, 69, 78, 32, 77, 65, 82, 75, 69, 82};
+uint8_t txPick[21] = {80, 73, 67, 75, 32, 85, 80, 32, 84, 72, 69, 32, 80, 65, 83, 83, 69, 78, 71, 69, 82};
+uint8_t txTake[25] = {83, 84, 79, 80, 32, 65, 84, 32, 84, 72, 69, 32, 89, 69, 76, 76, 79, 87, 32, 77, 65, 82, 75, 69, 82};
+uint8_t txCheck[10] = {67, 72, 69, 67, 75, 80, 79, 73, 78, 84};
+uint8_t txLose[15] = {76, 79, 83, 69, 32, 84, 72, 69, 32, 80, 79, 76, 73, 67, 69};
+uint8_t txPassed[14] = {77, 73, 83, 83, 73, 79, 78, 32, 80, 65, 83, 83, 69, 68};
+uint8_t txFailed[14] = {77, 73, 83, 83, 73, 79, 78, 32, 70, 65, 73, 76, 69, 68};
+uint8_t txKmh[5] = {32, 75, 77, 47, 72};
+uint8_t tb[40];
+int tbN = 0;
+
+void tbText(uint8_t *t, int n) {
+  for (int i = 0; i < n; i++) {
+    tb[tbN] = t[i];
+    tbN++;
+  }
+}
+
+void tbNum(int v, int w) {
+  int d;
+  int k;
+  d = 1;
+  k = 1;
+  while (d * 10 <= v) {
+    d = d * 10;
+    k++;
+  }
+  while (k < w) {
+    tb[tbN] = 48;
+    tbN++;
+    k++;
+  }
+  while (d > 0) {
+    tb[tbN] = 48 + (v / d) % 10;
+    tbN++;
+    d = d / 10;
+  }
+}
+
+// tb drawn with its right edge at x.
+void tbRight(int x, int y, int sc, int col) {
+  drawText(x - tbN * 6 * sc + sc + sc, y + sc, tb, tbN, sc, 0);
+  drawText(x - tbN * 6 * sc + sc, y, tb, tbN, sc, col);
+}
+
+void drawMissionHud() {
+  int s;
+  // the mission's target on the map
+  if (mState == 0) mapDot(mX, mZ, plX(), plZ(), rgb(60, 230, 90));
+  if (mState == 1) {
+    if (mKind != 2) mapDot(mX, mZ, plX(), plZ(), rgb(255, 214, 40));
+  }
+  tbN = 0;
+  if (mState == 0) tbText(txGo, 33);
+  if (mState == 1) {
+    if (mKind == 0) {
+      if (mStep == 0) tbText(txPick, 21);
+      if (mStep == 1) tbText(txTake, 25);
+    }
+    if (mKind == 1) {
+      tbText(txCheck, 10);
+      tb[tbN] = 32;
+      tbN++;
+      tbNum(mStep + 1, 1);
+      tb[tbN] = 47;
+      tbN++;
+      tb[tbN] = 52;
+      tbN++;
+    }
+    if (mKind == 2) tbText(txLose, 15);
+  }
+  textMid(6, tb, tbN, 1, 65535, 0);
+  if (mState == 1) {
+    if (mTime > 0) {
+      s = mTime / 30;
+      tbN = 0;
+      tbNum(s / 60, 1);
+      tb[tbN] = 58;
+      tbN++;
+      tbNum(s % 60, 2);
+      s = 65535;
+      if (mTime < 300) s = rgb(255, 70, 60);
+      textMid(18, tb, tbN, 2, s, 0);
+    }
+  }
+  // money under the stars, the clock under the map, the speed at the bottom
+  tbN = 0;
+  tb[0] = 36;
+  tbN = 1;
+  tbNum(cash, 1);
+  tbRight(SCR_W - 4, 24, 2, rgb(120, 230, 110));
+  tbN = 0;
+  tbNum(clockMin / 60, 2);
+  tb[tbN] = 58;
+  tbN++;
+  tbNum(clockMin % 60, 2);
+  drawText(MAP_CX - 14, MAP_CY + MAP_R + 6, tb, tbN, 1, 65535);
+  if (driving == 1) {
+    s = carSpd;
+    if (s < 0) s = 0 - s;
+    tbN = 0;
+    tbNum((s * 27) / 128, 1);
+    tbText(txKmh, 5);
+    tbRight(SCR_W - 6, SCR_H - 20, 2, 65535);
+  }
+  if (msgT > 0) {
+    if (bannerT == 0) {
+      if (msgKind == 0) {
+        textMid(80, txPassed, 14, 3, rgb(255, 214, 40), 0);
+        tbN = 0;
+        tb[0] = 43;
+        tb[1] = 36;
+        tbN = 2;
+        tbNum(msgCash, 1);
+        textMid(110, tb, tbN, 3, rgb(120, 230, 110), 0);
+      } else {
+        textMid(80, txFailed, 14, 3, rgb(255, 70, 60), 0);
+      }
+    }
+  }
+}
+
 // One full frame: background, all ground, then all objects, cars and people far to near.
 void render() {
   polyCount = 0;
@@ -2844,9 +3407,13 @@ void render() {
   drawBackground();
   collectBlocks();
   for (int k = 0; k < visN; k++) drawGround(visI[k], visD[k]);
+  if (night == 1) {
+    if (driving == 1) drawBeam();
+  }
   for (int k = 0; k < visN; k++) drawBlockObjects(visI[k], visD[k]);
   drawMap();
   drawHud();
+  drawMissionHud();
   flash++;
 }
 
@@ -2860,10 +3427,15 @@ int main() {
   if (loadAssets() == 0) return 1;
   genCity();
   initShops();
-  for (int k = 0; k < 40; k++) recol[k] = k;
+  for (int k = 0; k < 46; k++) recol[k] = k;
   initActors();
   initLetters();
   initMap();
+  initStars();
+  relight();
+  // the first mission starts at the crossing ahead of the car
+  mPoint(8, 7, 0);
+  mX = 8 * PITCH + LANE;
   initTitle();
   titleScreen();
   placeCamera();

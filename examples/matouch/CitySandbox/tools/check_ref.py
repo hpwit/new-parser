@@ -17,7 +17,7 @@ harness = r'''#include <stdio.h>
 #include <stdlib.h>
 uint16_t fb[96000];
 static int frameNo = 0;
-static unsigned char wadBytes[8192];
+static unsigned char wadBytes[16384];
 static int wadSize;
 int millis() { return frameNo * 50; }
 #define TOUR 240
@@ -33,6 +33,7 @@ static int tourKey(int f, int key) {
   case 4: return f >= 131 && f < 179;
   case 7: return f == 130 || f == 185 || f == 195;
   case 9: return f == 3 || f == 6;
+  case 10: return f == 50 || f == 100;
   }
   return 0;
 }
@@ -45,7 +46,7 @@ void present() {
   const uint8_t *b = (const uint8_t *)fb;
   for (int i = 0; i < 192000; i++) h = (h ^ b[i]) * 16777619u;
   if (frameNo % 10 == 9) printf("FRAME %d checksum %08x\n", frameNo, h);
-  if (dumpFrames && (frameNo == 9 || frameNo == 19 || frameNo == 29 || frameNo == 39 || frameNo == 99 || frameNo == 160 || frameNo == 210 || frameNo == 239)) {
+  if (dumpFrames && (frameNo == 9 || frameNo == 19 || frameNo == 80 || frameNo == 99 || frameNo == 130 || frameNo == 145 || frameNo == 160 || frameNo == 239)) {
     char n[32]; sprintf(n, "city_%d.raw", frameNo); FILE *o = fopen(n, "wb"); fwrite(fb, 2, 96000, o); fclose(o);
   }
   frameNo++;
@@ -73,7 +74,7 @@ print(out, end="")
 if png:
     from PIL import Image
     import struct
-    for n in (9, 19, 29, 39, 99, 160, 210, 239):
+    for n in (9, 19, 80, 99, 130, 145, 160, 239):
         px = struct.unpack("<96000H", open(os.path.join(work, "city_%d.raw" % n), "rb").read())
         im = Image.new("RGB", (400, 240))
         im.putdata([(((p >> 11) & 31) * 255 // 31, ((p >> 5) & 63) * 255 // 63, (p & 31) * 255 // 31) for p in px])
