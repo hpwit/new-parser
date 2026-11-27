@@ -8,7 +8,7 @@ Layout (little-endian):
   ... lump data
 
 Lumps
-  PALETTE  46 colours x 5 shades x 8 fog levels, RGB565   index = (colour*5+shade)*8+fog
+  PALETTE  47 colours x 5 shades x 8 fog levels, RGB565   index = (colour*5+shade)*8+fog
   SKYCOLS  8 x RGB565: 6 sky bands (top to horizon), fog colour, spare
   SINTAB   1024 x int16, sin(2*pi*i/1024) * 4096
   PATTERNS 8 window styles x 8 rows; bit c of row (floor & 7) = window present in column c & 7
@@ -20,7 +20,8 @@ Lumps
            painted white by the script), a light bar red (21) and blue (5)
   COPLOD   the police car from afar
   WOMMESH  a woman (the person on foot is a man); WOMLOD from afar
-  COLRGB   the 46 colours as r g b bytes: the script relights the palette by the time of day
+  SEDMESH, SEDLOD, VANMESH, VANLOD  a saloon and a van of the traffic
+  COLRGB   the 47 colours as r g b bytes: the script relights the palette by the time of day
   FONT     5x7 characters 32..95, 7 rows each, bit 4 = leftmost column
 Edit the tables below and re-run, from tools/:
   python3 mkwad.py ../data/city.wad ../city_wad.h
@@ -52,7 +53,7 @@ COLOURS = [
     (88, 156, 78),    # 18 leaves, light
     (36, 36, 40),     # 19 dark trim
     (184, 34, 44),    # 20 car paint
-    (240, 70, 60),    # 21 tail light
+    (170, 34, 34),    # 21 tail light
     (58, 92, 168),    # 22 shirt
     (232, 190, 158),  # 23 skin
     (196, 48, 52),    # 24 awning: red
@@ -77,6 +78,7 @@ COLOURS = [
     (196, 186, 146),  # 43 headlights on the road
     (60, 230, 90),    # 44 marker: a mission starts here
     (255, 214, 40),   # 45 marker: the mission's target
+    (255, 60, 50),    # 46 brake lights on, and the police light's red
 ]
 SKY = [(60, 130, 220), (86, 152, 230), (116, 174, 238), (150, 196, 244),
        (184, 216, 248), (206, 226, 246)]
@@ -167,6 +169,60 @@ WOMAN = [
     (-0.18, -0.07, 0.28, 0.3, 3.24, 3.31, 19),  # eyes
     (0.07, 0.18, 0.28, 0.3, 3.24, 3.31, 19),
 ]
+# traffic: a four-door saloon and a van (colour 20 is painted per car)
+SEDAN = [
+    (-1.9, 1.9, -4.4, 4.4, 0.45, 1.3, 20),     # lower body
+    (-1.9, 1.9, 4.4, 4.6, 0.4, 0.75, 19),      # bumpers
+    (-1.9, 1.9, -4.6, -4.4, 0.4, 0.75, 19),
+    (-1.8, 1.8, 2.0, 4.4, 1.3, 1.6, 20),       # bonnet
+    (-1.8, 1.8, -4.4, -2.6, 1.3, 1.65, 20),    # boot
+    (-1.65, 1.65, -2.6, 2.0, 1.3, 2.6, 10),    # windows all round
+    (-1.55, 1.55, -2.2, 1.4, 2.6, 2.8, 20),    # roof
+    (-1.67, -1.65, -0.4, 0.0, 1.3, 2.6, 20),   # door pillars
+    (1.65, 1.67, -0.4, 0.0, 1.3, 2.6, 20),
+    (-2.0, -1.5, 2.4, 3.6, 0.0, 1.15, 19),     # wheels
+    (1.5, 2.0, 2.4, 3.6, 0.0, 1.15, 19),
+    (-2.0, -1.5, -3.6, -2.4, 0.0, 1.15, 19),
+    (1.5, 2.0, -3.6, -2.4, 0.0, 1.15, 19),
+    (-1.7, -0.8, 4.4, 4.5, 0.95, 1.2, 9),      # headlights
+    (0.8, 1.7, 4.4, 4.5, 0.95, 1.2, 9),
+    (-1.7, -0.9, -4.5, -4.4, 1.0, 1.3, 21),    # tail lights
+    (0.9, 1.7, -4.5, -4.4, 1.0, 1.3, 21),
+    (-0.5, 0.5, -4.65, -4.6, 0.5, 0.72, 4),    # number plate
+]
+SEDAN_LOD = [
+    (-1.9, 1.9, -4.4, 4.4, 0.35, 1.5, 20),
+    (-1.65, 1.65, -2.6, 2.0, 1.5, 2.75, 10),
+    (-2.0, 2.0, 2.4, 3.6, 0.0, 0.9, 19),
+    (-2.0, 2.0, -3.6, -2.4, 0.0, 0.9, 19),
+]
+VAN = [
+    (-2.0, 2.0, -4.8, 4.8, 0.5, 1.6, 20),      # lower body
+    (-2.0, 2.0, 4.8, 5.0, 0.4, 0.8, 19),       # bumpers
+    (-2.0, 2.0, -5.0, -4.8, 0.4, 0.8, 19),
+    (-2.0, 2.0, -4.8, 2.4, 1.6, 3.6, 20),      # the box
+    (-1.9, 1.9, 2.4, 3.1, 1.6, 3.3, 10),       # windscreen
+    (-1.9, 1.9, 3.1, 4.8, 1.6, 1.9, 20),       # short bonnet
+    (-2.03, -2.0, 1.0, 2.3, 2.2, 3.0, 10),     # side windows
+    (2.0, 2.03, 1.0, 2.3, 2.2, 3.0, 10),
+    (-2.03, -2.0, -4.6, 0.8, 2.0, 2.3, 4),     # a stripe along each side
+    (2.0, 2.03, -4.6, 0.8, 2.0, 2.3, 4),
+    (-2.1, -1.6, 2.6, 3.8, 0.0, 1.2, 19),      # wheels
+    (1.6, 2.1, 2.6, 3.8, 0.0, 1.2, 19),
+    (-2.1, -1.6, -4.0, -2.8, 0.0, 1.2, 19),
+    (1.6, 2.1, -4.0, -2.8, 0.0, 1.2, 19),
+    (-1.8, -1.0, 4.8, 4.9, 1.0, 1.3, 9),       # headlights
+    (1.0, 1.8, 4.8, 4.9, 1.0, 1.3, 9),
+    (-1.95, -1.6, -4.9, -4.8, 0.8, 1.8, 21),   # tail lights
+    (1.6, 1.95, -4.9, -4.8, 0.8, 1.8, 21),
+]
+VAN_LOD = [
+    (-2.0, 2.0, -4.8, 2.4, 0.4, 3.6, 20),
+    (-2.0, 2.0, 2.4, 4.8, 0.4, 1.9, 20),
+    (-1.9, 1.9, 2.4, 3.1, 1.9, 3.3, 10),
+    (-2.1, 2.1, 2.6, 3.8, 0.0, 0.9, 19),
+    (-2.1, 2.1, -4.0, -2.8, 0.0, 0.9, 19),
+]
 
 CAR_LOD = [
     (-2.0, 2.0, -4.6, 4.6, 0.35, 1.5, 20),     # body
@@ -190,14 +246,14 @@ WOMAN_LOD = [
 # the police car: the car with its lower body black, and a light bar
 COP = [((b[0], b[1], b[2], b[3], b[4], b[5], 19) if i == 0 else b) for i, b in enumerate(CAR)] + [
     (-1.1, 1.1, -0.7, -0.1, 2.6, 2.7, 19),     # light bar
-    (-1.0, -0.05, -0.65, -0.15, 2.7, 2.95, 21),  # red
+    (-1.0, -0.05, -0.65, -0.15, 2.7, 2.95, 46),  # red
     (0.05, 1.0, -0.65, -0.15, 2.7, 2.95, 40),  # blue
 ]
 COP_LOD = [
     (-2.0, 2.0, -4.6, 4.6, 0.35, 1.0, 19),     # black below
     (-2.0, 2.0, -4.6, 4.6, 1.0, 1.5, 20),      # white above
     (-1.6, 1.6, -2.0, 1.2, 1.5, 2.4, 10),      # glasshouse
-    (-1.0, 0.0, -0.65, -0.15, 2.4, 2.7, 21),   # lights
+    (-1.0, 0.0, -0.65, -0.15, 2.4, 2.7, 46),   # lights
     (0.0, 1.0, -0.65, -0.15, 2.4, 2.7, 40),
 ]
 
@@ -267,7 +323,7 @@ def font():
     return bytes(out)
 
 def build():
-    assert len(COLOURS) == 46 and len(PATTERNS) == 8
+    assert len(COLOURS) == 47 and len(PATTERNS) == 8
     pal = []
     for col in COLOURS:
         for sh in SHADES:
@@ -291,6 +347,10 @@ def build():
         (b"COLRGB", bytes(v for c in COLOURS for v in c)),
         (b"WOMMESH", mesh(WOMAN)),
         (b"WOMLOD", mesh(WOMAN_LOD)),
+        (b"SEDMESH", mesh(SEDAN)),
+        (b"SEDLOD", mesh(SEDAN_LOD)),
+        (b"VANMESH", mesh(VAN)),
+        (b"VANLOD", mesh(VAN_LOD)),
     ]
     off = 8 + 16 * len(lumps)
     head = b"CWAD" + struct.pack("<I", len(lumps))

@@ -290,12 +290,12 @@ external void setWindow(int on);   // reads city.wad, returns byte count
 // ===== 2. MATHS TABLES AND ASSETS (filled from the WAD) =====
 uint8_t wad[12288];
 int sinT[1024];
-uint16_t pal[1840];
+uint16_t pal[1880];
 uint16_t skyC[8];
 uint8_t patT[64];
 uint16_t rowCol[240];
 uint8_t font[448];      // 5x7 characters 32..95, from the WAD
-uint8_t colRGB[138];    // the 46 colours, r g b: relit by the time of day
+uint8_t colRGB[141];    // the 47 colours, r g b: relit by the time of day
 
 int camX = 111462;
 int camZ = 82944;
@@ -375,6 +375,14 @@ int womBox[280];
 int womN = 0;
 int womLod[56];
 int womLodN = 0;
+int sedBox[280];
+int sedN = 0;
+int sedLod[56];
+int sedLodN = 0;
+int vanBox[280];
+int vanN = 0;
+int vanLod[56];
+int vanLodN = 0;
 
 // Signed 16-bit read from the WAD buffer.
 int rds16(int o) {
@@ -404,7 +412,7 @@ int loadAssets() {
   if (wad[1] != 87) return 0;
   o = findLump(80, 65, 76, 69);
   if (o == 0) return 0;
-  for (int i = 0; i < 1840; i++) pal[i] = rd16(o + i * 2);
+  for (int i = 0; i < 1880; i++) pal[i] = rd16(o + i * 2);
   o = findLump(83, 75, 89, 67);
   if (o == 0) return 0;
   for (int i = 0; i < 8; i++) skyC[i] = rd16(o + i * 2);
@@ -447,7 +455,19 @@ int loadAssets() {
   womLodN = loadMesh(o, womLod);
   o = findLump(67, 79, 76, 82);
   if (o == 0) return 0;
-  for (int i = 0; i < 138; i++) colRGB[i] = wad[o + i];
+  for (int i = 0; i < 141; i++) colRGB[i] = wad[o + i];
+  o = findLump(83, 69, 68, 77);
+  if (o == 0) return 0;
+  sedN = loadMesh(o, sedBox);
+  o = findLump(83, 69, 68, 76);
+  if (o == 0) return 0;
+  sedLodN = loadMesh(o, sedLod);
+  o = findLump(86, 65, 78, 77);
+  if (o == 0) return 0;
+  vanN = loadMesh(o, vanBox);
+  o = findLump(86, 65, 78, 76);
+  if (o == 0) return 0;
+  vanLodN = loadMesh(o, vanLod);
   return 1;
 }
 
@@ -764,7 +784,7 @@ void relight() {
   lr = (light[0] * light[1]) / 256;
   lg = (light[0] * light[2]) / 256;
   lb = (light[0] * light[3]) / 256;
-  for (int c = 0; c < 46; c++) {
+  for (int c = 0; c < 47; c++) {
     for (int sh = 0; sh < 5; sh++) {
       r = (colRGB[c * 3] * shade256[sh]) / 256;
       g = (colRGB[c * 3 + 1] * shade256[sh]) / 256;
@@ -1311,6 +1331,10 @@ int carX = 111462;
 int carZ = 82944;
 int carA = 0;
 int carSpd = 0;
+int carVA = 0;          // where the car is going, which lags where it points when it slides
+int braking = 0;        // brake lights on
+int bodyPitch = 0;      // the body's squat, dive and lean (smoothed, x8)
+int bodyRoll = 0;
 int pedX = 0;
 int pedZ = 0;
 int pedA = 0;
@@ -1344,6 +1368,7 @@ int npcZ[20];
 int npcA[20];
 int npcWait[20];
 int npcPaint[20];
+int npcType[20];        // 0 a coupé, 1 a saloon, 2 a van
 
 // --- people on the pavements: each walks round one block ---
 #define NPEDS 60
@@ -1553,6 +1578,16 @@ void driveStep() {
   int nx;
   int nz;
   int turn;
+  int grip;
+  int diff;
+  int last;
+  int steer;
+  last = carSpd;
+  braking = 0;
+  if (keyDown(KEY_BRAKE) != 0) braking = 1;
+  if (keyDown(KEY_DOWN) != 0) {
+    if (carSpd > 0) braking = 1;
+  }
   if (keyDown(KEY_UP) != 0) {
     carSpd = carSpd + CAR_ACC;
   } else {
@@ -1592,10 +1627,38 @@ void driveStep() {
     if (turn < 3) turn = 3;
   }
   if (carSpd == 0) turn = 0;
-  if (keyDown(KEY_LEFT) != 0) carA = wrapA(carA - turn);
-  if (keyDown(KEY_RIGHT) != 0) carA = wrapA(carA + turn);
-  s = sinT[carA];
-  c = sinT[(carA + 256) & 1023];
+  // the handbrake at speed swings the tail round
+  if (keyDown(KEY_BRAKE) != 0) {
+    if (carSpd > 250) turn = (turn * 5) / 3;
+  }
+  steer = 0;
+  if (keyDown(KEY_LEFT) != 0) steer = 0 - 1;
+  if (keyDown(KEY_RIGHT) != 0) steer = steer + 1;
+  carA = wrapA(carA + steer * turn);
+  // grip: the direction of travel follows the heading, slower at speed,
+  // much slower on the handbrake; a slide scrubs speed off
+  grip = 230 - (carSpd * 100) / CAR_MAX;
+  if (keyDown(KEY_BRAKE) != 0) {
+    if (carSpd > 250) grip = 40;
+  }
+  if (carSpd <= 0) grip = 256;
+  diff = ((carA - carVA + 1536) & 1023) - 512;
+  carVA = wrapA(carVA + (diff * grip) / 256);
+  if (diff > 0) {
+    if (diff > 4) carSpd = carSpd - diff / 10;
+  } else {
+    if (diff < 0 - 4) carSpd = carSpd + diff / 10;
+  }
+  if (diff > 160) carVA = carA;
+  if (diff < 0 - 160) carVA = carA;
+  // the body: squats when accelerating, dives when braking, leans out of a turn
+  diff = (carSpd - last) * 6;
+  if (diff > 80) diff = 80;
+  if (diff < 0 - 80) diff = 0 - 80;
+  bodyPitch = bodyPitch + (diff - bodyPitch) / 4;
+  bodyRoll = bodyRoll + (steer * ((carSpd * 24) / CAR_MAX) * 8 - bodyRoll) / 4;
+  s = sinT[carVA];
+  c = sinT[(carVA + 256) & 1023];
   nx = carX + (s * carSpd) / 4096;
   nz = carZ + (c * carSpd) / 4096;
   if (blocked(nx, nz, CAR_R) == 0) {
@@ -1624,6 +1687,7 @@ void driveStep() {
         carSpd = 0 - carSpd / 4;
       }
     }
+    carVA = carA;
   }
 }
 
@@ -1727,6 +1791,11 @@ void placeCamera() {
     if (view == 2) {
       d = 0 - 128;
       camH = 860;
+    }
+  } else {
+    // the chase cameras drop back as the car speeds up
+    if (view < 2) {
+      if (carSpd > 0) d = d + carSpd * 2;
     }
   }
   s = sinT[camA];
@@ -1974,6 +2043,7 @@ void initActors() {
     npcT[k] = rnd(PITCH);
     npcWait[k] = 0;
     npcPaint[k] = carPaints[rnd(8)];
+    npcType[k] = k % 3;
     placeNpc(k);
     npcA[k] = dirA(npcDir[k]);
   }
@@ -2193,6 +2263,7 @@ void policeStep() {
     carX = 111462;
     carZ = 82944;
     carA = 0;
+    carVA = 0;
     carSpd = 0;
   }
 }
@@ -2504,7 +2575,9 @@ int boxD[40];
 int boxZ0[40];
 int boxZ1[40];
 int lightSwap = 0;
-uint8_t recol[46];      // colour substitutions for the next meshes, identity by default
+uint8_t recol[47];
+int bodyP = 0;          // the body's pitch and roll for the next mesh (24.8 per unit): wheels stay down
+int bodyR = 0;      // colour substitutions for the next meshes, identity by default
 
 // Swing of the legs and arms, 24.8, from a walking phase (a triangle wave).
 int swingOf(int phase) {
@@ -2573,6 +2646,15 @@ void drawMesh(int *m, int n, int cx, int cz, int a, int paint, int swing) {
     curY0 = m[k + 4];
     curY1 = m[k + 5];
     curCi = m[k + 6];
+    if (curY0 > 0) {
+      if (m[k] > 0 - 566) {
+        if (m[k + 1] < 566) {
+          d = ((m[k + 2] + m[k + 3]) * bodyP + (m[k] + m[k + 1]) * bodyR) / 512;
+          curY0 = curY0 + d;
+          curY1 = curY1 + d;
+        }
+      }
+    }
     if (paint >= 0) {
       if (curCi == 20) curCi = paint;
       if (curCi == 22) curCi = paint;
@@ -2580,10 +2662,10 @@ void drawMesh(int *m, int n, int cx, int cz, int a, int paint, int swing) {
     curCi = recol[curCi];
     // a police car's light bar: red and blue change places
     if (lightSwap == 1) {
-      if (curCi == 21) {
+      if (curCi == 46) {
         curCi = 40;
       } else {
-        if (curCi == 40) curCi = 21;
+        if (curCi == 40) curCi = 46;
       }
     }
     drawOBox(cx, cz, a, m[k], m[k + 1], boxZ0[boxOrd[k2]], boxZ1[boxOrd[k2]]);
@@ -2699,6 +2781,27 @@ void drawTable(int i, int k, int wx, int wz) {
     curCi = lotAwn[i];
     fboxC(tabA - 230, tabA + 230, tabD - 230, tabD + 230, 755, 794);
   }
+}
+
+// A car's shadow on the road: a dark rectangle under it, half sizes hw x hl.
+void carShadow(int x, int z, int a, int hw, int hl) {
+  int s;
+  int c;
+  int lx;
+  int lz;
+  s = sinT[a];
+  c = sinT[(a + 256) & 1023];
+  for (int i = 0; i < 4; i++) {
+    lx = 0 - hw;
+    if (i == 1) lx = hw;
+    if (i == 2) lx = hw;
+    lz = 0 - hl;
+    if (i >= 2) lz = hl;
+    toCam(x + (lx * c + lz * s) / 4096, z + (lz * c - lx * s) / 4096);
+    ax[i] = tX;
+    az[i] = tZ;
+  }
+  flatCam(0, 19, 0);
 }
 
 // A mission marker: a glowing column with a cap that blinks white.
@@ -2912,9 +3015,16 @@ void drawBlockObjects(int b, int d) {
     if (t == 4) {
       j = itA[k];
       if (itD[k] < 900) {
-        drawMesh(carBox, carN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
+        carShadow(npcX[j], npcZ[j], npcA[j], 520 + npcType[j] * 20, 1200 + npcType[j] * 60);
+        if (npcWait[j] > 0) recol[21] = 46;
+        if (npcType[j] == 0) drawMesh(carBox, carN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
+        if (npcType[j] == 1) drawMesh(sedBox, sedN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
+        if (npcType[j] == 2) drawMesh(vanBox, vanN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
+        recol[21] = 21;
       } else {
-        drawMesh(carLod, carLodN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
+        if (npcType[j] == 0) drawMesh(carLod, carLodN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
+        if (npcType[j] == 1) drawMesh(sedLod, sedLodN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
+        if (npcType[j] == 2) drawMesh(vanLod, vanLodN, npcX[j], npcZ[j], npcA[j], npcPaint[j], 0);
       }
     }
     if (t == 5) {
@@ -2968,11 +3078,21 @@ void drawBlockObjects(int b, int d) {
       curY1 = curY0 + 128;
       if (((flash / 6) & 1) == 0) drawBox(mX - 96, mZ - 96, mX + 96, mZ + 96);
     }
-    if (t == 6) drawMesh(carBox, carN, carX, carZ, carA, 0 - 1, 0);
+    if (t == 6) {
+      carShadow(carX, carZ, carA, 540, 1220);
+      if (braking == 1) recol[21] = 46;
+      bodyP = bodyPitch / 8;
+      bodyR = bodyRoll / 8;
+      drawMesh(carBox, carN, carX, carZ, carA, 0 - 1, 0);
+      bodyP = 0;
+      bodyR = 0;
+      recol[21] = 21;
+    }
     if (t == 8) {
       j = itA[k];
       lightSwap = (flash / 4) & 1;
       if (itD[k] < 900) {
+        carShadow(copX[j], copZ[j], copA[j], 540, 1220);
         drawMesh(copBox, copN, copX[j], copZ[j], copA[j], 4, 0);
       } else {
         drawMesh(copLod, copLodN, copX[j], copZ[j], copA[j], 4, 0);
@@ -3745,7 +3865,7 @@ int main() {
   if (loadAssets() == 0) return 1;
   genCity();
   initShops();
-  for (int k = 0; k < 46; k++) recol[k] = k;
+  for (int k = 0; k < 47; k++) recol[k] = k;
   initActors();
   initLetters();
   initMap();

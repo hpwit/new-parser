@@ -19,7 +19,7 @@ The games written with ESPLiveScript 2 to show what its compiler can do with who
 * [Lumenfall: a platform game with parallax scrolling](#lumenfall-a-platform-game-with-parallax-scrolling)
 * [Wickwire: a 3D platform game, rendered by the script](#wickwire-a-3d-platform-game-rendered-by-the-script)
 * [Driftwing: a flying game over a voxel world](#driftwing-a-flying-game-over-a-voxel-world)
-* [CitySandbox: a city to drive and walk through (in progress)](#citysandbox-a-city-to-drive-and-walk-through-in-progress)
+* [GT 32: a city to drive and walk through](#gt-32-a-city-to-drive-and-walk-through)
 
 ## On the ESP32-S3-Touch-LCD-7
 
@@ -506,31 +506,59 @@ Keys: left/right (Q D) bank and turn, up/down (Z S) climb and dive, Space boosts
 
 The WAD (1.6 MB, `tools/make_wad.py`, about 30 s) holds the two maps and a 128x128 minimap compressed, the plane's mesh, the sprites (balloon, bird, letter), the font, the story, the routes and the towers' lights; the script reads it from the FFat partition into PSRAM and unpacks the maps straight into their arrays.
 
-## CitySandbox: GT 32, a city to drive and walk through
+## GT 32: a city to drive and walk through
 
-[matouch/CitySandbox](examples/matouch/CitySandbox) is GT 32, the start of an open-world city game, in full 3D, every polygon drawn by the script at 400x240 (shown at pixel size 2). A 16x16-block downtown on a clear day: a waterfront on the west side, parks, streets with lane markings and zebra crossings, trees and street lamps, and towers of concrete, brick, sandstone and steel, taller toward the centre, their windows in eight patterns. You drive a low sports coupé through its traffic, get out and walk among the people on the pavements, and get back in; drive badly and the police come after you.
+[matouch/CitySandbox](examples/matouch/CitySandbox) is GT 32, an open-world city game in full 3D for the MaTouch 7" board. A downtown of 16 by 16 blocks lies by the sea: towers of concrete, brick, sandstone and steel, taller toward the centre, parks, tree-lined streets with street lamps, shops and cafés with their terraces. Drive a low sports coupé through the traffic, get out and walk among the people, take on missions for money, and keep out of the way of the police, from a sunny afternoon into the night.
 
 | | |
 |:---:|:---:|
 | <img src="examples/matouch/CitySandbox/citysandbox_title.png" width="400" alt="The title screen"> | <img src="examples/matouch/CitySandbox/citysandbox_drive.png" width="400" alt="Driving with three stars, the minimap"> |
-| <img src="examples/matouch/CitySandbox/citysandbox_people.png" width="400" alt="People in front of a café"> | <img src="examples/matouch/CitySandbox/citysandbox_cafe.png" width="400" alt="A café terrace"> |
-| <img src="examples/matouch/CitySandbox/citysandbox_passenger.png" width="400" alt="A taxi mission: the passenger waiting"> | <img src="examples/matouch/CitySandbox/citysandbox_passed.png" width="400" alt="Mission passed"> |
-| <img src="examples/matouch/CitySandbox/citysandbox_dusk.png" width="400" alt="Dusk"> | <img src="examples/matouch/CitySandbox/citysandbox_night.png" width="400" alt="Night: lit windows and street lamps"> |
-| <img src="examples/matouch/CitySandbox/citysandbox_police.png" width="400" alt="A police car"> | <img src="examples/matouch/CitySandbox/citysandbox_busted.png" width="400" alt="Busted"> |
+| <img src="examples/matouch/CitySandbox/citysandbox_traffic.png" width="400" alt="Traffic: a coupé, a saloon braking, a van"> | <img src="examples/matouch/CitySandbox/citysandbox_people.png" width="400" alt="People in front of a café"> |
+| <img src="examples/matouch/CitySandbox/citysandbox_cafe.png" width="400" alt="A café terrace"> | <img src="examples/matouch/CitySandbox/citysandbox_passenger.png" width="400" alt="A taxi mission: the passenger waiting"> |
+| <img src="examples/matouch/CitySandbox/citysandbox_passed.png" width="400" alt="Mission passed"> | <img src="examples/matouch/CitySandbox/citysandbox_dusk.png" width="400" alt="Dusk"> |
+| <img src="examples/matouch/CitySandbox/citysandbox_night.png" width="400" alt="Night: lit windows and street lamps"> | <img src="examples/matouch/CitySandbox/citysandbox_police.png" width="400" alt="A police car"> |
+| <img src="examples/matouch/CitySandbox/citysandbox_busted.png" width="400" alt="Busted"> | |
 
-- **The renderer**: no depth buffer. The blocks in view are drawn far to near, the objects of a block sorted by distance, and a box only shows its faces turned to the camera, so nothing needs sorting inside it. Polygons are filled span by span, edges always walked top to bottom so that neighbours meet without gaps. Positions are fixed point (24.8, a unit about half a metre), angles 0 to 1023 with a sine table; the camera turns but does not tilt, so walls stay vertical. Fog in eight levels toward the horizon, buildings rising out of it at the edge of the draw distance instead of popping in, windows drawn one by one near the camera, as bands farther away, not at all beyond; 600 quads at most a frame.
-- **The player**: the car accelerates (about 1.7 s from rest to full speed), brakes, reverses and steers more sharply with speed, sliding along a wall it meets at an angle and bouncing off one it meets head on; on foot you walk and turn. The car and the person are meshes of boxes, turned with their heading: 34 for the car (a long bonnet, the glasshouse set back, flared arches, slim lights, a rear wing on two struts, big wheels with rims, twin exhausts), 16 for the person (shoes, trousers, belt, shirt, arms and hands, neck, head, eyes, hair); the boxes of a mesh are drawn far to near by the distance of their centres to the camera, height included.
-- **The traffic and the people**: 20 cars drive on the right along the street grid, choosing at each crossing to go straight on, left or right, and wait behind whatever is in front of them (another car, yours, you on foot) instead of running into it; two that block each other at a crossing go on after two seconds. 60 people walk round the pavements of the blocks, swinging their arms and legs, now and then turning back: men in trousers and women in skirts with long hair, each with their own skin tone (five), hair (brown, blond, black, auburn, grey, or none), top (twelve colours) and trousers or skirt, the colours of one mesh swapped through a recolouring table. Half of them start near you. You cannot drive or walk through a café's terrace. Each car or person is drawn with the block it is in, sorted with the trees and the buildings, so a building in front hides it; from afar a car is 4 boxes and a person 3, and past the props' distance neither is drawn. Your car and you collide with the traffic.
-- **Shops and cafés**: 45% of the buildings have a shop on the ground floor of one of their street sides (a plinth, a shop window, a door, a sign and an awning in red, green, blue or ochre), a quarter a café with a striped awning and a terrace of tables, chairs and, where the pavement is wide enough, parasols. A shop front is sorted just after its own building when its side faces the camera and just before when it does not, and is only drawn within about 60 units, whole within 40, so that the polygon budget still reaches the nearest blocks.
-- **The police and the wanted level**: up to five stars, shown at the top right. Ramming a car at speed adds one, and so does running someone over (they get up somewhere else), which also pays $50. Each star puts a police car on the streets, four at most, black and white with a light bar flashing red and blue; it appears four or five blocks away and drives the street grid toward you, at each crossing taking the street that brings it closest, faster with every star, waiting behind the traffic but not for long. With no police car near you for ten seconds, a star goes. Stay slow or on foot next to one for two seconds and you are busted: a red band with BUSTED across the screen, the stars cleared, the police gone, and you back in your car at the start.
-- **Missions**: a green marker on a street (and on the minimap) starts one when you drive or walk into it. Three kinds take turns: a taxi ride (stop next to the passenger waiting on the pavement, under a blinking sign, then stop at their destination before the time runs out), four checkpoints against the clock, and a getaway (three stars at once: lose them). The target is a yellow column, and a yellow dot on the minimap, on its rim when it is farther. Missions pay; a bust fails the mission and costs $100.
-- **The HUD**: what to do and the time left at the top, the money under the stars, the clock under the minimap, the speed in km/h at the bottom right, MISSION PASSED (with the pay) or MISSION FAILED across the middle.
-- **Day and night**: a day lasts 12 minutes, starting at four in the afternoon. The light, its tint, the fog and the sky follow keyframes through dawn, day, dusk and night, and the whole palette (46 colours, 5 shades, 8 fog levels) is recomputed from the WAD's base colours each time the clock moves. At night the stars come out, windows are lit (bands of them farther away), the street lamps throw light on the pavement and the road, the car's headlights light the road ahead, and lamps, tail lights, police lights and markers glow. T moves the clock three hours on.
-- **The title screen**: GT 32 in chrome letters (thick slanted strokes drawn once into a mask, coloured row by row from sky blue to sunset orange, outlined in pink) over a sunset at sea: the sun's path breaking up on the water, palms on either side swaying in the wind, towers on the horizon; the reflection shimmers, each row on its own wave, with sparkles. Up and down choose between full screen (the 400x240 picture at pixel size 2) and a window (at pixel size 1, in the middle of the panel, framed in pink and cyan); the choice shows at once, and Enter starts.
-- **The minimap**: a round map at the top left, turned with the camera, about two and a half blocks to its rim: water, roads, pavements, parks and the buildings' footprints, you as an arrow, the police as flashing dots (on the rim when they are farther), your car when you are on foot.
-- **The views**: a chase camera behind the car, a farther and higher one, and the bonnet (on foot: over the shoulder, farther back, at eye height), the camera following the heading with a little lag.
+### Starting
 
-Keys: on the title screen up/down choose the screen and Enter starts; then up/down (Z S) accelerate and brake (walk on foot), left/right (Q D) steer or turn, Space brakes hard, Enter (or E) gets out of the car once it has stopped and back in within a few steps of it, V changes the view, W adds a star (to try the police without a crime), T moves the clock three hours on, Escape goes back to the title screen.
+Upload the sketch with a USB keyboard plugged into the board. The game takes about three minutes to get ready when the board starts, then the title screen appears: GT 32 in chrome letters over a sunset at sea, palms swaying in the wind and the sun shimmering on the water. Choose how to play with up and down, **full screen** or in a **window** in the middle of the screen, and press Enter.
 
-The script (`tools/city.sc`) is plain integer code: no structures, no floats. The WAD (8.3 KB, `tools/mkwad.py`, compiled into the sketch as `city_wad.h`) holds the palette (24 colours, each in 5 shades and 8 fog levels), the sky's colours, the sine table, the window patterns and the meshes of the car, the police car, the man and the woman, near and from afar, a 5x7 font, and the 46 colours as plain RGB for relighting. Built with `RUN_TOUR=1` (`--build-property compiler.cpp.extra_flags=-DRUN_TOUR=1`), the first 240 frames are a scripted tour (40 of them on the title screen) on a simulated clock, printing a checksum every 10 frames: `tools/check_ref.py` compiles the same script as C on a computer and prints the same checksums. The checksums of the board and of the computer are the same, frame for frame. On the board it compiles in 143 s (40 KB of code) and runs at 16 to 22 frames a second.
+### Keys
 
+| Key | |
+|:----|:----|
+| Up / Z | accelerate (on foot: walk) |
+| Down / S | brake, then reverse (on foot: step back) |
+| Left / Q, Right / D | steer (on foot: turn) |
+| Space | handbrake: at speed it swings the tail round into a slide |
+| Enter or E | get out of the car once it has stopped, back in when you are next to it |
+| V | change the view: behind the car, farther back and higher, from the bonnet |
+| W | add a wanted star, to try the police |
+| T | move the clock three hours on |
+| Escape | back to the title screen |
+
+### Driving
+
+The coupé takes a moment to gather speed and grips less the faster it goes: take a corner too fast and it slides wide, pull the handbrake and it drifts. It squats when you accelerate, dips when you brake and leans in the turns, and its brake lights come on when you slow down. Hit a wall at an angle and you scrape along it; hit it head on and you bounce back. The camera follows behind and drops back as you speed up.
+
+### The city
+
+Twenty cars, coupés, saloons and vans, drive on the right, turn at the crossings and stop behind whatever is in their way, brake lights on. Sixty people walk the pavements, men and women of every look. Nearly half the buildings have a shop on the ground floor, a quarter a café with its terrace of tables and parasols. The round map at the top left turns with you and shows the streets, the parks, the buildings, the police and your next goal.
+
+### Missions and money
+
+A green marker on a street starts a mission: drive or walk into it. Three kinds take turns:
+
+- **Taxi**: stop next to the passenger waiting on the pavement, then take them to the yellow marker before the time runs out; the farther, the better paid.
+- **Checkpoints**: drive through four yellow markers in a row against the clock.
+- **Getaway**: three stars at once; lose them all.
+
+The top of the screen says what to do and how much time is left; your money is under the stars, the time of day under the map, your speed at the bottom right.
+
+### The police
+
+Ram a car at speed or run someone over (it pays $50, but it is noticed) and you get a star, up to five. Each star sends a police car after you, faster with every star. Get away from them for ten seconds and a star goes; stay slow next to one for two seconds and you are **busted**: the stars are cleared, you lose $100 and any mission, and you start again in your car.
+
+### Day and night
+
+A day lasts twelve minutes, from four in the afternoon. The sky turns orange and pink at dusk, then dark: the stars come out, windows light up, the street lamps throw pools of light on the road, and your headlights show the way.
