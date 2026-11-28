@@ -2445,11 +2445,12 @@ void bindFunction(char *returnType, char *name, char *parameterTypes, void *func
 |---|---|
 | `returnType` | The return type in script terms: `"void"`, `"int"`, `"float"`, `"uint32_t"`, `"CRGB"`... |
 | `name` | The name the script calls it by. |
-| `parameterTypes` | The parameter types, comma separated: `"int,int,float"`; `"char*,Args"` for a printf-like function; `NULL` for none. |
+| `parameterTypes` | The parameter types, comma separated: `"int,int,float"`; `"char*,Args"` for a printf-like function; `NULL` for none. They may name the parameters, all or some, as in C: `"int x,int y,float speed"`, `"int ,int h"`, `"char *format,Args"`; the names are dropped (an editor can show them), so both ways bind the same function. |
 | `function` | The function's address: `(void *)myFunction`. |
 
 ```cpp
 bindFunction((char *)"void", (char *)"setPixel", (char *)"int,int,int", (void *)setPixel);
+bindFunction((char *)"void", (char *)"setPixel", (char *)"int x,int y,int color", (void *)setPixel);  // the same
 ```
 
 A parameter can be a structure bound with `bindStruct()`, by value (`"mode"`) or by pointer (`"mode *"`); either way your function receives its address:
