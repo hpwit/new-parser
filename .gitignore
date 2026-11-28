@@ -1,2 +1,4 @@
 examples/matouch/*/build/
+# every example's local Arduino build (arduino-cli puts it next to the sketch)
+examples/**/build/
 __pycache__/

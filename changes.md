@@ -2,6 +2,10 @@
 
 What changed, newest first. The [README](README.md) documents the library as it is now; this page is what is new and how much it brings.
 
+## 2.1.1 (2026-11-28)
+
+Packaging only, the code is the same as 2.1.0. An example's local build (`examples/AssemblyGPIO/build`, 24 MB of `.elf`, `.map` and `.bin`) had been committed and would have been installed with the library: it is gone, and every example's `build/` folder is now ignored. The library is under the MIT licence (`LICENSE`).
+
 ## 2.1.0 (2026-11-28)
 
 Faster code and a faster compiler. On the ESP32-S3, byte-array loops and 16-bit fills are vectorized with the chip's PIE instructions, and `__ASM__` functions can use 55 of them; zero-overhead loops, smaller instructions and better register use speed up all code. The compiler is 2 to 3 times faster than in 2.0.0 on a computer (on an esp32, `MultiEffectController` compiles in 6.9 s instead of 10.6 s), and on an ESP32-S3 with PSRAM large scripts compile in half the time again (Wickwire 332 s to 131 s). New in the language: `for (x in array)`, `int a[] = {...}`, pointer arithmetic in elements, `?:` and comparisons as values. New in the API: `setCompileProgress()`, `setScriptCodeMemory()` and `SCRIPT_CODE_AUTO`, `createExecutableFromStream()`, `setExecutableAllocator()`. Many fixes (`>>` on ints, casts, numbers above 65535, a call's result moved out of its loop, errors in nested blocks...). And new examples, up to a Game Boy emulator that runs at the real machine's speed. Every example compiles to the same or better code; the details follow.
