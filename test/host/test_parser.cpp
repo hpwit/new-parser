@@ -1364,6 +1364,66 @@ static void runCharPointerArgumentsTest()
     }
 }
 
+// bindFunction() parameters may be named ("int x,int y"), or not, or both
+// ("int ,int h"): the names go, the types are as before.
+static void runNamedBindingParametersTest()
+{
+    const char *name = "bindFunction() parameters with names (int d,int k), without, or mixed";
+    printf("RUNNING: %s\n", name);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        static int dummy;
+        bindStruct("struct NamedPt { int x; int y; };");
+        bindFunction((char *)"int", (char *)"namedAdd", (char *)"int a,int b", (void *)&dummy);
+        bindFunction((char *)"void", (char *)"namedMixed", (char *)"int ,int h", (void *)&dummy);
+        bindFunction((char *)"void", (char *)"namedText", (char *)"char *print", (void *)&dummy);
+        bindFunction((char *)"void", (char *)"namedFill", (char *)"uint8_t *buf, int len", (void *)&dummy);
+        bindFunction((char *)"void", (char *)"namedMove", (char *)"NamedPt *p,int dx", (void *)&dummy);
+        bindFunction((char *)"void", (char *)"namedSay", (char *)"char *fmt,Args", (void *)&dummy);
+        bindFunction((char *)"float", (char *)"namedHalf", (char *)"float value", (void *)&dummy);
+        bindFunction((char *)"int", (char *)"plainAdd", (char *)"int,int", (void *)&dummy);
+        const char *script =
+            "uint8_t data[8];\n"
+            "NamedPt pt;\n"
+            "void main()\n"
+            "{\n"
+            "   int s = namedAdd(1, 2) + plainAdd(3, 4);\n"
+            "   namedMixed(s, 5);\n"
+            "   namedText(\"hello\");\n"
+            "   namedFill(data, 8);\n"
+            "   namedMove(&pt, 3);\n"
+            "   namedSay(\"%d\", s);\n"
+            "   float h = namedHalf(2.5);\n"
+            "}\n";
+        const bool ok = compileForTest(script);
+        if (!ok)
+            printf("       the script calling them does not compile\n");
+        fflush(stdout);
+        _exit(ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status))
+    {
+        failed++;
+        printf("[CRASH] %s (signal %d)\n", name, WTERMSIG(status));
+    }
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        passed++;
+        printf("[PASS] %s\n", name);
+    }
+    else
+    {
+        failed++;
+        printf("[FAIL] %s\n", name);
+    }
+}
+
 // switch/case/default: misuse is reported with its own message (running
 // switches is checked under QEMU against C, test/fuzz/regressions/switch_*).
 static void runSwitchErrorsTest()
@@ -4235,6 +4295,7 @@ int main()
     runBuiltinHandleTest();
     runVarargsOrderTest();
     runCharPointerArgumentsTest();
+    runNamedBindingParametersTest();
     runSwitchErrorsTest();
     runFfloatConstantTest();
     runGenerateBinaryTest(

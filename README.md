@@ -889,6 +889,8 @@ from pre-compiled 1.529412
 from other function
 ```
 
+The argument types may also name the parameters, as in C: `"int x,int y"`, `"uint8_t *buf, int len"`, or only some of them (`"int ,int h"`). The names are only for the reader (an editor can show them as a hint); the types are what count, so `"int,int"` and `"int x,int y"` bind the same function.
+
 For bigger sketches built the same way, see [StructsAndHostBindings](examples/StructsAndHostBindings) and [BouncingBalls](examples/BouncingBalls). A variable or a parameter can also have the type of one of your sketch's structures: see [Structures](#structures).
 
 ---
@@ -2339,6 +2341,14 @@ void setCompileProgress(void (*progress)(int percent, const char *stage, void *c
 ```
 
 See [Watching a long compile](#watching-a-long-compile).
+
+### `checkScript()`
+
+```cpp
+bool checkScript(const char *script);
+```
+
+Checks a script's language without compiling it: it is read and parsed, no code is generated, so it is much quicker and needs much less memory than `parseScript()`. True when the script is right; else `lastCompileError()` says where and why. Everything it used is freed before it returns. `setCompileProgress()` sees the parsing go from 0 to 100%.
 
 ### Where the code goes `asm_execute.h`
 

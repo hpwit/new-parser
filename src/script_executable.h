@@ -298,6 +298,14 @@ private:
 // executable survives, freed automatically when it's destroyed.
 ScriptExecutable parseScript(const char *script);
 
+// Checks a script's language without compiling it: it is read and parsed,
+// no code is generated, optimized or assembled, so it takes a fraction of a
+// compile's time and memory (an editor's "check" key). True when the script
+// is right; else lastCompileError() says where and why, as after a compile.
+// Everything the parser used is freed before it returns, either way.
+// setCompileProgress() sees the parsing go from 0 to 100%.
+bool checkScript(const char *script);
+
 // What went wrong in the last parseScript()/parseScriptToBinary(), for a
 // sketch that wants to show a compile error its own way (on a display, a
 // web page...) rather than only in the console, where parseScript() has

@@ -25,7 +25,9 @@ public:
     Token *peek(int index);
     bool Match(tokenType tt);
     bool Match(tokenType tt, int index);
-    void parse(Script *main_script, Tokens *__tks);
+    // checkOnly: only the language is checked (reading and parsing, the
+    // errors in Error); no code is generated, the parsing reports 0..100%.
+    void parse(Script *main_script, Tokens *__tks, bool checkOnly = false);
     void parseProgram();
     void parseType();
     void parseVariableForCreation();

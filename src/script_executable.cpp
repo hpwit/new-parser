@@ -357,7 +357,9 @@ static void resetCompilerState(Parser &p)
     footer.clear();
 }
 
-static Binary compileScriptToBinary(const char *script)
+// checkOnly (checkScript()): only parsed, no code; the Binary returned
+// holds nothing but the error flag.
+static Binary compileScriptToBinary(const char *script, bool checkOnly = false)
 {
     memset(&g_lastCompileError, 0, sizeof(g_lastCompileError));
     compileProgressStart();
@@ -396,7 +398,7 @@ static Binary compileScriptToBinary(const char *script)
     // also whatever an earlier compile, or a caller driving Parser itself,
     // may have left behind
     resetCompilerState(p);
-    p.parse(&s, &__allTokens);
+    p.parse(&s, &__allTokens, checkOnly);
     _tokenizer_start_line = 1;
 
     if (Error.error)
@@ -444,6 +446,18 @@ static Binary compileScriptToBinary(const char *script)
     }
     free(buf);
 
+    if (checkOnly)
+    {
+        // the language is right: the parser's tree, tokens and text go, as
+        // after a compile
+        resetCompilerState(p);
+        compileProgress(100, "done");
+        Binary bin;
+        bin.error.error = 0;
+        bin.error.error_message = NULL;
+        return bin;
+    }
+
     Binary bin = createBinary(&footer, &header, &content, false);
     if (!bin.error.error)
         compileProgress(PROGRESS_ASSEMBLED, "assembling");
@@ -479,6 +493,12 @@ ScriptExecutable parseScript(const char *script)
     // ScriptExecutable's class comment for why this specific shape (not
     // a named local variable then `return that;`) is load-bearing.
     return ScriptExecutable(&bin);
+}
+
+bool checkScript(const char *script)
+{
+    Binary bin = compileScriptToBinary(script, true);
+    return bin.error.error == 0;
 }
 
 uint8_t *parseScriptToBinary(const char *script, uint32_t *size)

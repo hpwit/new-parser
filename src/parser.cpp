@@ -159,7 +159,11 @@ static Script *progressScript = NULL;
     if (parserPhaseHook != NULL) \
         parserPhaseHook(name);
 
-void Parser::parse(Script *main_script, Tokens *__tks)
+// the percentage where the parsing ends: PROGRESS_PARSED for a compile,
+// 100 for a check (checkScript()), which stops there
+static int parsedEnd = PROGRESS_PARSED;
+
+void Parser::parse(Script *main_script, Tokens *__tks, bool checkOnly)
 {
     // Always-available built-ins (printf/printfln -- see
     // runtime_functions.h) need to be registered before parseProgram()
@@ -199,14 +203,16 @@ void Parser::parse(Script *main_script, Tokens *__tks)
 
     _tks = __tks;
     progressScript = main_script;
+    parsedEnd = checkOnly ? 100 : PROGRESS_PARSED;
     compileProgress(0, "reading");
     _tks->tokenize(main_script, true, true, 1);
     _tokenizer_start_line = startLine;
     parseProgram();
     // the script's text may not outlive this compile
     progressScript = NULL;
-    if(Error.error)
-    return;
+    parsedEnd = PROGRESS_PARSED;
+    if (Error.error || checkOnly)
+        return;
     PARSER_PHASE("parsed")
     compileProgress(PROGRESS_PARSED, "generating");
  PARSER_LOG("build parents")
@@ -633,7 +639,7 @@ void Parser::parseProgram()
             // one top-level declaration at a time: how far into the text
             uint32_t done, total;
             progressScript->progress(&done, &total);
-            compileProgressPart(0, PROGRESS_PARSED, done, total, "parsing");
+            compileProgressPart(0, parsedEnd, done, total, "parsing");
         }
         isStructFunction = false;
         current_cntx=&main_context;
@@ -4765,5 +4771,6 @@ void Parser::clean()
  //printf("19\n");
  all_text.clear();
   //printf("20\n");
-  
+    // a failed parse's orphan nodes: the pool goes back to the heap
+    nodePoolReset();
 }

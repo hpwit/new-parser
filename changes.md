@@ -2,6 +2,16 @@
 
 What changed, newest first. The [README](README.md) documents the library as it is now; this page is what is new and how much it brings.
 
+## Unreleased
+
+### ✅ `checkScript()`: the language only, no code
+
+`checkScript(script)` reads and parses a script without generating, optimizing or assembling any code: true when its language is right, else `lastCompileError()` says where and why, as after a compile. It is what an editor's "check" key wants: on `MultiEffectController` it needs about 160 KB of heap at its peak where a compile needs 260 KB, and it takes the parsing's share of a compile's time. Everything the parser used is freed before it returns, the script right or wrong; and a failed parse no longer leaves part of the parser's node pool allocated (16 to 25 KB), after `checkScript()` or `parseScript()`. Host test in `run-large`.
+
+### 🏷️ Named parameters in `bindFunction()`
+
+`bindFunction()`'s argument types may name the parameters, as in C: `"int x,int y"`, `"uint8_t *buf, int len"`, or only some (`"int ,int h"`). The names are dropped and the types read as before, so old bindings keep working and new ones can carry names for an editor's hints. Before, a name broke the binding ("Expecting )"), and a name containing a type's letters (`print`) could even change the type it was read as. Host test `runNamedBindingParametersTest`; every example compiles to the same bytes.
+
 ## 2.1.1 (2026-11-28)
 
 Packaging only, the code is the same as 2.1.0. An example's local build (`examples/AssemblyGPIO/build`, 24 MB of `.elf`, `.map` and `.bin`) had been committed and would have been installed with the library: it is gone, and every example's `build/` folder is now ignored. The library is under the MIT licence (`LICENSE`).

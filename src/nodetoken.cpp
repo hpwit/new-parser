@@ -237,6 +237,15 @@ static void nodeFree(NodeToken *nd)
 	liveNodes--;
 }
 
+// Parser::clean(): every tree is gone by then, so nodes still counted live
+// are a failed parse's orphans (taken from the pool, reached from nowhere);
+// the chunks go back to the heap all the same.
+void nodePoolReset()
+{
+	liveNodes = 0;
+	nodePoolRelease();
+}
+
 bool nodePoolRelease()
 {
 	if (liveNodes != 0)

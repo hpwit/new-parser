@@ -138,6 +138,50 @@ static const char *boundStructName(const char *type)
     return NULL;
 }
 
+// A bindFunction() parameter as its type alone: "int d" -> "int",
+// "uint8_t *buf" -> "uint8_t *", " int " -> "int", so that the parameters
+// may be named ("int x,int y") or not ("int,int"), or both. The last word
+// goes only when something comes before it and it isn't a type itself
+// ("unsigned int", "const ball", "Args" stay). Allocated: free() it.
+static char *parameterType(const char *param)
+{
+    static const char *const typeWords[] = {
+        "int", "char", "float", "ffloat", "bool", "void", "long", "short", "double", "unsigned",
+        "signed", "s_int", "int8_t", "uint8_t", "int16_t", "uint16_t", "int32_t", "uint32_t",
+        "CRGB", "CRGBW", "Args", "const", "struct",
+    };
+    while (*param == ' ' || *param == '\t')
+        param++;
+    size_t len = strlen(param);
+    while (len > 0 && (param[len - 1] == ' ' || param[len - 1] == '\t'))
+        len--;
+    size_t word = len;
+    while (word > 0 && (isalnum((unsigned char)param[word - 1]) || param[word - 1] == '_'))
+        word--;
+    size_t before = word;
+    while (before > 0 && (param[before - 1] == ' ' || param[before - 1] == '\t'))
+        before--;
+    bool strip = word < len && before > 0;
+    if (strip)
+    {
+        char last[48];
+        const size_t n = len - word < sizeof(last) - 1 ? len - word : sizeof(last) - 1;
+        memcpy(last, param + word, n);
+        last[n] = '\0';
+        for (size_t k = 0; k < sizeof(typeWords) / sizeof(typeWords[0]); k++)
+            if (strcmp(last, typeWords[k]) == 0)
+                strip = false;
+        if (strip && boundStructName(last) != NULL)
+            strip = false;
+    }
+    if (strip)
+        len = before;
+    char *type = (char *)malloc(len + 1);
+    memcpy(type, param, len);
+    type[len] = '\0';
+    return type;
+}
+
 void bindFunction(char * out,char * name,char *  in, void * ptr)
 {
   
@@ -163,6 +207,13 @@ void bindFunction(char * out,char * name,char *  in, void * ptr)
 
     vect<char *> j;
     str_split(&j,in,(char*)_comma_);
+    // the parameters' names, if the binding gives them, go
+    for (int i=0;i<j.size();i++)
+    {
+      char *type = parameterType(j[i]);
+      free(j[i]);
+      *j.getptr(i) = type;
+    }
     for (int i=0;i<j.size();i++)
     {
      

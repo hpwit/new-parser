@@ -52,6 +52,7 @@
 #include "asm_parser.h"
 #include "asm_execute.h"
 #include "alloc_tracker.h"
+#include "script_executable.h"
 
 static const char *kScriptPath = "fixtures/multi_effect_controller.sc"; // or argv[1]
 
@@ -237,6 +238,39 @@ int main(int argc, char **argv)
     printf("  after freeing the executable: %zu B still allocated by the compiler (~%zu B on an ESP32), held by:\n",
            allocLiveBytes() - phaseStartBytes, allocLiveEsp32() - phaseStartEsp);
     allocPrintLiveBySite(8);
+
+    // checkScript(): the language only (no code), and nothing left behind,
+    // the script right or wrong
+    {
+        parserPhaseHook = NULL;
+        allocTrackPeakSites(false);
+        const size_t before = allocLiveBytes();
+        const size_t beforeEsp = allocLiveEsp32();
+        allocResetPeak();
+        const bool good = checkScript(raw.c_str());
+        const size_t afterGood = allocLiveBytes();
+        const size_t checkPeakEsp = allocPeakEsp32() - beforeEsp;
+        const int lines = (int)std::count(raw.begin(), raw.end(), '\n');
+        std::string broken = raw + "\nvoid brokenAtTheEnd()\n{\n   int x = ;\n}\n";
+        const bool bad = checkScript(broken.c_str());
+        const int badLine = lastCompileError().line;
+        const size_t afterBad = allocLiveBytes();
+        printf("  checkScript: right %s, wrong %s at line %d (expected %d), heap peak ~%zu B above the start (the compile's: ~%zu B), "
+               "%zd B left after the right one, %zd B after the wrong one\n",
+               good ? "accepted" : "REJECTED", bad ? "ACCEPTED" : "rejected", badLine, lines + 4,
+               checkPeakEsp, compilePeakEsp, (ssize_t)(afterGood - before), (ssize_t)(afterBad - before));
+        if (!good || bad || badLine != lines + 4)
+        {
+            printf("FAIL: checkScript() did not tell the right script from the wrong one\n");
+            ok = false;
+        }
+        if (afterGood > before || afterBad > before)
+        {
+            printf("FAIL: checkScript() left memory allocated\n");
+            allocPrintLiveBySite(8);
+            ok = false;
+        }
+    }
 
     if (ok)
     {
