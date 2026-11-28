@@ -14,7 +14,8 @@
 // ============================================================
 
 // ===== BINDINGS - placeholder names, adapt to your firmware =====
-external uint16_t fb[96000];                      // 400x240 render target, row-major
+external uint16_t fb[384000];                     // the panel's frame buffers (800 wide), drawn straight into
+external int frameOffset();                        // where pixel (0, 0) of this frame goes in fb
 external void present();                          // upscale fb 2x and show it
 external int millis();                            // milliseconds since boot
 external int keyDown(int key);                    // 1 while the key is held
@@ -24,6 +25,8 @@ external void setWindow(int on);   // reads city.wad, returns byte count
 // ===== 1. CONSTANTS =====
 // --- screen and camera ---
 #define SCR_W 400
+// the panel's rows are 800 pixels apart; its colours are RGB565 with the two bytes swapped
+#define FB_W 800
 #define SCR_H 240
 #define HALF_W 200
 #define HORIZON 96
@@ -202,10 +205,10 @@ int loadAssets() {
   if (wad[1] != 87) return 0;
   o = findLump(80, 65, 76, 69);
   if (o == 0) return 0;
-  for (int i = 0; i < 1960; i++) pal[i] = rd16(o + i * 2);
+  for (int i = 0; i < 1960; i++) pal[i] = wad[o + i * 2] * 256 + wad[o + i * 2 + 1];
   o = findLump(83, 75, 89, 67);
   if (o == 0) return 0;
-  for (int i = 0; i < 8; i++) skyC[i] = rd16(o + i * 2);
+  for (int i = 0; i < 8; i++) skyC[i] = wad[o + i * 2] * 256 + wad[o + i * 2 + 1];
   o = findLump(83, 73, 78, 84);
   if (o == 0) return 0;
   for (int i = 0; i < 1024; i++) {
@@ -386,6 +389,7 @@ int fogOf(int z) {
 // at once. Every drawing sequence runs in the reverse of the painter's
 // order, so the picture is the painter's.
 int cov[3000];
+int fbo = 0;            // fb index of pixel (0, 0) for this frame
 
 void clearCov() {
   for (int i = 0; i < 3000; i++) cov[i] = 0;
@@ -401,6 +405,9 @@ void spanCov(int b, int e, int c) {
   int range;
   int m;
   int free;
+  int d;
+  // a span stays on one row: from mask offsets to the panel's
+  d = fbo + (b / SCR_W) * (FB_W - SCR_W);
   while (b < e) {
     w = b >> 5;
     lo = b & 31;
@@ -412,10 +419,10 @@ void spanCov(int b, int e, int c) {
     free = range - (range & m);
     if (free != 0) {
       if (free == range) {
-        for (int p = b; p < b + n; p++) fb[p] = c;
+        for (int p = b + d; p < b + d + n; p++) fb[p] = c;
       } else {
         for (int i = 0; i < n; i++) {
-          if (((free >> (lo + i)) & 1) == 1) fb[b + i] = c;
+          if (((free >> (lo + i)) & 1) == 1) fb[b + d + i] = c;
         }
       }
       cov[w] = m | range;
@@ -576,10 +583,12 @@ int keyV[104] = {60, 190, 205, 256, 16, 20, 40, 2, 4, 14, 16, 20, 40,
 int shade256[5] = {256, 230, 200, 169, 138};
 
 int rgbC(int r, int g, int b) {
+  int v;
   if (r > 255) r = 255;
   if (g > 255) g = 255;
   if (b > 255) b = 255;
-  return (r / 8) * 2048 + (g / 4) * 32 + b / 8;
+  v = (r / 8) * 2048 + (g / 4) * 32 + b / 8;
+  return (v & 255) * 256 + v / 256;
 }
 
 int glows(int c) {
@@ -3110,7 +3119,7 @@ void hudRect(int x0, int y0, int w, int h, int c) {
   if (x1 > SCR_W) x1 = SCR_W;
   if (y1 > SCR_H) y1 = SCR_H;
   for (int y = y0; y < y1; y++) {
-    o = y * SCR_W;
+    o = fbo + y * FB_W;
     for (int x = x0; x < x1; x++) fb[o + x] = c;
   }
 }
@@ -3120,8 +3129,8 @@ void hudStar(int cx, int cy, int on) {
   int c;
   int w;
   int o;
-  c = 2113;
-  if (on == 1) c = 65504;
+  c = 16648;
+  if (on == 1) c = 57599;
   for (int dy = 0 - 6; dy <= 6; dy++) {
     w = 6 - dy;
     if (dy < 0) w = 6 + dy;
@@ -3129,7 +3138,7 @@ void hudStar(int cx, int cy, int on) {
     if (dy == 0 - 1) w = 6;
     if (dy == 0) w = 6;
     if (dy == 1) w = 6;
-    o = (cy + dy) * SCR_W + cx;
+    o = fbo + (cy + dy) * FB_W + cx;
     for (int dx = 0 - w; dx <= w; dx++) fb[o + dx] = c;
   }
 }
@@ -3142,7 +3151,7 @@ void drawHud() {
     hudStar(x, 12, (i < wanted) * 1);
   }
   if (bannerT > 0) {
-    hudRect(0, 92, SCR_W, 56, 30720);
+    hudRect(0, 92, SCR_W, 56, 120);
     for (int l = 0; l < 6; l++) {
       for (int row = 0; row < 7; row++) {
         bits = letters[l * 7 + row];
@@ -3166,7 +3175,9 @@ int mapW[80];           // half width of each row of the disc, rim included
 uint16_t mapCol[8];     // water, road, pavement, lot, park, building, rim, arrow
 
 int rgb(int r, int g, int b) {
-  return (r / 8) * 2048 + (g / 4) * 32 + b / 8;
+  int v;
+  v = (r / 8) * 2048 + (g / 4) * 32 + b / 8;
+  return (v & 255) * 256 + v / 256;
 }
 
 int isqrt(int n) {
@@ -3273,13 +3284,13 @@ void drawMap() {
   // the rim, two pixels wider than the map
   for (int k = 0; k <= 2 * MAP_R + 4; k++) {
     w = mapW[k];
-    o = (MAP_CY - MAP_R - 2 + k) * SCR_W + MAP_CX;
+    o = fbo + (MAP_CY - MAP_R - 2 + k) * FB_W + MAP_CX;
     for (int x = 0 - w; x <= w; x++) fb[o + x] = mapCol[6];
   }
   for (int k = 2; k <= 2 * MAP_R + 2; k++) {
     w = mapW[k] - 2;
     dy = k - MAP_R - 2;
-    o = (MAP_CY + dy) * SCR_W + MAP_CX;
+    o = fbo + (MAP_CY + dy) * FB_W + MAP_CX;
     // world point of the row's first pixel, in quarters of 24.8
     x4 = px * 4 - w * c - dy * s;
     z4 = pz * 4 + w * s - dy * c;
@@ -3297,21 +3308,21 @@ void drawMap() {
       z4 = z4 - s;
     }
   }
-  if (driving == 0) mapDot(carX, carZ, px, pz, 2047);
+  if (driving == 0) mapDot(carX, carZ, px, pz, 65287);
   for (int k = 0; k < NCOPS; k++) {
     if (copOn[k] == 1) {
-      c = 63488;
-      if (((flash / 4) & 1) == 1) c = 31;
+      c = 248;
+      if (((flash / 4) & 1) == 1) c = 7936;
       mapDot(copX[k], copZ[k], px, pz, c);
     }
   }
   // the player, an arrow pointing up
   for (int r = 0; r < 8; r++) {
     w = r / 2;
-    o = (MAP_CY - 4 + r) * SCR_W + MAP_CX;
+    o = fbo + (MAP_CY - 4 + r) * FB_W + MAP_CX;
     for (int x = 0 - w; x <= w; x++) fb[o + x] = mapCol[7];
   }
-  fb[(MAP_CY - 4) * SCR_W + MAP_CX] = 63488;
+  fb[fbo + (MAP_CY - 4) * FB_W + MAP_CX] = 248;
 }
 
 // ===== 10c. TITLE SCREEN =====
@@ -3459,7 +3470,7 @@ void titleLayer(int sy, int ox, int oy) {
   x0 = 0;
   if (ox < 0) x0 = 0 - ox;
   for (int y = 0; y < TM_H; y++) {
-    o = (sy + oy + y) * SCR_W + ox;
+    o = fbo + (sy + oy + y) * FB_W + ox;
     for (int x = x0; x < SCR_W - ox; x++) {
       m = tmask[y * SCR_W + x];
       if (m == 2) {
@@ -3645,6 +3656,7 @@ void titleScreen() {
   seenE = 0;
   setWindow(windowed);
   while (1) {
+    fbo = frameOffset();
     titleBeach(t);
     present();
     t++;
@@ -3822,6 +3834,7 @@ void drawMissionHud() {
 // One full frame, nearest first: the objects of every block, cars and
 // people, then the ground, then the sky and the road where nothing else is.
 void render() {
+  fbo = frameOffset();
   polyCount = 0;
   sinA = sinT[camA];
   cosA = sinT[(camA + 256) & 1023];

@@ -15,7 +15,7 @@ harness = r'''#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
-uint16_t fb[96000];
+uint16_t fb[384000];  /* one panel buffer: 800 x 480, colours byte-swapped */
 static int frameNo = 0;
 static unsigned char wadBytes[16384];
 static int wadSize;
@@ -39,15 +39,24 @@ static int tourKey(int f, int key) {
 }
 int keyDown(int key) { return frameNo < TOUR ? tourKey(frameNo, key) : 0; }
 void setWindow(int on) { }
+/* where the 400x240 picture starts: the top left corner, or the middle in a window */
+int frameOffset() { extern int windowed; return windowed ? 120 * 800 + 200 : 0; }
 int wadLoad(uint8_t *dst, int maxlen) { int n = wadSize < maxlen ? wadSize : maxlen; memcpy(dst, wadBytes, n); return n; }
 static int dumpFrames = 0;
 void present() {
+  /* the checksum of the picture's 240 rows of 400 pixels, as the panel holds them */
   uint32_t h = 2166136261u;
-  const uint8_t *b = (const uint8_t *)fb;
-  for (int i = 0; i < 192000; i++) h = (h ^ b[i]) * 16777619u;
+  int base = frameOffset();
+  for (int y = 0; y < 240; y++) {
+    const uint8_t *b = (const uint8_t *)(fb + base + y * 800);
+    for (int i = 0; i < 800; i++) h = (h ^ b[i]) * 16777619u;
+  }
   if (frameNo % 10 == 9) printf("FRAME %d checksum %08x\n", frameNo, h);
   if (dumpFrames && (frameNo == 9 || frameNo == 19 || frameNo == 80 || frameNo == 99 || frameNo == 130 || frameNo == 145 || frameNo == 160 || frameNo == 239)) {
-    char n[32]; sprintf(n, "city_%d.raw", frameNo); FILE *o = fopen(n, "wb"); fwrite(fb, 2, 96000, o); fclose(o);
+    /* as plain RGB565, 400 x 240 */
+    static uint16_t pic[96000];
+    for (int i = 0; i < 96000; i++) { uint16_t v = fb[base + (i / 400) * 800 + i % 400]; pic[i] = (uint16_t)((v << 8) | (v >> 8)); }
+    char n[32]; sprintf(n, "city_%d.raw", frameNo); FILE *o = fopen(n, "wb"); fwrite(pic, 2, 96000, o); fclose(o);
   }
   frameNo++;
   if (frameNo == TOUR) exit(0);
