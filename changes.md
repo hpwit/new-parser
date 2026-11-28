@@ -4,6 +4,10 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### 🎮 A Game Boy emulator as a script
+
+[matouch/GameBoy](examples/matouch/GameBoy): an emulator of the first Game Boy in 1342 lines of script, processor, cartridge chips MBC1, MBC3 and MBC5, timer, interrupts, picture, buttons. It lists the `.gb` files on the SD card or the FFat partition (and on SolarOS in `/flash` and `/sdcard`) and runs the one chosen at the real Game Boy's speed on the ESP32-S3: 59.7 frames a second with Super Mario Land and Link's Awakening, about 49 drawn. It passes Blargg's `cpu_instrs` and `instr_timing` and draws `dmg-acid2` exactly; the board and a computer reach the same state frame after frame. 14 KB of code, compiled on the board in 15 s. → [Game Boy](README_GAMES.md#game-boy-an-emulator-of-the-first-game-boy), [Built for speed](README.md#built-for-speed)
+
 ### ⏱️ Large scripts compile twice as fast on an ESP32-S3
 
 Three of the compiler's lists were emptied from the front, one item at a time, and each removal moved everything after it: the tokens read ahead (the list grows through a script to about 6000 tokens, every operator adding one more), the assembly lines as the assembler took them, and the blank lines the optimizer removes. For GT 32 that was 2.6 GB of memory moved during one compile. A computer does it in milliseconds; in PSRAM, where an S3 compiler keeps its working memory, it took over a minute. The tokens read now wait behind an index and go in one move, the assembler frees each line in place, and the blank lines are removed in a single pass. Measured on the board, same code to the byte:

@@ -20,6 +20,7 @@ The games written with ESPLiveScript 2 to show what its compiler can do with who
 * [Wickwire: a 3D platform game, rendered by the script](#wickwire-a-3d-platform-game-rendered-by-the-script)
 * [Driftwing: a flying game over a voxel world](#driftwing-a-flying-game-over-a-voxel-world)
 * [GT 32: a city to drive and walk through](#gt-32-a-city-to-drive-and-walk-through)
+* [Game Boy: an emulator of the first Game Boy](#game-boy-an-emulator-of-the-first-game-boy)
 
 ## On the ESP32-S3-Touch-LCD-7
 
@@ -521,7 +522,7 @@ The WAD (1.6 MB, `tools/make_wad.py`, about 30 s) holds the two maps and a 128x1
 
 ### Starting
 
-Upload the sketch with a USB keyboard plugged into the board. The game takes about three minutes to get ready when the board starts, then the title screen appears: GT 32 in chrome letters over a sunset at sea, palms swaying in the wind and the sun shimmering on the water. Choose how to play with up and down, **full screen** or in a **window** in the middle of the screen, and press Enter.
+Upload the sketch with a USB keyboard plugged into the board. The game takes about a minute and a half to get ready when the board starts, then the title screen appears: GT 32 in chrome letters over a sunset at sea, palms swaying in the wind and the sun shimmering on the water. Choose how to play with up and down, **full screen** or in a **window** in the middle of the screen, and press Enter.
 
 ### Keys
 
@@ -562,3 +563,24 @@ Ram a car at speed or run someone over (it pays $50, but it is noticed) and you 
 ### Day and night
 
 A day lasts twelve minutes, from four in the afternoon. The sky turns orange and pink at dusk, then dark: the stars come out, windows light up, the street lamps throw pools of light on the road, and your headlights show the way.
+
+## Game Boy: an emulator of the first Game Boy
+
+[matouch/GameBoy](examples/matouch/GameBoy) emulates the first Game Boy (1989) in one script of 1342 lines: its processor, every instruction timed to the clock cycle, the cartridge chips MBC1, MBC3 and MBC5, the timer, the interrupts, and the picture drawn a line at a time, background, window and sprites. There is no sound.
+
+Copy your `.gb` cartridges to the root of the microSD card (or of the FFat partition) and upload the sketch with a USB keyboard plugged into the board. After about 15 seconds of compiling, the list of cartridges appears: choose one with up and down and press Enter. The picture is shown three times as big, 480x432, in the middle of the screen; the pixel size is `#define pixelsize 3` at the top of `tools/gameboy.sc`.
+
+| Game Boy | Keyboard |
+| --- | --- |
+| the cross | arrows (or Z Q S D) |
+| A | K or Space |
+| B | J or B |
+| Start | Enter |
+| Select | Tab or Backspace |
+| back to the list | Escape |
+
+It runs at the speed of the real Game Boy, 59.7 frames a second, measured on the board with Super Mario Land and The Legend of Zelda: Link's Awakening; about 49 of them are drawn each second, the most the panel shows. Saved games are kept only while the cartridge runs.
+
+The same script runs on SolarOS (`asm run gameboy.sc`, the cartridges in `/flash` or `/sdcard`), which gives it the same names: `display`, `updateDisplay()`, `setPixelsize()`, `keyHeld()`, and for the cartridges `romCount()`, `romNameChar(i, j)`, `romLoad(i)` and `rom`.
+
+How it was checked: `tools/host_check.py` runs the script compiled as C on a computer, with a cartridge, and prints what it sends to the serial port; it passes Blargg's test cartridges `cpu_instrs` (all 11 tests) and `instr_timing`, and its picture of `dmg-acid2` is the reference pixel for pixel. `tools/board_check.py` compares the board with the computer on the same cartridge. No cartridge comes with the example.

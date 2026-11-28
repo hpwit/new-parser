@@ -34,7 +34,7 @@ It worked, people used it and [StarLight](https://github.com/MoonModules/StarLig
 | 🧱 **A real language** | Structs with methods and constructors, `switch`, pointers, strings, recursion, `float` and built-in fixed point (`ffloat`), multidimensional arrays ([more than leds](#more-than-a-led-language)). |
 | 🔌 **Talks to your C++** | Call your own functions and use your variables (FastLED, WiFi, sensors...) with `bindFunction()` / `bindVariable()`, and share your structures. |
 | 🧵 **Runs alongside your sketch** | Several scripts at once, each on its own FreeRTOS task, listed with their CPU use and paused, restarted or killed by name; GPIO interrupts calling back into the script; direct register access (a pin switched at 10MHz). |
-| 📜 **Large programs too** | Whole programs of thousands of lines compile on the board, like [Valmora](README_GAMES.md#valmora-an-adventure-in-the-style-of-the-early-role-playing-games), a top-down adventure, [Ironforge](README_GAMES.md#ironforge-a-shooter-with-mid-90s-technology), a first-person shooter, or [Wickwire](README_GAMES.md#wickwire-a-3d-platform-game-rendered-by-the-script), a 3D platform game of 5200 lines ([games](README_GAMES.md)). |
+| 📜 **Large programs too** | Whole programs of thousands of lines compile on the board, like [Valmora](README_GAMES.md#valmora-an-adventure-in-the-style-of-the-early-role-playing-games), a top-down adventure, [Ironforge](README_GAMES.md#ironforge-a-shooter-with-mid-90s-technology), a first-person shooter, or [Wickwire](README_GAMES.md#wickwire-a-3d-platform-game-rendered-by-the-script), a 3D platform game of 5200 lines, and a [Game Boy emulator](#a-game-boy-emulator-at-full-speed) that runs at the real machine's speed ([games](README_GAMES.md), [built for speed](#built-for-speed)). |
 | 💾 **Compile once, run anywhere** | Save the compiled binary to flash or SD and load it later, without the source, even from another sketch. |
 
 ---
@@ -86,6 +86,11 @@ Faster code (zero-overhead loops, smaller instructions), a compiler 2 to 3 times
   * [Parameters for a task](#parameters-for-a-task)
   * [The script scheduler](#the-script-scheduler)
 - [Interrupts](#interrupts)
+- [Built for speed](#built-for-speed)
+  * [A Game Boy emulator at full speed](#a-game-boy-emulator-at-full-speed)
+  * [GT 32: a city in 3D](#gt-32-a-city-in-3d)
+  * [The largest programs compiled](#the-largest-programs-compiled)
+  * [How fast the compiler has become](#how-fast-the-compiler-has-become)
 - [Performance](#performance)
 - [Examples](#examples)
 - [Testing](#testing)
@@ -1950,6 +1955,42 @@ void main()
 > In the interrupt handler call the script with `exec.executeOnly(name)` (or `callFunction((executable *)handle, name, NULL, 0, NULL)`), not `execute()`, which would reset the script's globals on every interrupt.
 
 ---
+
+# Built for speed
+
+Two goals drive this compiler. The code it makes must run as fast as code compiled by gcc, since a script is turned into Xtensa machine code on the chip, not interpreted. And the compiler itself must be fast and frugal enough to compile whole programs on the board, in seconds rather than minutes. Every change toward either goal is checked the same way: the examples, the games and the fuzzer's scripts must compile to the same bytes as before (or to code that is faster and gives the same results), on a computer, in QEMU and on the board.
+
+Two programs show where this has got to.
+
+## A Game Boy emulator at full speed
+
+[matouch/GameBoy](examples/matouch/GameBoy) is an emulator of the first Game Boy written as one script of 1342 lines: its processor with every instruction timed to the clock cycle, the cartridge chips MBC1, MBC3 and MBC5, the timer, the interrupts, the picture drawn a line at a time (background, window, sprites) and the buttons. It lists the `.gb` cartridges on the SD card (or SolarOS's `/flash`) and plays the one you pick.
+
+On the ESP32-S3 it runs **at the real Game Boy's speed: 59.7 frames a second**, measured on the board over a minute of Super Mario Land and of The Legend of Zelda: Link's Awakening (title, menus, play). Each second about 49 of those frames are drawn, as many as the 800x480 panel shows; the others are emulated without being drawn, so the game never slows down. It is exact as well as fast: it passes Blargg's `cpu_instrs` (all 11 tests) and `instr_timing`, its picture of `dmg-acid2` is identical to the reference pixel for pixel, and the emulated machine is in the same state on the board as on a computer, frame after frame (1098 frames compared). It compiles on the board in 15 seconds.
+
+## GT 32: a city in 3D
+
+[matouch/CitySandbox](examples/matouch/CitySandbox) is GT 32, a city of 16 by 16 blocks to drive and walk through, in 3900 lines of script: traffic and traffic lights, people, shops, the police, missions, day and night. Everything is drawn by the script at 400x240: perspective projection in fixed point, polygons drawn nearest first with a coverage mask so that no pixel is drawn twice, straight into the panel's frame buffer. On the ESP32-S3 it runs at **24.4 frames a second** (27 by day). It compiles on the board in 82 seconds, or loads in a fraction of a second from a saved binary.
+
+## The largest programs compiled
+
+The largest scripts compiled so far, on the ESP32-S3 (240 MHz, with the compiler's working memory in PSRAM). The binary is what `parseScriptToBinary()` saves and `createExecutableFromBuffer()` loads back, its code and the description of its functions and data:
+
+|Script|Lines|Source|Machine code|Saved binary|Compiled on the board in|
+|:----|----:|----:|----:|----:|----:|
+|[Wickwire](README_GAMES.md#wickwire-a-3d-platform-game-rendered-by-the-script) (3D platform game)|5164|127 KB|77.9 KB|104 KB|131 s|
+|[GT 32](README_GAMES.md#gt-32-a-city-to-drive-and-walk-through) (3D city)|3900|102 KB|46.3 KB|61 KB|82 s|
+|[Lumenfall](README_GAMES.md#lumenfall-a-platform-game-with-parallax-scrolling) (parallax platformer)|3441|80 KB|38.8 KB|48 KB|61 s|
+|[Driftwing](README_GAMES.md#driftwing-a-flying-game-over-a-voxel-world) (voxel flight)|2761|72 KB|31.2 KB|40 KB|52 s|
+|[Game Boy](examples/matouch/GameBoy) (emulator)|1342|30 KB|14.0 KB|19 KB|15 s|
+
+The largest source is Wickwire's, 127 KB and 5164 lines, which gives the largest code, 77.9 KB, and the largest binary, 104 KB. The most data belongs to Driftwing: 2.2 MB of global arrays (a 1024x1024 height map and colour map), placed in PSRAM.
+
+## How fast the compiler has become
+
+The compiler runs on the chip, where memory is slow and scarce, so it is written for that. Its line store is a hash rather than lists it scanned for every line, which made it 2 to 3 times faster; and it no longer empties its lists one item at a time from the front, which in PSRAM moved gigabytes of memory for a large script and halved the compile time on the ESP32-S3 (GT 32 185 s to 82 s, Wickwire 332 s to 131 s). The details and measurements are in [changes.md](changes.md). A compile gives back all of its memory except the compiled script, so a board can compile one program after another.
+
+For the speed of the code itself, see [Performance](#performance).
 
 # Performance
 
