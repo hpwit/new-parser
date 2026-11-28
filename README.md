@@ -38,9 +38,20 @@ Two programs show where this has got to.
 
 On the ESP32-S3 it runs **at the real Game Boy's speed: 59.7 frames a second**, measured on the board over a minute of Super Mario Land and of The Legend of Zelda: Link's Awakening (title, menus, play). Each second about 49 of those frames are drawn, as many as the 800x480 panel shows; the others are emulated without being drawn, so the game never slows down. It is exact as well as fast: it passes Blargg's `cpu_instrs` (all 11 tests) and `instr_timing`, its picture of `dmg-acid2` is identical to the reference pixel for pixel, and the emulated machine is in the same state on the board as on a computer, frame after frame (1098 frames compared). It compiles on the board in 15 seconds.
 
+| | |
+|:---:|:---:|
+| <img src="examples/matouch/GameBoy/gameboy_2048.gif" width="320" alt="2048-gb playing"> | <img src="examples/matouch/GameBoy/gameboy_list.png" width="400" alt="The list of cartridges"> |
+| *[2048-gb](https://github.com/Sanqui/2048-gb) by Sanqui (zlib licence), played by the emulator* | *The list of the cartridges found* |
+| <img src="examples/matouch/GameBoy/gameboy_cpu_instrs.png" width="320" alt="Blargg's cpu_instrs: passed all tests"> | <img src="examples/matouch/GameBoy/gameboy_acid2.png" width="320" alt="dmg-acid2"> |
+| *Blargg's `cpu_instrs`: the 11 tests of the processor pass* | *[dmg-acid2](https://github.com/mattcurrie/dmg-acid2) by Matt Currie (MIT): the reference picture, pixel for pixel* |
+
 ### GT 32: a city in 3D
 
 [matouch/CitySandbox](examples/matouch/CitySandbox) is GT 32, a city of 16 by 16 blocks to drive and walk through, in 3900 lines of script: traffic and traffic lights, people, shops, the police, missions, day and night. Everything is drawn by the script at 400x240: perspective projection in fixed point, polygons drawn nearest first with a coverage mask so that no pixel is drawn twice, straight into the panel's frame buffer. On the ESP32-S3 it runs at **24.4 frames a second** (27 by day). It compiles on the board in 82 seconds, or loads in a fraction of a second from a saved binary.
+
+<img src="examples/matouch/CitySandbox/citysandbox.gif" width="400" alt="GT 32: the title, then a drive through the city">
+
+*The title, then a drive through the city (rendered by the script as C on a computer, frame for frame what the board draws).*
 
 ### The largest programs compiled
 

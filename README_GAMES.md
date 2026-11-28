@@ -511,6 +511,11 @@ The WAD (1.6 MB, `tools/make_wad.py`, about 30 s) holds the two maps and a 128x1
 
 [matouch/CitySandbox](examples/matouch/CitySandbox) is GT 32, an open-world city game in full 3D for the MaTouch 7" board. A downtown of 16 by 16 blocks lies by the sea: towers of concrete, brick, sandstone and steel, taller toward the centre, parks, tree-lined streets with street lamps, shops and cafés with their terraces. Drive a low sports coupé through the traffic, get out and walk among the people, take on missions for money, and keep out of the way of the police, from a sunny afternoon into the night.
 
+
+<img src="examples/matouch/CitySandbox/citysandbox.gif" width="400" alt="GT 32: the title, then a drive through the city">
+
+*The title, then a drive through the city (rendered by the script as C on a computer, frame for frame what the board draws).*
+
 | | |
 |:---:|:---:|
 | <img src="examples/matouch/CitySandbox/citysandbox_title.png" width="400" alt="The title screen"> | <img src="examples/matouch/CitySandbox/citysandbox_drive.png" width="400" alt="Driving with three stars, the minimap"> |
@@ -567,6 +572,13 @@ A day lasts twelve minutes, from four in the afternoon. The sky turns orange and
 ## Game Boy: an emulator of the first Game Boy
 
 [matouch/GameBoy](examples/matouch/GameBoy) emulates the first Game Boy (1989) in one script of 1342 lines: its processor, every instruction timed to the clock cycle, the cartridge chips MBC1, MBC3 and MBC5, the timer, the interrupts, and the picture drawn a line at a time, background, window and sprites. There is no sound.
+
+| | |
+|:---:|:---:|
+| <img src="examples/matouch/GameBoy/gameboy_2048.gif" width="320" alt="2048-gb playing"> | <img src="examples/matouch/GameBoy/gameboy_list.png" width="400" alt="The list of cartridges"> |
+| *[2048-gb](https://github.com/Sanqui/2048-gb) by Sanqui (zlib licence), played by the emulator* | *The list of the cartridges found* |
+| <img src="examples/matouch/GameBoy/gameboy_cpu_instrs.png" width="320" alt="Blargg's cpu_instrs: passed all tests"> | <img src="examples/matouch/GameBoy/gameboy_acid2.png" width="320" alt="dmg-acid2"> |
+| *Blargg's `cpu_instrs`: the 11 tests of the processor pass* | *[dmg-acid2](https://github.com/mattcurrie/dmg-acid2) by Matt Currie (MIT): the reference picture, pixel for pixel* |
 
 Copy your `.gb` cartridges to the root of the microSD card (or of the FFat partition) and upload the sketch with a USB keyboard plugged into the board. After about 15 seconds of compiling, the list of cartridges appears: choose one with up and down and press Enter. The picture is shown three times as big, 480x432, in the middle of the screen; the pixel size is `#define pixelsize 3` at the top of `tools/gameboy.sc`.
 

@@ -7,6 +7,8 @@ cartridges write their results) and a checksum of the last picture.
 
 --every N prints the picture's checksum every N frames and runs on past
 "Passed" (tools/board_check.py compares them with the board's).
+--frames DIR saves every picture there (frame_00001.raw..., 160x144 RGB565
+with its bytes swapped), for an animation.
 --keys holds buttons at given frames, e.g. 120:start,200:a (a b start
 select up down left right), each for 5 frames.
 """
@@ -18,6 +20,11 @@ png = None
 keys = ""
 every = 0
 script_path = os.path.join(HERE, "gameboy.sc")
+frames_dir = ""
+if "--frames" in args:
+    i = args.index("--frames")
+    frames_dir = os.path.abspath(args[i + 1])
+    del args[i:i + 2]
 if "--script" in args:
     i = args.index("--script")
     script_path = args[i + 1]
@@ -60,6 +67,7 @@ uint8_t *rom = romBuf;
 static int romBytes;
 static int frameNo = 0, menuFrames = 0, inGame = 0;
 static int FRAMES = %d, EVERY = %d;
+static const char *FRAMES_DIR = "%s";
 extern uint8_t serBuf[];
 extern int serN;
 extern int picOff;   /* where the script puts the picture */
@@ -108,13 +116,20 @@ static void swapBuffers() { display = display == fbufs[0] ? fbufs[1] : fbufs[0];
 void updateDisplay() {
   if (!inGame) { menuFrames++; swapBuffers(); return; }
   frameNo++;
+  if (FRAMES_DIR[0]) {
+    char n[512];
+    snprintf(n, sizeof(n), "%%s/frame_%%05d.raw", FRAMES_DIR, frameNo);
+    FILE *o = fopen(n, "wb");
+    for (int y = 0; y < 144; y++) fwrite(fbuf + picOff + y * 800, 2, 160, o);
+    fclose(o);
+  }
   if (EVERY && frameNo %% EVERY == 0) printf("GBTEST frame %%d checksum %%08x\n", frameNo, pictureSum());
   if (frameNo >= FRAMES) finish();
   /* Blargg's cartridges end with "Passed" or "Failed" */
   if (!EVERY && serN > 6 && (memmem(serBuf, serN, "Passed", 6) || memmem(serBuf, serN, "Failed", 6))) finish();
   swapBuffers();
 }
-''' % (frames, every, hold_c)
+''' % (frames, every, frames_dir, hold_c)
 main = r'''
 int main() {
   FILE *f = fopen(ROMPATH, "rb");
