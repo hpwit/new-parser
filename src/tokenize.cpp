@@ -698,6 +698,7 @@ varType _varTypes[] = {
     void Tokens::clear()
     {
         _tokens.clear();
+        _head = 0;
 
         _tokens.shrink_to_fit();
 
@@ -707,7 +708,7 @@ varType _varTypes[] = {
     }
     int Tokens::size()
     {
-        return _tokens.size();
+        return _tokens.size() - _head;
     }
     void Tokens::tokenizelow(Script *script, bool update, bool increae_line, int nbToken)
     {
@@ -732,7 +733,7 @@ varType _varTypes[] = {
     }
     void Tokens::pop_back()
     {
-        if (_tokens.size() > 0)
+        if (size() > 0)
         {
             //	Token t = _tokens.back ();
 
@@ -745,10 +746,10 @@ varType _varTypes[] = {
     }
     Token *Tokens::getTokenAtPos(int pos)
     {
-        if (pos >= 0 and pos < _tokens.size())
+        if (pos >= 0 and pos < size())
         {
             // printf("%s at %d %d\n",_tokens[pos].line,_tokens[pos].pos);
-            return _tokens.getptr(pos);
+            return _tokens.getptr(_head + pos);
         }
         else
             return &end_token;
@@ -772,8 +773,19 @@ varType _varTypes[] = {
         return getTokenAtPos(position);
 #else
 
-        _tokens.erase(_tokens.begin());
-        _tokens.shrink_to_fit();
+        // The tokens read stay in place, behind _head: erasing the first
+        // moved all the others, and the list grows through a script (each
+        // operator read is not counted as one, so a read often adds two),
+        // to ~6000 tokens by the end of a 2700-line one: 1.25 GB of memmove,
+        // a minute in PSRAM. They go in one move once they are at least
+        // as many as the tokens still ahead.
+        _head++;
+        if (_head >= 8 && _head * 2 >= _tokens.size())
+        {
+            _tokens.eraseFront(_head);
+            _tokens.shrink_to_fit();
+            _head = 0;
+        }
 
         tokenizer(_script, false, true, 1,this);
         return getTokenAtPos(__DEPTH);
@@ -785,7 +797,7 @@ varType _varTypes[] = {
         position--;
         return getTokenAtPos(position);
 #else
-        _tokens.insertAfter(_tokens.begin(), Token());
+        _tokens.insertAfter(_tokens.getptr(_head), Token());
         return getTokenAtPos(__DEPTH);
 #endif
     }
@@ -805,14 +817,14 @@ varType _varTypes[] = {
             return getTokenAtPos(index + position);
         }
 #else
-        if (index + __DEPTH < _tokens.size() && index + __DEPTH >= 0)
+        if (index + __DEPTH < size() && index + __DEPTH >= 0)
         {
             return getTokenAtPos(index + __DEPTH);
         }
         else
         {
             tokenizer(_script, false, true,
-                      -_tokens.size() + index + __DEPTH + 1,this);
+                      -size() + index + __DEPTH + 1,this);
 
             return getTokenAtPos(index + __DEPTH);
         }
@@ -826,10 +838,10 @@ varType _varTypes[] = {
 #else
         int at = __DEPTH + index;
 #endif
-        if (at >= _tokens.size())
+        if (at >= size())
             _tokens.push_back(t);
         else
-            _tokens.insertBefore(_tokens.getptr(at), t);
+            _tokens.insertBefore(_tokens.getptr(_head + at), t);
     }
     void Tokens::remove(int index)
     {
@@ -837,12 +849,12 @@ varType _varTypes[] = {
 #ifdef __FULL_TOKEN
         _tokens.erase(position + index);
 #else
-        _tokens.erase(__DEPTH + index);
+        _tokens.erase(_head + __DEPTH + index);
 #endif
     }
     Token Tokens::back()
     {
-        if (_tokens.size() > 0)
+        if (size() > 0)
             return _tokens.back();
         else
             return Token();

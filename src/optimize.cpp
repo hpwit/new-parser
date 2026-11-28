@@ -979,14 +979,19 @@ void optimizeSpeed(Text *text)
 // place, now that no pass still needs those slots to keep their original
 // position. Walks backwards so each erase() (a memmove, see vect.h)
 // never disturbs the indices of entries not yet visited.
+// Frees the blank lines, then closes the gaps in one move: erasing them
+// one by one moved every line after each (~400 MB of memmove for a 46 KB
+// script, with the loop-register pass's eraseBlankLines()).
 void removeBlankLines(Text *text)
 {
-    for (int i = text->size() - 1; i >= 0; i--)
+    int n = text->size();
+    for (int i = 0; i < n; i++)
     {
         char *tmp = *text->getChildAtPos(i);
-        if (tmp == NULL || strcmp(tmp, " ") == 0 || strcmp(tmp, "") == 0)
-            text->eraseLine(i);
+        if (tmp != NULL && (strcmp(tmp, " ") == 0 || strcmp(tmp, "") == 0))
+            text->releaseLine(i);
     }
+    text->compactLines(0, n);
 }
 
 // ---------------------------------------------------------------------
@@ -2731,19 +2736,16 @@ static int allocateFunction(Text *text, int start, int end)
 
 static int eraseBlankLines(Text *text, int start, int end)
 {
-    int removed = 0;
+    // as removeBlankLines(): freed in place, then one move
     char line[160];
     for (int j = start; j < end; j++)
     {
-        trimmedLine(*text->getChildAtPos(j), line, sizeof(line));
-        if (line[0] != 0)
-            continue;
-        text->eraseLine(j);
-        end--;
-        j--;
-        removed++;
+        char *tmp = *text->getChildAtPos(j);
+        trimmedLine(tmp, line, sizeof(line));
+        if (line[0] == 0 && tmp != NULL)
+            text->releaseLine(j);
     }
-    return removed;
+    return text->compactLines(start, end);
 }
 
 // "op o0,o1,..." with its first operand replaced by `reg`.

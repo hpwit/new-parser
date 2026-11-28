@@ -140,6 +140,13 @@ int addTextNoDelete(char* str);
     // Removes line `pos`, freeing its string unless another line shares
     // it (identical lines are pooled, see findText()).
     void eraseLine(int pos);
+    // Frees line `pos` as eraseLine() does but leaves its slot, NULL, in
+    // place: no lines move (the assembler empties a whole buffer this way,
+    // then clear()s it).
+    void releaseLine(int pos);
+    // Removes the NULL slots of lines [from, to) (releaseLine()'s), with
+    // one move of the lines after them; returns how many went.
+    int compactLines(int from, int to);
 
     char **getChildAtPos(int pos);
 

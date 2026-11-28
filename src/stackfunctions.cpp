@@ -380,6 +380,27 @@
         poolRelease(_texts.get(pos));
         _texts.erase(pos);
     }
+    void Text::releaseLine(int pos)
+    {
+        if (pos < 0 || pos >= size())
+            return;
+        poolRelease(_texts.get(pos));
+        *_texts.getptr(pos) = NULL;
+    }
+    int Text::compactLines(int from, int to)
+    {
+        if (from < 0)
+            from = 0;
+        if (to > size())
+            to = size();
+        int w = from;
+        for (int r = from; r < to; r++)
+            if (_texts.get(r) != NULL)
+                *_texts.getptr(w++) = _texts.get(r);
+        if (to > w)
+            _texts.eraseRange(w, to - w);
+        return to - w;
+    }
     void Text::replaceText(int pos, const char * str)
     {
         char *m = (char *)malloc(strlen(str) + 1);

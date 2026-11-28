@@ -4,6 +4,24 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ## Unreleased
 
+### ⏱️ Large scripts compile twice as fast on an ESP32-S3
+
+Three of the compiler's lists were emptied from the front, one item at a time, and each removal moved everything after it: the tokens read ahead (the list grows through a script to about 6000 tokens, every operator adding one more), the assembly lines as the assembler took them, and the blank lines the optimizer removes. For GT 32 that was 2.6 GB of memory moved during one compile. A computer does it in milliseconds; in PSRAM, where an S3 compiler keeps its working memory, it took over a minute. The tokens read now wait behind an index and go in one move, the assembler frees each line in place, and the blank lines are removed in a single pass. Measured on the board, same code to the byte:
+
+|Script|Before|Now|
+|:----|----:|----:|
+|Tetris|9.4s|7.1s|
+|PrismBreak|26.0s|15.4s|
+|NeonRacer|28.4s|18.1s|
+|MazeChase|30.2s|17.3s|
+|XenoWing|41.6s|32.4s|
+|Driftwing|94.3s|52.2s|
+|Lumenfall|124.0s|61.2s|
+|GT 32 (CitySandbox)|185.1s|81.7s|
+|Wickwire|331.9s|130.7s|
+
+On an esp32 without PSRAM, where the same moves are in internal RAM, `MultiEffectController` compiles in 6.9 s instead of 8.0 s, and short scripts take the same time. Every example, game and fuzz regression script compiles to the same bytes as before; the compiler's heap peak is unchanged (host test `run-large`).
+
 ### 🧮 ESP32-S3 vector instructions (PIE) in `__ASM__` functions
 
 The assembler knows 55 of the S3's `ee.` instructions: 128-bit loads and stores (`ee.vld.128.ip`, `.xp`, 64-bit halves, broadcasts), saturating add and subtract, min, max, compares and multiply on 8-, 16- and 32-bit lanes, bitwise operations and lane moves, on the registers `q0` to `q7`. Their encodings were taken from GNU as (`xtensa-esp32s3-elf-as`), bit by bit, and 440 of them are checked against it in the host tests; a script using them runs as expected on QEMU's esp32s3. For another chip they are an error.

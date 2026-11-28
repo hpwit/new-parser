@@ -39,6 +39,10 @@ public:
     T *insertBefore(T *object,T asset );
     void erase(T *asset);
     void erase(int k);
+    // drops the first n in one move
+    void eraseFront(uint32_t n);
+    // drops n starting at k in one move
+    void eraseRange(uint32_t k, uint32_t n);
     void shrink_to_fit();
     T *insertAfter(T *object,T asset );
     T *push_front(T asset);
@@ -262,6 +266,24 @@ void vect<T>::erase(int k)
     }
 }
 
+template <typename T>
+void vect<T>::eraseFront(uint32_t n)
+{
+    if (n > _size)
+        n = _size;
+    memmove(point, point + n, (size_item) * (_size - n));
+    _size -= n;
+}
+template <typename T>
+void vect<T>::eraseRange(uint32_t k, uint32_t n)
+{
+    if (k >= _size)
+        return;
+    if (n > _size - k)
+        n = _size - k;
+    memmove(point + k, point + k + n, (size_item) * (_size - k - n));
+    _size -= n;
+}
 template <typename T>
 void vect<T>::shrink_to_fit()
 {

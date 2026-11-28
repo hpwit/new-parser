@@ -2049,9 +2049,9 @@ The games of [README_GAMES.md](README_GAMES.md) on an ESP32-S3 with an 800x480 s
 
 |Game|Lines|Compiled on the board in|Script time per frame|Frames shown|
 |:----|----:|----:|----:|----:|
-|Wickwire (3D platform game)|5200|332s|102.5ms|8.8fps|
-|Driftwing (voxel flight)|2800|94s|95.7ms|9.4fps|
-|Lumenfall (parallax platformer)|3400|123s|19.3ms|24.4fps (its own pace)|
+|Wickwire (3D platform game)|5200|131s|102.5ms|8.8fps|
+|Driftwing (voxel flight)|2800|52s|95.7ms|9.4fps|
+|Lumenfall (parallax platformer)|3400|61s|19.3ms|24.4fps (its own pace)|
 
 Loaded from a saved binary instead, each starts in a fraction of a second.
 
@@ -2073,10 +2073,24 @@ A constant index costs nothing at run time: `arr[3]`, `parts[2].h` and `p[2].x` 
 
 |Script|Lines|Compile time on an esp32|
 |:----|----:|----:|
-|`fib()`|12|40ms|
-|Rainbow|16|0.14s|
-|Game of Life|55|0.78s|
-|`MultiEffectController`|730|8.1s|
+|`fib()`|12|48ms|
+|Rainbow|16|0.15s|
+|Game of Life|55|0.75s|
+|`MultiEffectController`|730|6.9s|
+
+On an ESP32-S3 with PSRAM, where the compiler keeps its working memory, a large script takes about half as long as it did before the compiler stopped shifting its lists (see [changes.md](changes.md)):
+
+|Script|Lines|Before|Now|
+|:----|----:|----:|----:|
+|Tetris|440|9.4s|7.1s|
+|PrismBreak|1030|26.0s|15.4s|
+|NeonRacer|1060|28.4s|18.1s|
+|MazeChase|1160|30.2s|17.3s|
+|XenoWing|1250|41.6s|32.4s|
+|Driftwing|2800|94.3s|52.2s|
+|Lumenfall|3400|124.0s|61.2s|
+|GT 32 (CitySandbox)|3900|185.1s|81.7s|
+|Wickwire|5200|331.9s|130.7s|
 
 The compiler adds about 165KB of flash and 8.6KB of RAM to a sketch; the loader alone (to run a saved binary) 10KB of flash and 1KB of RAM. A short script needs 30-40KB of heap to compile, and compiling gives back everything except the compiled script, so compiling again and again keeps the free heap flat.
 

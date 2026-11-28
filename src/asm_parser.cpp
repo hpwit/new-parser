@@ -1311,12 +1311,15 @@ static int assembleTotal = 0;
 
 static void assembleBuffer(Text *text, int lineOffset, parsedLines *asm_parsed, asm_error_message_struct *main_error)
 {
+    // Each line is freed once assembled, in place: taking them off the
+    // front moved every line after it, ~1.3 GB of memmove for a 46 KB
+    // script, about 30 s in PSRAM.
     int size = text->size();
     for (int i = lineOffset; i < lineOffset + size; i++)
     {
         if ((i & 63) == 0)
             compileProgressPart(PROGRESS_ASM_LINES, PROGRESS_ASM_LINES_END, i, assembleTotal, "assembling");
-        char *front = text->front();
+        char *front = text->getText(i - lineOffset);
         if (front != NULL && strcmp(front, " ") != 0)
         {
             // the line as written, for an error message (an __ASM__ function's
@@ -1349,8 +1352,9 @@ static void assembleBuffer(Text *text, int lineOffset, parsedLines *asm_parsed, 
             free(res.operandes);
             free(written);
         }
-        text->pop_front();
+        text->releaseLine(i - lineOffset);
     }
+    text->clear();
 }
 
 static asm_error_message_struct parseASM(Text *_footer, Text *_header, Text *_content, parsedLines *asm_parsed)

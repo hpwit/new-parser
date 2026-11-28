@@ -143,6 +143,9 @@ public:
     bool Match(tokenType tt, int index);
 private:
     vect<Token> _tokens;
+    // the current token's place in _tokens is _head + __DEPTH: the ones
+    // before _head are read and waiting to be dropped (see next())
+    int _head = 0;
     Token end_token = Token(TokenEndOfFile);
     Script *_script;
 #ifdef __FULL_TOKEN
