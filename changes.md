@@ -6,7 +6,7 @@ What changed, newest first. The [README](README.md) documents the library as it 
 
 ### 🎮 A Game Boy emulator as a script
 
-[matouch/GameBoy](examples/matouch/GameBoy): an emulator of the first Game Boy in 1342 lines of script, processor, cartridge chips MBC1, MBC3 and MBC5, timer, interrupts, picture, buttons. It lists the `.gb` files on the SD card or the FFat partition (and on SolarOS in `/flash` and `/sdcard`) and runs the one chosen at the real Game Boy's speed on the ESP32-S3: 59.7 frames a second with Super Mario Land and Link's Awakening, about 49 drawn. It passes Blargg's `cpu_instrs` and `instr_timing` and draws `dmg-acid2` exactly; the board and a computer reach the same state frame after frame. 14 KB of code, compiled on the board in 15 s. → [Game Boy](README_GAMES.md#game-boy-an-emulator-of-the-first-game-boy), [Built for speed](README.md#built-for-speed)
+[matouch/GameBoy](examples/matouch/GameBoy): an emulator of the first Game Boy in 1342 lines of script, processor, cartridge chips MBC1, MBC3 and MBC5, timer, interrupts, picture, buttons. It lists the `.gb` files on the SD card or the FFat partition (and on SolarOS in `/flash` and `/sdcard`) and runs the one chosen at the real Game Boy's speed on the ESP32-S3: 59.7 frames a second with Super Mario Land and Link's Awakening, about 49 drawn. It passes Blargg's `cpu_instrs` and `instr_timing` and draws `dmg-acid2` exactly; the board and a computer reach the same state frame after frame. 14 KB of code, compiled on the board in 15 s. → [Game Boy](README_GAMES.md#game-boy-an-emulator-of-the-first-game-boy), [Built for speed](README.md#-built-for-speed)
 
 ### ⏱️ Large scripts compile twice as fast on an ESP32-S3
 
